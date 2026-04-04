@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "806017860604",
+    "project_id": "starkgo-3671b",
+    "storage_bucket": "starkgo-3671b.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:806017860604:android:ce1e34afa169e34c52a879",
+        "android_client_info": {
+          "package_name": "com.mycompany.starkgo"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBfHY66gHlRiim3bQYWtvA9r1VAMVhLk-Q"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
