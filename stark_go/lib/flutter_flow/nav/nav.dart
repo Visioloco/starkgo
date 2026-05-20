@@ -2,28 +2,49 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+
+// ── Páginas existentes ────────────────────────────────────────────────────────
 import 'package:stark_go/pages/ConfigMikroTik/config_mikro_tik_widget.dart';
 import 'package:stark_go/pages/lista_equipos/lista_equipos_widget.dart';
 import 'package:stark_go/pages/lista_starlinks/lista_starlinks_widget.dart';
-import 'package:stark_go/pages/planes/planes_widget.dart'; // ✅ NUEVO
+import 'package:stark_go/pages/planes/planes_widget.dart';
+import 'package:stark_go/pages/Crear_cuenta/crear_cuenta_widget.dart';
+import 'package:stark_go/pages/tutorial/tutorial_widget.dart';
+import 'package:stark_go/pages/registro/registro_widget.dart';
+
+// ── NUEVA página Evolution API ✅ ─────────────────────────────────────────────
+import 'package:stark_go/pages/config_evolution_api/config_evolution_api_widget.dart';
+
+// ── NUEVA página Configuración de Facturación ✅ ──────────────────────────────
+import 'package:stark_go/pages/config_facturacion/config_facturacion_widget.dart';
+import 'package:stark_go/pages/informes/informes_widget.dart';
+import 'package:stark_go/pages/lista_operadores/lista_operadores_widget.dart';
+import 'package:stark_go/pages/pppoe_clientes/crear_pppoe_widget.dart';
+import 'package:stark_go/pages/pppoe_clientes/pppoe_clientes_widget.dart';
+import 'package:stark_go/pages/renovar_membresia/renovar_membresia_widget.dart';
+import 'package:stark_go/pages/activar_membresia/activar_membresia_widget.dart';
+import 'package:stark_go/pages/lista_starlinks_clientes/lista_starlinks_clientes_widget.dart';
 
 import '/auth/base_auth_user_provider.dart';
-
 import '/flutter_flow/flutter_flow_theme.dart';
 import '/flutter_flow/flutter_flow_util.dart';
-
 import '/index.dart';
 
 export 'package:go_router/go_router.dart';
 export 'serialization_util.dart';
+
 import 'package:stark_go/pages/splash/splash_widget.dart';
 import 'package:stark_go/pages/config_ultra_msg/config_ultra_msg_widget.dart';
-import 'package:stark_go/pages/config_mikro_tik/config_mikro_tik_widget.dart'; // ✅ NUEVO
+import 'package:stark_go/pages/config_mikro_tik/config_mikro_tik_widget.dart';
+import 'package:stark_go/pages/config_velocidades/config_velocidades_widget.dart';
 
 const kTransitionInfoKey = '__transition_info__';
 
 GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
 
+// ══════════════════════════════════════════════════════════════════════════════
+// AppStateNotifier (sin cambios)
+// ══════════════════════════════════════════════════════════════════════════════
 class AppStateNotifier extends ChangeNotifier {
   AppStateNotifier._();
 
@@ -65,6 +86,9 @@ class AppStateNotifier extends ChangeNotifier {
   }
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// Router
+// ══════════════════════════════════════════════════════════════════════════════
 GoRouter createRouter(AppStateNotifier appStateNotifier) => GoRouter(
       initialLocation: '/',
       debugLogDiagnostics: true,
@@ -77,14 +101,14 @@ GoRouter createRouter(AppStateNotifier appStateNotifier) => GoRouter(
           path: '/',
           builder: (context, _) => SplashWidget(),
           routes: [
-            // ── SPLASH ──────────────────────────────────────
+            // ── SPLASH ──────────────────────────────────────────────────────
             FFRoute(
               name: SplashWidget.routeName,
               path: SplashWidget.routePath,
               builder: (context, params) => SplashWidget(),
             ),
 
-            // ── AUTH ─────────────────────────────────────────
+            // ── AUTH ─────────────────────────────────────────────────────────
             FFRoute(
               name: HomeWidget.routeName,
               path: HomeWidget.routePath,
@@ -96,7 +120,7 @@ GoRouter createRouter(AppStateNotifier appStateNotifier) => GoRouter(
               builder: (context, params) => LoginWidget(),
             ),
 
-            // ── CLIENTES ─────────────────────────────────────
+            // ── CLIENTES ─────────────────────────────────────────────────────
             FFRoute(
               name: CrearUsuarioWidget.routeName,
               path: CrearUsuarioWidget.routePath,
@@ -120,7 +144,7 @@ GoRouter createRouter(AppStateNotifier appStateNotifier) => GoRouter(
               ),
             ),
 
-            // ── PAGOS ────────────────────────────────────────
+            // ── PAGOS ────────────────────────────────────────────────────────
             FFRoute(
               name: RegistrarPagoWidget.routeName,
               path: RegistrarPagoWidget.routePath,
@@ -149,7 +173,7 @@ GoRouter createRouter(AppStateNotifier appStateNotifier) => GoRouter(
               ),
             ),
 
-            // ── ADMIN ────────────────────────────────────────
+            // ── ADMIN ────────────────────────────────────────────────────────
             FFRoute(
               name: CrearStarlinkWidget.routeName,
               path: CrearStarlinkWidget.routePath,
@@ -165,40 +189,119 @@ GoRouter createRouter(AppStateNotifier appStateNotifier) => GoRouter(
               path: ListaStarlinksWidget.routePath,
               builder: (context, params) => ListaStarlinksWidget(),
             ),
+            // ── MIS STARLINKS DE CLIENTES (cobros) ──────────────────────────────────────
+            FFRoute(
+              name: ListaStarlinksClientesWidget.routeName,
+              path: ListaStarlinksClientesWidget.routePath,
+              builder: (context, params) => const ListaStarlinksClientesWidget(),
+            ),
             FFRoute(
               name: ListaEquiposWidget.routeName,
               path: ListaEquiposWidget.routePath,
               builder: (context, params) => ListaEquiposWidget(),
             ),
 
-            // ── PLANES ✅ NUEVO ───────────────────────────────
+            // ── PLANES ───────────────────────────────────────────────────────
             FFRoute(
               name: PlanesWidget.routeName,
               path: PlanesWidget.routePath,
               builder: (context, params) => PlanesWidget(),
             ),
 
-            // ── CONFIG ULTRAMSG ──────────────────────────────
+            // ── CREAR CUENTA (ADMIN) ─────────────────────────────────
+            FFRoute(
+              name: CrearCuentaWidget.routeName,
+              path: CrearCuentaWidget.routePath,
+              builder: (context, params) => CrearCuentaWidget(),
+            ),
+
+// ── LISTA OPERADORES (ADMIN) ─────────────────────────────  ← NUEVA
+            FFRoute(
+              name: ListaOperadoresWidget.routeName,
+              path: ListaOperadoresWidget.routePath,
+              builder: (context, params) => const ListaOperadoresWidget(),
+            ),
+
+            // ── CONFIG ULTRAMSG ──────────────────────────────────────────────
             FFRoute(
               name: ConfigUltraMsgWidget.routeName,
               path: ConfigUltraMsgWidget.routePath,
               builder: (context, params) => ConfigUltraMsgWidget(),
             ),
 
-            // ── CONFIG MIKROTIK ✅ NUEVO ─────────────────────
+            // ── CONFIG MIKROTIK ──────────────────────────────────────────────
             FFRoute(
               name: ConfigMikroTikWidget.routeName,
               path: ConfigMikroTikWidget.routePath,
               builder: (context, params) => ConfigMikroTikWidget(),
+            ),
+            // ── PPPOE ────────────────────────────────────────────────────
+            FFRoute(
+              name: CrearPppoeWidget.routeName,
+              path: CrearPppoeWidget.routePath,
+              builder: (context, params) => const CrearPppoeWidget(),
+            ),
+            FFRoute(
+              name: PppoeClientesWidget.routeName,
+              path: PppoeClientesWidget.routePath,
+              builder: (context, params) => const PppoeClientesWidget(),
+            ),
+
+            // ── CONFIG EVOLUTION API (WhatsApp) ✅ ───────────────────────────
+            FFRoute(
+              name: ConfigEvolutionApiWidget.routeName,
+              path: ConfigEvolutionApiWidget.routePath,
+              builder: (context, params) => const ConfigEvolutionApiWidget(),
+            ),
+
+            // ── CONFIG FACTURACIÓN ✅ NUEVO ──────────────────────────────────
+            FFRoute(
+              name: ConfigFacturacionWidget.routeName, // 'ConfigFacturacion'
+              path: ConfigFacturacionWidget.routePath, // 'config-facturacion'
+              builder: (context, params) => const ConfigFacturacionWidget(),
+            ),
+            // ── CONFIG VELOCIDADES MIKROTIK ✅ NUEVO ─────────────────────────────
+            FFRoute(
+              name: ConfigVelocidadesWidget.routeName, // 'ConfigVelocidades'
+              path: ConfigVelocidadesWidget.routePath, // 'config-velocidades'
+              builder: (context, params) => const ConfigVelocidadesWidget(),
+            ),
+            // ── INFORMES ✅ NUEVO ────────────────────────────────────────────────────
+            FFRoute(
+              name: InformesWidget.routeName, // 'Informes'
+              path: InformesWidget.routePath, // 'informes'
+              builder: (context, params) => const InformesWidget(),
+            ),
+            FFRoute(
+              name: RegistroWidget.routeName,
+              path: RegistroWidget.routePath,
+              builder: (context, params) => const RegistroWidget(),
+            ),
+            // ── TUTORIAL ─────────────────────────────────────────────────────────────
+            // ── RENOVAR MEMBRESÍA ────────────────────────────────────────────────────────
+            FFRoute(
+              name: ActivarMembresiaWidget.routeName,
+              path: ActivarMembresiaWidget.routePath,
+              builder: (context, params) => const ActivarMembresiaWidget(),
+            ),
+            FFRoute(
+              name: RenovarMembresiaWidget.routeName,
+              path: RenovarMembresiaWidget.routePath,
+              builder: (context, params) => const RenovarMembresiaWidget(),
+            ),
+            FFRoute(
+              name: TutorialWidget.routeName,
+              path: TutorialWidget.routePath,
+              builder: (context, params) => const TutorialWidget(),
             ),
           ].map((r) => r.toRoute(appStateNotifier)).toList(),
         ),
       ].map((r) => r.toRoute(appStateNotifier)).toList(),
     );
 
-// ══════════════════════════════════════════════════
-// Extensiones y clases auxiliares
-// ══════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+// Extensiones y clases auxiliares (sin cambios)
+// ══════════════════════════════════════════════════════════════════════════════
 
 extension NavParamExtensions on Map<String, String?> {
   Map<String, String> get withoutNulls => Map.fromEntries(
@@ -386,7 +489,7 @@ class TransitionInfo {
   final Duration duration;
   final Alignment? alignment;
 
-  static TransitionInfo appDefault() => TransitionInfo(
+  static TransitionInfo appDefault() => const TransitionInfo(
         hasTransition: true,
         transitionType: PageTransitionType.fade,
         duration: Duration(milliseconds: 300),

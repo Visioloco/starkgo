@@ -1,5 +1,5 @@
-import 'package:stark_go/pages/vps_service.dart';
-
+import 'package:stark_go/services/vps_service.dart';
+import 'package:stark_go/pages/config_velocidades/config_velocidades_widget.dart';
 import '/backend/backend.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
 import '/flutter_flow/flutter_flow_util.dart';
@@ -7,7 +7,6 @@ import '/custom_code/actions/index.dart' as actions;
 import '/index.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'vps_service.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -15,9 +14,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'crear_usuario_model.dart';
 export 'crear_usuario_model.dart';
 
-// ─────────────────────────────────────────────
-//  PALETA
-// ─────────────────────────────────────────────
 class _C {
   static const Color primary = Color(0xFF1A73E8);
   static const Color accent = Color(0xFF00C6AE);
@@ -33,16 +29,43 @@ class _C {
   static const Color purple = Color(0xFF7C3AED);
 }
 
-// ─────────────────────────────────────────────
-//  MODELO DE PLAN (idéntico a detalle_cliente)
-// ─────────────────────────────────────────────
-class _PlanItem {
-  final String id;
-  final String nombre;
-  final double valor;
-  final String simbolo;
-  final String monedaCodigo;
+class _PaisItem {
+  final String codigo, bandera, nombre;
+  const _PaisItem({required this.codigo, required this.bandera, required this.nombre});
+}
 
+const List<_PaisItem> _paises = [
+  _PaisItem(codigo: '+57', bandera: '🇨🇴', nombre: 'Colombia'),
+  _PaisItem(codigo: '+1', bandera: '🇺🇸', nombre: 'EE. UU.'),
+  _PaisItem(codigo: '+52', bandera: '🇲🇽', nombre: 'México'),
+  _PaisItem(codigo: '+54', bandera: '🇦🇷', nombre: 'Argentina'),
+  _PaisItem(codigo: '+56', bandera: '🇨🇱', nombre: 'Chile'),
+  _PaisItem(codigo: '+51', bandera: '🇵🇪', nombre: 'Perú'),
+  _PaisItem(codigo: '+58', bandera: '🇻🇪', nombre: 'Venezuela'),
+  _PaisItem(codigo: '+593', bandera: '🇪🇨', nombre: 'Ecuador'),
+  _PaisItem(codigo: '+591', bandera: '🇧🇴', nombre: 'Bolivia'),
+  _PaisItem(codigo: '+598', bandera: '🇺🇾', nombre: 'Uruguay'),
+  _PaisItem(codigo: '+595', bandera: '🇵🇾', nombre: 'Paraguay'),
+  _PaisItem(codigo: '+34', bandera: '🇪🇸', nombre: 'España'),
+  _PaisItem(codigo: '+55', bandera: '🇧🇷', nombre: 'Brasil'),
+  _PaisItem(codigo: '+44', bandera: '🇬🇧', nombre: 'Reino Unido'),
+  _PaisItem(codigo: '+49', bandera: '🇩🇪', nombre: 'Alemania'),
+  _PaisItem(codigo: '+33', bandera: '🇫🇷', nombre: 'Francia'),
+  _PaisItem(codigo: '+39', bandera: '🇮🇹', nombre: 'Italia'),
+  _PaisItem(codigo: '+507', bandera: '🇵🇦', nombre: 'Panamá'),
+  _PaisItem(codigo: '+506', bandera: '🇨🇷', nombre: 'Costa Rica'),
+  _PaisItem(codigo: '+503', bandera: '🇸🇻', nombre: 'El Salvador'),
+  _PaisItem(codigo: '+502', bandera: '🇬🇹', nombre: 'Guatemala'),
+  _PaisItem(codigo: '+504', bandera: '🇭🇳', nombre: 'Honduras'),
+  _PaisItem(codigo: '+505', bandera: '🇳🇮', nombre: 'Nicaragua'),
+  _PaisItem(codigo: '+53', bandera: '🇨🇺', nombre: 'Cuba'),
+  _PaisItem(codigo: '+1787', bandera: '🇵🇷', nombre: 'Puerto Rico'),
+  _PaisItem(codigo: '+1809', bandera: '🇩🇴', nombre: 'Rep. Dominicana'),
+];
+
+class _PlanItem {
+  final String id, nombre, simbolo, monedaCodigo;
+  final double valor;
   const _PlanItem({
     required this.id,
     required this.nombre,
@@ -50,13 +73,11 @@ class _PlanItem {
     required this.simbolo,
     required this.monedaCodigo,
   });
-
-  String get etiqueta => '$nombre — $simbolo ${valor.toStringAsFixed(0).replaceAllMapped(RegExp(r'(\d)(?=(\d{3})+$)'), (m) => '${m[1]}.')}';
 }
 
-// ─────────────────────────────────────────────
-//  CAMPO DE TEXTO
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+//  Componentes reutilizables
+// ─────────────────────────────────────────────────────────────
 class _FormField extends StatelessWidget {
   final TextEditingController controller;
   final FocusNode focusNode;
@@ -80,48 +101,45 @@ class _FormField extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Padding(
-        padding: const EdgeInsets.only(left: 4, bottom: 6),
-        child:
-            Text(label, style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 12, fontWeight: FontWeight.w600, letterSpacing: 0.3)),
-      ),
-      TextFormField(
-        controller: controller,
-        focusNode: focusNode,
-        keyboardType: keyboardType,
-        inputFormatters: inputFormatters,
-        style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 14, fontWeight: FontWeight.w500),
-        validator: validator,
-        decoration: InputDecoration(
-          hintText: hint,
-          hintStyle: GoogleFonts.spaceGrotesk(color: _C.textSec.withOpacity(0.6), fontSize: 14),
-          prefixIcon: Container(
-            margin: const EdgeInsets.fromLTRB(12, 8, 8, 8),
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(color: iconColor.withOpacity(0.1), borderRadius: BorderRadius.circular(9)),
-            child: Icon(icon, color: iconColor, size: 17),
-          ),
-          filled: true,
-          fillColor: _C.surface,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: _C.border, width: 1.2), borderRadius: BorderRadius.circular(14)),
-          focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: iconColor, width: 1.8), borderRadius: BorderRadius.circular(14)),
-          errorBorder: OutlineInputBorder(borderSide: BorderSide(color: _C.danger, width: 1.5), borderRadius: BorderRadius.circular(14)),
-          focusedErrorBorder:
-              OutlineInputBorder(borderSide: BorderSide(color: _C.danger, width: 1.8), borderRadius: BorderRadius.circular(14)),
-          errorStyle: GoogleFonts.spaceGrotesk(color: _C.danger, fontSize: 11),
+  Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 4, bottom: 6),
+          child: Text(label,
+              style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 12, fontWeight: FontWeight.w600, letterSpacing: 0.3)),
         ),
-      ),
-    ]);
-  }
+        TextFormField(
+          controller: controller,
+          focusNode: focusNode,
+          keyboardType: keyboardType,
+          inputFormatters: inputFormatters,
+          style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 14, fontWeight: FontWeight.w500),
+          validator: validator,
+          decoration: InputDecoration(
+            hintText: hint,
+            hintStyle: GoogleFonts.spaceGrotesk(color: _C.textSec.withOpacity(0.6), fontSize: 14),
+            prefixIcon: Container(
+              margin: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(color: iconColor.withOpacity(0.1), borderRadius: BorderRadius.circular(9)),
+              child: Icon(icon, color: iconColor, size: 17),
+            ),
+            filled: true,
+            fillColor: _C.surface,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            enabledBorder:
+                OutlineInputBorder(borderSide: BorderSide(color: _C.border, width: 1.2), borderRadius: BorderRadius.circular(14)),
+            focusedBorder:
+                OutlineInputBorder(borderSide: BorderSide(color: iconColor, width: 1.8), borderRadius: BorderRadius.circular(14)),
+            errorBorder: OutlineInputBorder(borderSide: BorderSide(color: _C.danger, width: 1.5), borderRadius: BorderRadius.circular(14)),
+            focusedErrorBorder:
+                OutlineInputBorder(borderSide: BorderSide(color: _C.danger, width: 1.8), borderRadius: BorderRadius.circular(14)),
+            errorStyle: GoogleFonts.spaceGrotesk(color: _C.danger, fontSize: 11),
+          ),
+        ),
+      ]);
 }
 
-// ─────────────────────────────────────────────
-//  DROPDOWN GENÉRICO ESTILIZADO
-// ─────────────────────────────────────────────
 class _StyledDropdown<T> extends StatelessWidget {
   final String label, hint;
   final IconData icon;
@@ -155,10 +173,7 @@ class _StyledDropdown<T> extends StatelessWidget {
         decoration: BoxDecoration(
           color: _C.surface,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: hasError ? _C.danger : (value != null ? color : _C.border),
-            width: value != null ? 1.8 : 1.2,
-          ),
+          border: Border.all(color: hasError ? _C.danger : (value != null ? color : _C.border), width: value != null ? 1.8 : 1.2),
         ),
         child: DropdownButtonHideUnderline(
           child: DropdownButton<T>(
@@ -167,10 +182,7 @@ class _StyledDropdown<T> extends StatelessWidget {
             borderRadius: BorderRadius.circular(14),
             dropdownColor: _C.surface,
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            icon: Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: Icon(Icons.keyboard_arrow_down_rounded, color: _C.textSec),
-            ),
+            icon: Padding(padding: const EdgeInsets.only(right: 8), child: Icon(Icons.keyboard_arrow_down_rounded, color: _C.textSec)),
             hint: Row(children: [
               Container(
                 margin: const EdgeInsets.only(left: 6, right: 10),
@@ -195,9 +207,6 @@ class _StyledDropdown<T> extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────
-//  SECCIÓN DE FORMULARIO
-// ─────────────────────────────────────────────
 class _FormSection extends StatelessWidget {
   final IconData icon;
   final Color color;
@@ -213,49 +222,44 @@ class _FormSection extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: _C.surface,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: _C.border, width: 1),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 14, offset: const Offset(0, 4))],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(colors: [color, color.withOpacity(0.6)]),
-                borderRadius: BorderRadius.circular(12),
+  Widget build(BuildContext context) => Container(
+        decoration: BoxDecoration(
+          color: _C.surface,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: _C.border, width: 1),
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 14, offset: const Offset(0, 4))],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(18),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                    gradient: LinearGradient(colors: [color, color.withOpacity(0.6)]), borderRadius: BorderRadius.circular(12)),
+                child: Icon(icon, color: Colors.white, size: 20),
               ),
-              child: Icon(icon, color: Colors.white, size: 20),
-            ),
-            const SizedBox(width: 12),
-            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(title, style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 15, fontWeight: FontWeight.w700)),
-              Text(subtitle, style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11)),
+              const SizedBox(width: 12),
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(title, style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 15, fontWeight: FontWeight.w700)),
+                Text(subtitle, style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11)),
+              ]),
             ]),
+            const SizedBox(height: 18),
+            Divider(color: _C.border, height: 1),
+            const SizedBox(height: 18),
+            ...children.map((w) => Padding(padding: const EdgeInsets.only(bottom: 14), child: w)),
           ]),
-          const SizedBox(height: 18),
-          Divider(color: _C.border, height: 1),
-          const SizedBox(height: 18),
-          ...children.map((w) => Padding(padding: const EdgeInsets.only(bottom: 14), child: w)),
-        ]),
-      ),
-    );
-  }
+        ),
+      );
 }
 
-// ─────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════
 //  MAIN WIDGET
-// ─────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════
 class CrearUsuarioWidget extends StatefulWidget {
   const CrearUsuarioWidget({super.key});
-
   static String routeName = 'CrearUsuario';
   static String routePath = 'crearUsuario';
 
@@ -268,7 +272,6 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
   bool _isLoading = false;
   bool _validarDropdowns = false;
 
-  // ── Estado de dropdowns ──
   Map<String, dynamic>? _starlinkSel;
   String? _starlinkId;
   Map<String, dynamic>? _antenaSel;
@@ -277,32 +280,42 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
   String? _routerId;
   String? _tipoServicio;
   String? _velocidad;
+  _PaisItem _selPais = _paises.first;
 
-  // ── Plan (dinámico desde Firestore, igual que detalle_cliente) ──
   List<_PlanItem> _planesDisponibles = [];
   bool _cargandoPlanes = false;
   _PlanItem? _selPlanItem;
 
-  // ── Listas desde Firestore ──
+  List<String> _velocidades = [];
+  bool _cargandoVelocidades = false;
+
   List<QueryDocumentSnapshot> _starlinks = [];
   List<QueryDocumentSnapshot> _antenas = [];
   List<QueryDocumentSnapshot> _routers = [];
 
-  // ── Opciones fijas — idénticas a detalle_cliente ──
+  // Controllers manuales de IP
+  final _ctrlIpAntena = TextEditingController();
+  final _focusIpAntena = FocusNode();
+  final _ctrlIpRouter = TextEditingController();
+  final _focusIpRouter = FocusNode();
+
   static const _tiposServicio = ['Fibra Óptica', 'Radio Enlace'];
-  static const _velocidades = [
-    '2M/2M',
-    '2M/3M',
-    '2M/4M',
-    '2M/5M',
-    '2M/6M',
-    '2M/7M',
-    '2M/8M',
-    '2M/9M',
-    '2M/10M',
-  ];
+  static const String _kColVel = 'velocidades';
 
   String? get _uid => FirebaseAuth.instance.currentUser?.uid;
+
+  // ── Validador de IP ──────────────────────────────────────
+  static String? _validarIp(String? val) {
+    if (val == null || val.trim().isEmpty) return 'Ingresa la IP';
+    final ok = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$').hasMatch(val.trim());
+    if (!ok) return 'IP inválida · Ej: 192.168.1.100';
+    final partes = val.trim().split('.');
+    for (final p in partes) {
+      final n = int.tryParse(p) ?? 256;
+      if (n > 255) return 'IP inválida · cada octeto debe ser 0-255';
+    }
+    return null;
+  }
 
   @override
   void initState() {
@@ -321,31 +334,38 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
     _model.textController6 ??= TextEditingController();
     _model.textFieldFocusNode6 ??= FocusNode();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _cargarDatos();
+      _cargarTodo();
       safeSetState(() {});
     });
   }
 
   @override
   void dispose() {
+    _ctrlIpAntena.dispose();
+    _focusIpAntena.dispose();
+    _ctrlIpRouter.dispose();
+    _focusIpRouter.dispose();
     _model.dispose();
     super.dispose();
   }
 
-  Future<void> _cargarDatos() async {
-    // Equipos y planes en paralelo
-    final results = await Future.wait([
-      FirebaseFirestore.instance.collection('starlinks').where('activo', isEqualTo: true).orderBy('nombre').get(),
-      FirebaseFirestore.instance.collection('equipos').where('tipo', isEqualTo: 'antena').get(),
-      FirebaseFirestore.instance.collection('equipos').where('tipo', isEqualTo: 'router').get(),
+  Future<void> _cargarTodo() async => Future.wait([_cargarEquiposYPlanes(), _cargarVelocidades()]);
+
+  Future<void> _cargarEquiposYPlanes() async {
+    if (_uid == null) return;
+
+    final r = await Future.wait([
+      FirebaseFirestore.instance.collection('starlinks').where('propietarioUid', isEqualTo: _uid).get(),
+      FirebaseFirestore.instance.collection('equipos').where('tipo', isEqualTo: 'antena').where('propietarioUid', isEqualTo: _uid).get(),
+      FirebaseFirestore.instance.collection('equipos').where('tipo', isEqualTo: 'router').where('propietarioUid', isEqualTo: _uid).get(),
       _cargarPlanesUsuario(),
     ]);
 
     if (mounted) {
       setState(() {
-        _starlinks = (results[0] as QuerySnapshot).docs;
-        _antenas = (results[1] as QuerySnapshot).docs;
-        _routers = (results[2] as QuerySnapshot).docs;
+        _starlinks = (r[0] as QuerySnapshot).docs;
+        _antenas = (r[1] as QuerySnapshot).docs;
+        _routers = (r[2] as QuerySnapshot).docs;
       });
     }
   }
@@ -372,9 +392,24 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
       }
       return snap;
     } catch (e) {
-      debugPrint('[StarkGo] Error cargando planes: $e');
       if (mounted) setState(() => _cargandoPlanes = false);
       rethrow;
+    }
+  }
+
+  Future<void> _cargarVelocidades() async {
+    if (_uid == null) return;
+    setState(() => _cargandoVelocidades = true);
+    try {
+      final doc = await FirebaseFirestore.instance.collection(_kColVel).doc(_uid).get();
+      if (doc.exists && mounted) {
+        final raw = (doc.data() as Map<String, dynamic>)['lista'];
+        setState(() => _velocidades = raw is List ? List<String>.from(raw.map((e) => e.toString())) : []);
+      }
+    } catch (e) {
+      debugPrint('[StarkGo] Error cargando velocidades: $e');
+    } finally {
+      if (mounted) setState(() => _cargandoVelocidades = false);
     }
   }
 
@@ -386,9 +421,7 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
       _tipoServicio != null &&
       _velocidad != null;
 
-  // ════════════════════════════════════════════════════════════
-  //  REGISTRAR
-  // ════════════════════════════════════════════════════════════
+  // ── Registrar ────────────────────────────────────────────
   Future<void> _registrar() async {
     setState(() => _validarDropdowns = true);
     if (_model.formKey.currentState == null || !_model.formKey.currentState!.validate()) return;
@@ -402,15 +435,31 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
       return;
     }
 
+    // Validar IPs manualmente
+    final errIpAtn = _validarIp(_ctrlIpAntena.text);
+    final errIpRtr = _validarIp(_ctrlIpRouter.text);
+    if (errIpAtn != null || errIpRtr != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(errIpAtn ?? errIpRtr!, style: GoogleFonts.spaceGrotesk(color: Colors.white)),
+        backgroundColor: _C.danger,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ));
+      return;
+    }
+
     setState(() => _isLoading = true);
     try {
-      _model.antna = await actions.generarIpAntena();
-      _model.routr = await actions.generarIpAntenaCopy();
+      // IPs ingresadas manualmente
+      _model.antna = _ctrlIpAntena.text.trim();
+      _model.routr = _ctrlIpRouter.text.trim();
+
+      // Clave sigue siendo auto-generada
       _model.clav = await actions.generarClave(_model.textController5.text, int.parse(_model.textController3.text));
 
       final uid = FirebaseAuth.instance.currentUser?.uid;
+      final ref = ClientesRecord.collection.doc();
 
-      var ref = ClientesRecord.collection.doc();
       final data = createClientesRecordData(
         nombre: _model.textController1.text.trim(),
         apellido: _model.textController2.text.trim(),
@@ -418,10 +467,10 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
         numero: int.tryParse(_model.textController4.text),
         nombrefinca: _model.textController5.text.trim(),
         vereda: _model.textController6.text.trim(),
-        ipatn: _model.antna,
+        ipatn: _model.antna, // ← IP manual antena
         usuarioatn: _model.clav,
         claveatn: _model.clav,
-        iprouter: _model.routr,
+        iprouter: _model.routr, // ← IP manual router
         usuariorouter: _model.clav,
         claverouter: _model.clav,
         fecha: getCurrentTimestamp,
@@ -436,7 +485,6 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
         routerMarca: _routerSel!['marca'],
         routerModelo: _routerSel!['modelo'],
         routerIp: _routerSel!['ip'],
-        // ── Plan dinámico (igual que detalle_cliente) ──
         planCliente: _selPlanItem!.nombre,
         tipoServicio: _tipoServicio,
         velocidadPlan: _velocidad,
@@ -445,28 +493,25 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
       await ref.set(data);
       _model.rf = ClientesRecord.getDocumentFromData(data, ref);
 
-      // ── Guardar campos extra del plan (planId, planValor, planSimbolo, planMoneda) ──
       await FirebaseFirestore.instance.collection('clientes').doc(ref.id).update({
         'planId': _selPlanItem!.id,
         'planValor': _selPlanItem!.valor,
         'planSimbolo': _selPlanItem!.simbolo,
         'planMoneda': _selPlanItem!.monedaCodigo,
+        'codigoPais': _selPais.codigo,
       });
 
-      // ── Notificar al VPS ── (sin tocar)
-      final nombreCompleto = '${_model.textController1.text.trim()} ${_model.textController2.text.trim()}';
+      // Notificar al VPS con la IP manual de la antena
       await VpsService.clienteCreado(
-        nombre: nombreCompleto,
+        nombre: '${_model.textController1.text.trim()} ${_model.textController2.text.trim()}',
         ip: _model.antna ?? '',
         velocidad: _velocidad ?? '',
       );
 
-      // ── propietarioUid ──
       if (uid != null) {
         await FirebaseFirestore.instance.collection('clientes').doc(ref.id).update({'propietarioUid': uid});
       }
 
-      // ── Incrementar contador Starlink ──
       await FirebaseFirestore.instance.collection('starlinks').doc(_starlinkId).update({'clientes_count': FieldValue.increment(1)});
 
       if (mounted) {
@@ -474,18 +519,14 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
           content: Row(children: [
             const Icon(Icons.check_circle_rounded, color: Colors.white, size: 18),
             const SizedBox(width: 8),
-            Text('${_model.textController1.text} registrado correctamente', style: GoogleFonts.spaceGrotesk(color: Colors.white)),
+            Text('${_model.textController1.text} registrado', style: GoogleFonts.spaceGrotesk(color: Colors.white)),
           ]),
           backgroundColor: _C.success,
           behavior: SnackBarBehavior.floating,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ));
-        context.pushNamed(
-          DetalleClienteWidget.routeName,
-          queryParameters: {
-            'rf': serializeParam(_model.rf?.reference, ParamType.DocumentReference),
-          }.withoutNulls,
-        );
+        context.pushNamed(DetalleClienteWidget.routeName,
+            queryParameters: {'rf': serializeParam(_model.rf?.reference, ParamType.DocumentReference)}.withoutNulls);
       }
     } catch (e) {
       if (mounted) {
@@ -501,9 +542,7 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
     }
   }
 
-  // ─────────────────────────────────────────
-  //  BUILD
-  // ─────────────────────────────────────────
+  // ════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
@@ -523,7 +562,7 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
                     _buildBanner().animate().fadeIn(duration: 350.ms).slideY(begin: 0.04, end: 0),
                     const SizedBox(height: 16),
 
-                    // ── Datos personales ──
+                    // ── Datos personales ──────────────────
                     _FormSection(
                       icon: Icons.person_rounded,
                       color: _C.primary,
@@ -559,22 +598,12 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
                           inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                           validator: (val) => _model.textController3Validator.asValidator(context)?.call(val),
                         ),
-                        _FormField(
-                          controller: _model.textController4!,
-                          focusNode: _model.textFieldFocusNode4!,
-                          label: 'TELÉFONO',
-                          hint: 'Número de contacto',
-                          icon: Icons.phone_rounded,
-                          iconColor: _C.success,
-                          keyboardType: TextInputType.phone,
-                          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                          validator: (val) => _model.textController4Validator.asValidator(context)?.call(val),
-                        ),
+                        _buildTelefonoField(),
                       ],
                     ).animate().fadeIn(duration: 350.ms, delay: 100.ms).slideY(begin: 0.05, end: 0),
                     const SizedBox(height: 14),
 
-                    // ── Ubicación ──
+                    // ── Ubicación ─────────────────────────
                     _FormSection(
                       icon: Icons.location_on_rounded,
                       color: _C.accent,
@@ -603,13 +632,38 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
                     ).animate().fadeIn(duration: 350.ms, delay: 200.ms).slideY(begin: 0.05, end: 0),
                     const SizedBox(height: 14),
 
-                    // ── Starlink + Equipos ──
+                    // ── Red y Equipos ─────────────────────
                     _FormSection(
                       icon: Icons.satellite_alt_rounded,
                       color: _C.primary,
                       title: 'Red y Equipos',
-                      subtitle: 'Starlink, antena y router asignados',
+                      subtitle: 'IPs manuales, Starlink, antena y router',
                       children: [
+                        // IP Antena manual
+                        _FormField(
+                          controller: _ctrlIpAntena,
+                          focusNode: _focusIpAntena,
+                          label: 'IP ANTENA',
+                          hint: 'Ej: 192.168.1.100',
+                          icon: Icons.cell_tower_rounded,
+                          iconColor: _C.accent,
+                          keyboardType: TextInputType.numberWithOptions(decimal: true),
+                          inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d.]'))],
+                          validator: _validarIp,
+                        ),
+                        // IP Router manual
+                        _FormField(
+                          controller: _ctrlIpRouter,
+                          focusNode: _focusIpRouter,
+                          label: 'IP ROUTER',
+                          hint: 'Ej: 192.168.1.1',
+                          icon: Icons.router_rounded,
+                          iconColor: _C.purple,
+                          keyboardType: TextInputType.numberWithOptions(decimal: true),
+                          inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d.]'))],
+                          validator: _validarIp,
+                        ),
+                        // Starlink
                         _StyledDropdown<String>(
                           label: 'STARLINK',
                           hint: 'Selecciona la Starlink',
@@ -621,7 +675,7 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
                             final d = doc.data() as Map<String, dynamic>;
                             return DropdownMenuItem<String>(
                               value: doc.id,
-                              child: _dropdownItem(Icons.satellite_alt_rounded, d['nombre'] ?? '', d['ubicacion'] ?? '', _C.primary),
+                              child: _ddItem(Icons.satellite_alt_rounded, d['nombre'] ?? '', d['ubicacion'] ?? '', _C.primary),
                             );
                           }).toList(),
                           onChanged: (id) {
@@ -632,6 +686,7 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
                             });
                           },
                         ),
+                        // Antena
                         _StyledDropdown<String>(
                           label: 'ANTENA',
                           hint: 'Selecciona la antena',
@@ -643,7 +698,7 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
                             final d = doc.data() as Map<String, dynamic>;
                             return DropdownMenuItem<String>(
                               value: doc.id,
-                              child: _dropdownItem(Icons.cell_tower_rounded, '${d['marca']} ${d['modelo']}', 'IP: ${d['ip']}', _C.accent),
+                              child: _ddItem(Icons.cell_tower_rounded, '${d['marca']} ${d['modelo']}', 'IP: ${d['ip']}', _C.accent),
                             );
                           }).toList(),
                           onChanged: (id) {
@@ -654,6 +709,7 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
                             });
                           },
                         ),
+                        // Router
                         _StyledDropdown<String>(
                           label: 'ROUTER',
                           hint: 'Selecciona el router',
@@ -665,7 +721,7 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
                             final d = doc.data() as Map<String, dynamic>;
                             return DropdownMenuItem<String>(
                               value: doc.id,
-                              child: _dropdownItem(Icons.router_rounded, '${d['marca']} ${d['modelo']}', 'IP: ${d['ip']}', _C.purple),
+                              child: _ddItem(Icons.router_rounded, '${d['marca']} ${d['modelo']}', 'IP: ${d['ip']}', _C.purple),
                             );
                           }).toList(),
                           onChanged: (id) {
@@ -680,58 +736,33 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
                     ).animate().fadeIn(duration: 350.ms, delay: 280.ms).slideY(begin: 0.05, end: 0),
                     const SizedBox(height: 14),
 
-                    // ── Plan y servicio ──
+                    // ── Plan de servicio ──────────────────
                     _FormSection(
                       icon: Icons.wifi_rounded,
                       color: _C.success,
                       title: 'Plan de Servicio',
-                      subtitle: 'Tipo, velocidad y precio del plan',
+                      subtitle: 'Tipo, velocidad y precio',
                       children: [
-                        // ── Plan dinámico desde Firestore ──
                         _buildPlanDropdown(),
-
-                        // ── Velocidad — formato 2M/2M igual que detalle_cliente ──
-                        _StyledDropdown<String>(
-                          label: 'VELOCIDAD (SUBIDA/BAJADA)',
-                          hint: 'Selecciona la velocidad',
-                          icon: Icons.speed_rounded,
-                          color: _C.warning,
-                          value: _velocidad,
-                          errorText: _validarDropdowns && _velocidad == null ? 'Selecciona la velocidad' : null,
-                          items: _velocidades.map((v) {
-                            final parts = v.split('/');
-                            return DropdownMenuItem<String>(
-                              value: v,
-                              child: _dropdownItem(
-                                Icons.speed_rounded,
-                                v,
-                                '↑ ${parts[0]} subida  ·  ↓ ${parts[1]} bajada',
-                                _C.warning,
-                              ),
-                            );
-                          }).toList(),
-                          onChanged: (v) => setState(() => _velocidad = v),
-                        ),
-
-                        // ── Tipo de servicio — igual que detalle_cliente ──
+                        _buildVelocidadDropdown(),
                         _StyledDropdown<String>(
                           label: 'TIPO DE SERVICIO',
                           hint: 'Fibra Óptica o Radio Enlace',
                           icon: Icons.cable_rounded,
                           color: _C.purple,
                           value: _tipoServicio,
-                          errorText: _validarDropdowns && _tipoServicio == null ? 'Selecciona el tipo de servicio' : null,
-                          items: _tiposServicio.map((t) {
-                            return DropdownMenuItem<String>(
-                              value: t,
-                              child: _dropdownItem(
-                                t == 'Fibra Óptica' ? Icons.fiber_smart_record_rounded : Icons.cell_tower_rounded,
-                                t,
-                                t == 'Fibra Óptica' ? 'Conexión por fibra óptica' : 'Enlace punto a punto',
-                                _C.purple,
-                              ),
-                            );
-                          }).toList(),
+                          errorText: _validarDropdowns && _tipoServicio == null ? 'Selecciona el tipo' : null,
+                          items: _tiposServicio
+                              .map((t) => DropdownMenuItem<String>(
+                                    value: t,
+                                    child: _ddItem(
+                                      t == 'Fibra Óptica' ? Icons.fiber_smart_record_rounded : Icons.cell_tower_rounded,
+                                      t,
+                                      t == 'Fibra Óptica' ? 'Conexión por fibra óptica' : 'Enlace punto a punto',
+                                      _C.purple,
+                                    ),
+                                  ))
+                              .toList(),
                           onChanged: (v) => setState(() => _tipoServicio = v),
                         ),
                       ],
@@ -752,9 +783,152 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
     );
   }
 
-  // ─────────────────────────────────────────
-  //  DROPDOWN DE PLANES (idéntico a detalle_cliente)
-  // ─────────────────────────────────────────
+  // ── Dropdown velocidad ───────────────────────────────────
+  Widget _buildVelocidadDropdown() {
+    if (_cargandoVelocidades) {
+      return Container(
+        height: 56,
+        decoration: BoxDecoration(color: _C.surface, borderRadius: BorderRadius.circular(14), border: Border.all(color: _C.border)),
+        child: Center(
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: _C.warning)),
+            const SizedBox(width: 8),
+            Text('Cargando velocidades...', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 13)),
+          ]),
+        ),
+      );
+    }
+    if (_velocidades.isEmpty) {
+      return GestureDetector(
+        onTap: () async {
+          await context.pushNamed(ConfigVelocidadesWidget.routeName);
+          _cargarVelocidades();
+        },
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: _C.warning.withOpacity(0.05),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: _C.warning.withOpacity(0.45), width: 1.5),
+          ),
+          child: Row(children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(color: _C.warning.withOpacity(0.12), borderRadius: BorderRadius.circular(11)),
+              child: const Icon(Icons.speed_rounded, color: _C.warning, size: 22),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Sin velocidades configuradas',
+                    style: GoogleFonts.spaceGrotesk(color: _C.warning, fontSize: 13, fontWeight: FontWeight.w700)),
+                Text('Toca aquí para configurar antes de crear un cliente',
+                    style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11)),
+              ]),
+            ),
+            const Icon(Icons.arrow_forward_ios_rounded, color: _C.warning, size: 14),
+          ]),
+        ),
+      );
+    }
+    final safeValue = _velocidades.contains(_velocidad) ? _velocidad : null;
+    return _StyledDropdown<String>(
+      label: 'VELOCIDAD (SUBIDA/BAJADA)',
+      hint: 'Selecciona la velocidad',
+      icon: Icons.speed_rounded,
+      color: _C.warning,
+      value: safeValue,
+      errorText: _validarDropdowns && _velocidad == null ? 'Selecciona la velocidad' : null,
+      items: _velocidades.map((v) {
+        final p = v.split('/');
+        return DropdownMenuItem<String>(
+          value: v,
+          child: _ddItem(Icons.speed_rounded, v, '↑ ${p[0]} subida  ·  ↓ ${p.length > 1 ? p[1] : ''} bajada', _C.warning),
+        );
+      }).toList(),
+      onChanged: (v) => setState(() => _velocidad = v),
+    );
+  }
+
+  // ── Campo teléfono con selector de país ──────────────────
+  Widget _buildTelefonoField() {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Padding(
+        padding: const EdgeInsets.only(left: 4, bottom: 6),
+        child: Text('TELÉFONO',
+            style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 12, fontWeight: FontWeight.w600, letterSpacing: 0.3)),
+      ),
+      Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(
+          height: 54,
+          decoration:
+              BoxDecoration(color: _C.surface, borderRadius: BorderRadius.circular(14), border: Border.all(color: _C.border, width: 1.2)),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<_PaisItem>(
+              value: _selPais,
+              borderRadius: BorderRadius.circular(14),
+              dropdownColor: _C.surface,
+              icon: const Icon(Icons.keyboard_arrow_down_rounded, color: _C.textSec, size: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              items: _paises
+                  .map((p) => DropdownMenuItem<_PaisItem>(
+                        value: p,
+                        child: Text('${p.bandera} ${p.codigo}  ${p.nombre}',
+                            style: GoogleFonts.spaceGrotesk(fontSize: 13, fontWeight: FontWeight.w500)),
+                      ))
+                  .toList(),
+              onChanged: (p) {
+                if (p != null) setState(() => _selPais = p);
+              },
+              selectedItemBuilder: (_) => _paises
+                  .map((p) => Center(
+                        child: Text('${p.bandera} ${p.codigo}',
+                            style: GoogleFonts.spaceGrotesk(fontSize: 13, fontWeight: FontWeight.w700, color: _C.primary)),
+                      ))
+                  .toList(),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: TextFormField(
+            controller: _model.textController4!,
+            focusNode: _model.textFieldFocusNode4!,
+            keyboardType: TextInputType.phone,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 14, fontWeight: FontWeight.w500),
+            validator: (val) => _model.textController4Validator.asValidator(context)?.call(val),
+            decoration: InputDecoration(
+              hintText: 'Número sin prefijo',
+              hintStyle: GoogleFonts.spaceGrotesk(color: _C.textSec.withOpacity(0.5), fontSize: 13),
+              prefixIcon: Container(
+                margin: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(color: _C.success.withOpacity(0.1), borderRadius: BorderRadius.circular(9)),
+                child: Icon(Icons.phone_rounded, color: _C.success, size: 17),
+              ),
+              filled: true,
+              fillColor: _C.surface,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              enabledBorder:
+                  OutlineInputBorder(borderSide: BorderSide(color: _C.border, width: 1.2), borderRadius: BorderRadius.circular(14)),
+              focusedBorder:
+                  OutlineInputBorder(borderSide: BorderSide(color: _C.success, width: 1.8), borderRadius: BorderRadius.circular(14)),
+              errorBorder:
+                  OutlineInputBorder(borderSide: BorderSide(color: _C.danger, width: 1.5), borderRadius: BorderRadius.circular(14)),
+              focusedErrorBorder:
+                  OutlineInputBorder(borderSide: BorderSide(color: _C.danger, width: 1.8), borderRadius: BorderRadius.circular(14)),
+              errorStyle: GoogleFonts.spaceGrotesk(color: _C.danger, fontSize: 11),
+            ),
+          ),
+        ),
+      ]),
+    ]);
+  }
+
+  // ── Dropdown plan ────────────────────────────────────────
   Widget _buildPlanDropdown() {
     if (_cargandoPlanes) {
       return Container(
@@ -769,9 +943,7 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
         ),
       );
     }
-
     if (_planesDisponibles.isEmpty) {
-      // Estado vacío — lleva a crear planes
       return GestureDetector(
         onTap: () => context.pushNamed(PlanesWidget.routeName),
         child: Container(
@@ -792,7 +964,7 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text('Sin planes creados', style: GoogleFonts.spaceGrotesk(color: _C.danger, fontSize: 13, fontWeight: FontWeight.w700)),
-                Text('Toca aquí para crear tu primer plan de servicio', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11)),
+                Text('Toca aquí para crear tu primer plan', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11)),
               ]),
             ),
             const Icon(Icons.arrow_forward_ios_rounded, color: _C.danger, size: 14),
@@ -800,10 +972,7 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
         ),
       );
     }
-
-    // Hay planes → dropdown normal
     final safeValue = _planesDisponibles.any((p) => p.id == _selPlanItem?.id) ? _selPlanItem : null;
-
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Padding(
         padding: const EdgeInsets.only(left: 4, bottom: 6),
@@ -826,10 +995,7 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
             borderRadius: BorderRadius.circular(14),
             dropdownColor: _C.surface,
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            icon: Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: Icon(Icons.keyboard_arrow_down_rounded, color: _C.textSec),
-            ),
+            icon: Padding(padding: const EdgeInsets.only(right: 8), child: Icon(Icons.keyboard_arrow_down_rounded, color: _C.textSec)),
             hint: Row(children: [
               Container(
                 margin: const EdgeInsets.only(left: 6, right: 10),
@@ -843,10 +1009,10 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
             items: _planesDisponibles
                 .map((p) => DropdownMenuItem<_PlanItem>(
                       value: p,
-                      child: _dropdownItem(
+                      child: _ddItem(
                         Icons.payments_rounded,
                         p.nombre,
-                        '${p.simbolo} ${p.valor.toStringAsFixed(0).replaceAllMapped(RegExp(r'(\d)(?=(\d{3})+$)'), (m) => '${m[1]}.')} / mes · ${p.monedaCodigo}',
+                        '${p.simbolo} ${p.valor.toStringAsFixed(0).replaceAllMapped(RegExp(r'(\d)(?=(\d{3})+$)'), (m) => '${m[1]}.')} / mes',
                         _C.success,
                       ),
                     ))
@@ -863,97 +1029,95 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
     ]);
   }
 
-  Widget _dropdownItem(IconData icon, String title, String sub, Color color) {
-    return Row(children: [
-      Container(
-        margin: const EdgeInsets.only(left: 4, right: 10),
-        width: 32,
-        height: 32,
-        decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
-        child: Icon(icon, color: color, size: 15),
-      ),
-      Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-        Text(title, style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 13, fontWeight: FontWeight.w600)),
-        Text(sub, style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11)),
-      ])),
-    ]);
-  }
-
-  Widget _buildTopBar(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-      child: Row(children: [
-        GestureDetector(
-          onTap: () => context.safePop(),
-          child: Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: _C.surface,
-              borderRadius: BorderRadius.circular(12),
-              boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 8, offset: const Offset(0, 2))],
-            ),
-            child: const Icon(Icons.arrow_back_ios_new_rounded, color: _C.textPri, size: 18),
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Nuevo Cliente', style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 20, fontWeight: FontWeight.w800)),
-          Text('Completa todos los campos', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 12)),
-        ])),
+  // ── Helper item dropdown ─────────────────────────────────
+  Widget _ddItem(IconData icon, String title, String sub, Color color) => Row(children: [
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(
-            color: _C.success.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: _C.success.withOpacity(0.3)),
-          ),
-          child: Row(children: [
-            Icon(Icons.wifi_rounded, color: _C.success, size: 13),
-            const SizedBox(width: 5),
-            Text('Activo', style: GoogleFonts.spaceGrotesk(color: _C.success, fontSize: 12, fontWeight: FontWeight.w600)),
+          margin: const EdgeInsets.only(left: 4, right: 10),
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
+          child: Icon(icon, color: color, size: 15),
+        ),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Text(title, style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 13, fontWeight: FontWeight.w600)),
+            Text(sub, style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11)),
           ]),
         ),
-      ]),
-    );
-  }
+      ]);
 
-  Widget _buildBanner() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(colors: [_C.dark, Color(0xFF1E293B)]),
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [BoxShadow(color: _C.dark.withOpacity(0.2), blurRadius: 16, offset: const Offset(0, 6))],
-      ),
-      child: Row(children: [
-        Container(
-          width: 52,
-          height: 52,
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(colors: [_C.primary, _C.accent]),
-            borderRadius: BorderRadius.circular(14),
+  // ── Top bar ──────────────────────────────────────────────
+  Widget _buildTopBar(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+        child: Row(children: [
+          GestureDetector(
+            onTap: () => context.safePop(),
+            child: Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: _C.surface,
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 8, offset: const Offset(0, 2))],
+              ),
+              child: const Icon(Icons.arrow_back_ios_new_rounded, color: _C.textPri, size: 18),
+            ),
           ),
-          child: const Icon(Icons.person_add_rounded, color: Colors.white, size: 26),
-        ),
-        const SizedBox(width: 14),
-        Expanded(
+          const SizedBox(width: 12),
+          Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Registrar nuevo cliente', style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
-          const SizedBox(height: 3),
-          Text('La IP, usuario y clave se generan automáticamente.', style: GoogleFonts.spaceGrotesk(color: Colors.white60, fontSize: 12)),
-        ])),
-      ]),
-    );
-  }
+              Text('Nuevo Cliente', style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 20, fontWeight: FontWeight.w800)),
+              Text('Completa todos los campos', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 12)),
+            ]),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: _C.success.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: _C.success.withOpacity(0.3)),
+            ),
+            child: Row(children: [
+              Icon(Icons.wifi_rounded, color: _C.success, size: 13),
+              const SizedBox(width: 5),
+              Text('Activo', style: GoogleFonts.spaceGrotesk(color: _C.success, fontSize: 12, fontWeight: FontWeight.w600)),
+            ]),
+          ),
+        ]),
+      );
 
+  // ── Banner superior ──────────────────────────────────────
+  Widget _buildBanner() => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(colors: [_C.dark, Color(0xFF1E293B)]),
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [BoxShadow(color: _C.dark.withOpacity(0.2), blurRadius: 16, offset: const Offset(0, 6))],
+        ),
+        child: Row(children: [
+          Container(
+            width: 52,
+            height: 52,
+            decoration:
+                BoxDecoration(gradient: const LinearGradient(colors: [_C.primary, _C.accent]), borderRadius: BorderRadius.circular(14)),
+            child: const Icon(Icons.person_add_rounded, color: Colors.white, size: 26),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Registrar nuevo cliente',
+                  style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
+              Text('Ingresa las IPs manualmente · clave generada automáticamente',
+                  style: GoogleFonts.spaceGrotesk(color: Colors.white60, fontSize: 12)),
+            ]),
+          ),
+        ]),
+      );
+
+  // ── Tarjeta info auto ────────────────────────────────────
   Widget _buildAutoInfoCard() {
     final items = [
-      (Icons.router_rounded, _C.accent, 'IP Antena', 'Auto-generada'),
-      (Icons.device_hub_rounded, _C.purple, 'IP Router', 'Auto-generada'),
       (Icons.lock_rounded, _C.warning, 'Claves', 'Basadas en finca + cédula'),
       (Icons.wifi_rounded, _C.success, 'Estado inicial', 'Activo'),
     ];
@@ -1005,43 +1169,44 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
     );
   }
 
-  Widget _buildSubmitButton() {
-    return SizedBox(
-      width: double.infinity,
-      height: 56,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        decoration: BoxDecoration(
-          gradient: _isLoading ? null : const LinearGradient(colors: [_C.primary, _C.accent]),
-          color: _isLoading ? _C.border : null,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: _isLoading ? [] : [BoxShadow(color: _C.primary.withOpacity(0.35), blurRadius: 16, offset: const Offset(0, 6))],
-        ),
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: _isLoading ? null : _registrar,
+  // ── Botón registrar ──────────────────────────────────────
+  Widget _buildSubmitButton() => SizedBox(
+        width: double.infinity,
+        height: 56,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          decoration: BoxDecoration(
+            gradient: _isLoading ? null : const LinearGradient(colors: [_C.primary, _C.accent]),
+            color: _isLoading ? _C.border : null,
             borderRadius: BorderRadius.circular(16),
-            child: Center(
-              child: _isLoading
-                  ? Row(mainAxisSize: MainAxisSize.min, children: [
-                      SizedBox(
+            boxShadow: _isLoading ? [] : [BoxShadow(color: _C.primary.withOpacity(0.35), blurRadius: 16, offset: const Offset(0, 6))],
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: _isLoading ? null : _registrar,
+              borderRadius: BorderRadius.circular(16),
+              child: Center(
+                child: _isLoading
+                    ? Row(mainAxisSize: MainAxisSize.min, children: [
+                        SizedBox(
                           width: 18,
                           height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation(_C.textSec))),
-                      const SizedBox(width: 10),
-                      Text('Registrando...', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 15, fontWeight: FontWeight.w600)),
-                    ])
-                  : Row(mainAxisSize: MainAxisSize.min, children: [
-                      const Icon(Icons.person_add_alt_1_rounded, color: Colors.white, size: 20),
-                      const SizedBox(width: 10),
-                      Text('Registrar Cliente',
-                          style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
-                    ]),
+                          child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation(_C.textSec)),
+                        ),
+                        const SizedBox(width: 10),
+                        Text('Registrando...',
+                            style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 15, fontWeight: FontWeight.w600)),
+                      ])
+                    : Row(mainAxisSize: MainAxisSize.min, children: [
+                        const Icon(Icons.person_add_alt_1_rounded, color: Colors.white, size: 20),
+                        const SizedBox(width: 10),
+                        Text('Registrar Cliente',
+                            style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
+                      ]),
+              ),
             ),
           ),
         ),
-      ),
-    );
-  }
+      );
 }

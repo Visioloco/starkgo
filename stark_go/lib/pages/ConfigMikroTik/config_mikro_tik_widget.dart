@@ -7,17 +7,10 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'config_mikro_tik_model.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 
-// ─────────────────────────────────────────────
-//  CONFIGURACIÓN PRIVADA DEL VPS
-//  El usuario NUNCA ve esto. Es interno de la app.
-// ─────────────────────────────────────────────
 class _VPS {
-  static const String url = 'http://5.161.88.42:3000'; // ← Cambia esto
+  static const String url = 'http://5.161.88.42:3000';
 }
 
-// ─────────────────────────────────────────────
-//  PALETA
-// ─────────────────────────────────────────────
 class _C {
   static const Color primary = Color(0xFF1A73E8);
   static const Color accent = Color(0xFF00C6AE);
@@ -31,11 +24,9 @@ class _C {
   static const Color textSec = Color(0xFF64748B);
   static const Color border = Color(0xFFE2E8F0);
   static const Color purple = Color(0xFF7C3AED);
+  static const Color pppoe = Color(0xFF0EA5E9);
 }
 
-// ─────────────────────────────────────────────
-//  CAMPO DE TEXTO
-// ─────────────────────────────────────────────
 class _Field extends StatelessWidget {
   final TextEditingController ctrl;
   final FocusNode? focusNode;
@@ -101,9 +92,6 @@ class _Field extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────
-//  SECCIÓN DE FORMULARIO
-// ─────────────────────────────────────────────
 class _Section extends StatelessWidget {
   final IconData icon;
   final Color color;
@@ -134,10 +122,8 @@ class _Section extends StatelessWidget {
             Container(
               width: 40,
               height: 40,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(colors: [color, color.withOpacity(0.6)]),
-                borderRadius: BorderRadius.circular(12),
-              ),
+              decoration:
+                  BoxDecoration(gradient: LinearGradient(colors: [color, color.withOpacity(0.6)]), borderRadius: BorderRadius.circular(12)),
               child: Icon(icon, color: Colors.white, size: 20),
             ),
             const SizedBox(width: 12),
@@ -156,13 +142,9 @@ class _Section extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────
-//  DROPDOWN SCHEDULER
-// ─────────────────────────────────────────────
 class _SchedulerDropdown extends StatelessWidget {
   final int? value;
   final ValueChanged<int?> onChanged;
-
   const _SchedulerDropdown({required this.value, required this.onChanged});
 
   @override
@@ -187,10 +169,7 @@ class _SchedulerDropdown extends StatelessWidget {
             borderRadius: BorderRadius.circular(14),
             dropdownColor: _C.surface,
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            icon: Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: Icon(Icons.keyboard_arrow_down_rounded, color: _C.textSec),
-            ),
+            icon: Padding(padding: const EdgeInsets.only(right: 8), child: Icon(Icons.keyboard_arrow_down_rounded, color: _C.textSec)),
             hint: Row(children: [
               Container(
                 margin: const EdgeInsets.only(left: 6, right: 10),
@@ -228,12 +207,8 @@ class _SchedulerDropdown extends StatelessWidget {
   }
 }
 
-// ═════════════════════════════════════════════
-//  MAIN WIDGET
-// ═════════════════════════════════════════════
 class ConfigMikroTikWidget extends StatefulWidget {
   const ConfigMikroTikWidget({super.key});
-
   static String routeName = 'ConfigMikroTik';
   static String routePath = 'configMikroTik';
 
@@ -243,84 +218,44 @@ class ConfigMikroTikWidget extends StatefulWidget {
 
 class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
   late ConfigMikroTikModel _model;
-
   String? get _uid => FirebaseAuth.instance.currentUser?.uid;
   static const String _col = 'config_mikrotik';
 
-  // ── Genera apikey única para este usuario ──
-  // Se genera una sola vez y se guarda en Firestore.
-  // El usuario la ve para copiarla al MikroTik, pero NO puede cambiarla.
   String _generarApiKey(String uid) {
-    // Usa los primeros 8 chars del uid + timestamp corto = suficientemente único
     final parte = uid.substring(0, 8);
     final ts = DateTime.now().millisecondsSinceEpoch.toString().substring(7);
     return 'sg_${parte}_$ts';
   }
 
-  // ── Script generado ──
-  // La URL del VPS viene de _VPS.url (privado, no lo ve el usuario)
-  // La apikey viene del campo del usuario
-  String get _scriptMikrotik {
-    final url = _VPS.url;
-    final key = _model.vpsApiKeyController!.text.trim();
+  // ─────────────────────────────────────────────────────────────────────────
+  // Source del script starkgo-sync
+  // El usuario lo pega en System → Scripts → starkgo-sync → Source
+  // ─────────────────────────────────────────────────────────────────────────
+  String _buildScriptSource() {
+    final key = _model.vpsApiKeyController?.text.trim() ?? '';
+    return '/tool fetch url="http://5.161.88.42:3000/cola?apikey=$key" mode=http dst-path=cola.rsc\n'
+        '/import cola.rsc\n'
+        '/file remove cola.rsc';
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Comando del scheduler
+  // El on-event tiene el fetch+import+remove inline (igual que el script).
+  // Asi funciona aunque el script no exista o no se haya creado aun.
+  // ─────────────────────────────────────────────────────────────────────────
+  String _buildComandoScheduler() {
+    final key = _model.vpsApiKeyController?.text.trim() ?? '';
     final min = _model.schedulerMinutos ?? 2;
-    return '''
-# ═══════════════════════════════════════════
-#  StarkGo - Script MikroTik
-#  Generado automáticamente por la app
-# ═══════════════════════════════════════════
-
-# 1. Crear el script principal:
-/system script add name=starkgo-sync source={
-  :local url "$url/cola?apikey=$key"
-  :local result [/tool fetch url=\$url http-method=get output=user as-value]
-  :local body (\$result->"data")
-  :if ([:len \$body] > 10) do={
-    :foreach cmd in=[:toarray \$body] do={
-      :local accion (\$cmd->"accion")
-      :local ip     (\$cmd->"ip")
-      :local nombre (\$cmd->"nombre")
-      :local subida (\$cmd->"subida")
-      :local bajada (\$cmd->"bajada")
-
-      :if (\$accion = "bloquear") do={
-        /ip firewall address-list add list=bloqueados address=\$ip comment=\$nombre
-      }
-
-      :if (\$accion = "desbloquear") do={
-        /ip firewall address-list remove [find comment=\$nombre]
-      }
-
-      :if (\$accion = "limitarMegas") do={
-        :if ([:len [/queue simple find name=\$nombre]] > 0) do={
-          /queue simple remove [find name=\$nombre]
-        }
-        /queue simple add name=\$nombre target=(\$ip . "/32") max-limit=(\$bajada . "/" . \$subida) comment="StarkGo"
-      }
-    }
-  }
-}
-
-# 2. Crear el Scheduler (cada $min minuto${min == 1 ? '' : 's'}):
-/system scheduler add name=starkgo-scheduler \\
-  interval=${min}m on-event=starkgo-sync \\
-  start-time=startup
-
-# 3. Regla de firewall para bloquear IPs en mora:
-/ip firewall filter add chain=forward \\
-  src-address-list=bloqueados action=drop \\
-  comment="StarkGo - Clientes en mora"
-''';
+    return '/system scheduler add name=starkgo-scheduler interval=${min}m '
+        'on-event="/tool fetch url=\\"http://5.161.88.42:3000/cola?apikey=$key\\" '
+        'mode=http dst-path=cola.rsc; /import cola.rsc; /file remove cola.rsc" '
+        'start-time=startup comment="StarkGo"';
   }
 
-  // ─────────────────────────────────────────
-  //  LIFECYCLE
-  // ─────────────────────────────────────────
   @override
   void initState() {
     super.initState();
     _model = createModel(context, () => ConfigMikroTikModel());
-
     _model.vpsApiKeyController ??= TextEditingController();
     _model.vpsApiKeyFocusNode ??= FocusNode();
     _model.mikrotikIpController ??= TextEditingController();
@@ -329,7 +264,6 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
     _model.mikrotikUserFocusNode ??= FocusNode();
     _model.mikrotikPassController ??= TextEditingController();
     _model.mikrotikPassFocusNode ??= FocusNode();
-
     _cargarConfig();
   }
 
@@ -339,26 +273,20 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
     super.dispose();
   }
 
-  // ─────────────────────────────────────────
-  //  LÓGICA
-  // ─────────────────────────────────────────
   Future<void> _cargarConfig() async {
     if (_uid == null) return;
     setState(() => _model.cargando = true);
     try {
       final doc = await FirebaseFirestore.instance.collection(_col).doc(_uid).get();
-
       if (doc.exists && mounted) {
         final d = doc.data()!;
-        // Si ya tiene apikey guardada la usamos, si no generamos una nueva
         _model.vpsApiKeyController!.text = d['vpsApiKey'] ?? _generarApiKey(_uid!);
         _model.mikrotikIpController!.text = d['mikrotikIp'] ?? '';
         _model.mikrotikUserController!.text = d['mikrotikUser'] ?? '';
         _model.mikrotikPassController!.text = d['mikrotikPass'] ?? '';
         setState(() => _model.schedulerMinutos = d['schedulerMinutos'] as int?);
-        _model.scriptVisible = d['scriptGenerado'] == true; // ← NUEVO
+        _model.scriptVisible = d['scriptGenerado'] == true;
       } else {
-        // Primera vez: pre-generar apikey
         _model.vpsApiKeyController!.text = _generarApiKey(_uid!);
       }
     } catch (e) {
@@ -375,24 +303,21 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
       return;
     }
     if (_uid == null) return;
-
     setState(() => _model.guardando = true);
     try {
       await FirebaseFirestore.instance.collection(_col).doc(_uid).set({
         'propietarioUid': _uid,
-        // La URL del VPS NO se guarda en Firestore - es privada de la app
         'vpsApiKey': _model.vpsApiKeyController!.text.trim(),
         'mikrotikIp': _model.mikrotikIpController!.text.trim(),
         'mikrotikUser': _model.mikrotikUserController!.text.trim(),
         'mikrotikPass': _model.mikrotikPassController!.text.trim(),
         'schedulerMinutos': _model.schedulerMinutos,
-        'scriptGenerado': true, // ← NUEVO
+        'scriptGenerado': true,
         'actualizadoEn': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
-
       if (mounted) {
         setState(() => _model.scriptVisible = true);
-        _snack('Configuración guardada correctamente', _C.success);
+        _snack('Configuracion guardada correctamente', _C.success);
       }
     } catch (e) {
       if (mounted) _snack('Error al guardar: $e', _C.danger);
@@ -412,9 +337,6 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
 
   String? _required(String? v) => (v == null || v.trim().isEmpty) ? 'Este campo es obligatorio' : null;
 
-  // ─────────────────────────────────────────
-  //  BUILD
-  // ─────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
@@ -435,80 +357,78 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
                           _buildBanner().animate().fadeIn(duration: 350.ms).slideY(begin: 0.04, end: 0),
                           const SizedBox(height: 16),
 
-                          // ── API Key del usuario ──
+                          // API Key
                           _Section(
                             icon: Icons.vpn_key_rounded,
                             color: _C.purple,
                             title: 'Tu clave de acceso',
                             subtitle: 'Identifica tu MikroTik en el sistema',
-                            children: [
-                              _buildApiKeyReadonly(),
-                              _buildInfoApiKey(),
-                            ],
+                            children: [_buildApiKeyReadonly(), _buildInfoApiKey()],
                           ).animate().fadeIn(duration: 350.ms, delay: 100.ms).slideY(begin: 0.05, end: 0),
                           const SizedBox(height: 14),
 
-                          // ── MikroTik ──
+                          // Datos MikroTik
                           _Section(
                             icon: Icons.router_rounded,
                             color: _C.accent,
                             title: 'Datos del MikroTik',
-                            subtitle: 'IP, usuario y contraseña del router',
+                            subtitle: 'IP, usuario y contrasena del router',
                             children: [
                               _Field(
-                                ctrl: _model.mikrotikIpController!,
-                                focusNode: _model.mikrotikIpFocusNode,
-                                label: 'IP DEL MIKROTIK',
-                                hint: '192.168.1.1',
-                                icon: Icons.dns_rounded,
-                                color: _C.accent,
-                                keyboardType: TextInputType.url,
-                                validator: _required,
-                              ),
+                                  ctrl: _model.mikrotikIpController!,
+                                  focusNode: _model.mikrotikIpFocusNode,
+                                  label: 'IP DEL MIKROTIK',
+                                  hint: '192.168.1.1',
+                                  icon: Icons.dns_rounded,
+                                  color: _C.accent,
+                                  keyboardType: TextInputType.url,
+                                  validator: _required),
                               _Field(
-                                ctrl: _model.mikrotikUserController!,
-                                focusNode: _model.mikrotikUserFocusNode,
-                                label: 'USUARIO MIKROTIK',
-                                hint: 'admin',
-                                icon: Icons.person_rounded,
-                                color: _C.accent,
-                                validator: _required,
-                              ),
+                                  ctrl: _model.mikrotikUserController!,
+                                  focusNode: _model.mikrotikUserFocusNode,
+                                  label: 'USUARIO MIKROTIK',
+                                  hint: 'admin',
+                                  icon: Icons.person_rounded,
+                                  color: _C.accent,
+                                  validator: _required),
                               _Field(
-                                ctrl: _model.mikrotikPassController!,
-                                focusNode: _model.mikrotikPassFocusNode,
-                                label: 'CONTRASEÑA MIKROTIK',
-                                hint: '••••••••',
-                                icon: Icons.lock_rounded,
-                                color: _C.accent,
-                                obscure: true,
-                                validator: _required,
-                              ),
+                                  ctrl: _model.mikrotikPassController!,
+                                  focusNode: _model.mikrotikPassFocusNode,
+                                  label: 'CONTRASENA MIKROTIK',
+                                  hint: 'password',
+                                  icon: Icons.lock_rounded,
+                                  color: _C.accent,
+                                  obscure: true,
+                                  validator: _required),
                             ],
                           ).animate().fadeIn(duration: 350.ms, delay: 200.ms).slideY(begin: 0.05, end: 0),
                           const SizedBox(height: 14),
 
-                          // ── Scheduler ──
+                          // Scheduler interval selector
                           _Section(
                             icon: Icons.schedule_rounded,
                             color: _C.warning,
                             title: 'Scheduler MikroTik',
-                            subtitle: 'Cada cuánto consulta el servidor',
+                            subtitle: 'Cada cuanto consulta el servidor',
                             children: [
                               _SchedulerDropdown(
-                                value: _model.schedulerMinutos,
-                                onChanged: (v) => setState(() => _model.schedulerMinutos = v),
-                              ),
+                                  value: _model.schedulerMinutos, onChanged: (v) => setState(() => _model.schedulerMinutos = v)),
                               _buildInfoScheduler(),
                             ],
                           ).animate().fadeIn(duration: 350.ms, delay: 280.ms).slideY(begin: 0.05, end: 0),
                           const SizedBox(height: 14),
 
-                          // ── Script generado ──
-                          if (_model.scriptVisible) _buildScriptCard().animate().fadeIn(duration: 400.ms).slideY(begin: 0.05, end: 0),
-                          if (_model.scriptVisible) const SizedBox(height: 14),
+                          // Instrucciones en dos pasos (se muestran tras guardar)
+                          if (_model.scriptVisible) ...[
+                            // PASO 1 — Script source
+                            _buildScriptCard().animate().fadeIn(duration: 400.ms).slideY(begin: 0.05, end: 0),
+                            const SizedBox(height: 14),
 
-                          // ── Botón guardar ──
+                            // PASO 2 — Comando scheduler
+                            _buildSchedulerCard().animate().fadeIn(duration: 400.ms, delay: 80.ms).slideY(begin: 0.05, end: 0),
+                            const SizedBox(height: 14),
+                          ],
+
                           _buildBotonGuardar().animate().fadeIn(duration: 350.ms, delay: 340.ms).slideY(begin: 0.05, end: 0),
                         ]),
                       ),
@@ -520,303 +440,337 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
     );
   }
 
-  // ─────────────────────────────────────────
-  //  SUB-WIDGETS
-  // ─────────────────────────────────────────
-
-  // ApiKey de solo lectura con botón copiar
-  Widget _buildApiKeyReadonly() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: _C.purple.withOpacity(0.05),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _C.purple.withOpacity(0.25), width: 1.2),
-      ),
-      child: Row(children: [
-        Container(
-          width: 36,
-          height: 36,
-          decoration: BoxDecoration(color: _C.purple.withOpacity(0.12), borderRadius: BorderRadius.circular(9)),
-          child: Icon(Icons.key_rounded, color: _C.purple, size: 17),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('API KEY',
-                style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10, fontWeight: FontWeight.w600, letterSpacing: 0.3)),
-            const SizedBox(height: 2),
-            Text(
-              _model.vpsApiKeyController?.text ?? '...',
-              style: GoogleFonts.sourceCodePro(color: _C.purple, fontSize: 13, fontWeight: FontWeight.w600),
-            ),
-          ]),
-        ),
-        GestureDetector(
-          onTap: () {
-            final key = _model.vpsApiKeyController?.text ?? '';
-            Clipboard.setData(ClipboardData(text: key));
-            _snack('API Key copiada', _C.success);
-          },
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-            decoration: BoxDecoration(
-              color: _C.purple.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: _C.purple.withOpacity(0.3)),
-            ),
-            child: Row(children: [
-              Icon(Icons.copy_rounded, color: _C.purple, size: 13),
-              const SizedBox(width: 4),
-              Text('Copiar', style: GoogleFonts.spaceGrotesk(color: _C.purple, fontSize: 11, fontWeight: FontWeight.w600)),
-            ]),
-          ),
-        ),
-      ]),
-    );
-  }
-
-  Widget _buildInfoApiKey() {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: _C.purple.withOpacity(0.05),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _C.purple.withOpacity(0.2)),
-      ),
-      child: Row(children: [
-        Icon(Icons.info_outline_rounded, color: _C.purple, size: 16),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text(
-            'Esta clave identifica tu router en el sistema. Se genera automáticamente y se incluye en el script.',
-            style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11),
-          ),
-        ),
-      ]),
-    );
-  }
-
-  Widget _buildTopBar() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-      child: Row(children: [
-        GestureDetector(
-          onTap: () => Navigator.pop(context),
-          child: Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: _C.surface,
-              borderRadius: BorderRadius.circular(12),
-              boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 8, offset: const Offset(0, 2))],
-            ),
-            child: const Icon(Icons.arrow_back_ios_new_rounded, color: _C.textPri, size: 18),
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Config. MikroTik', style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 20, fontWeight: FontWeight.w800)),
-            Text('Router + Scheduler', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 12)),
-          ]),
-        ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(
-            color: _C.accent.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: _C.accent.withOpacity(0.3)),
-          ),
-          child: Row(children: [
-            Icon(Icons.router_rounded, color: _C.accent, size: 13),
-            const SizedBox(width: 5),
-            Text('Auto', style: GoogleFonts.spaceGrotesk(color: _C.accent, fontSize: 12, fontWeight: FontWeight.w600)),
-          ]),
-        ),
-      ]),
-    );
-  }
-
-  Widget _buildBanner() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(colors: [_C.dark, Color(0xFF1E293B)]),
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [BoxShadow(color: _C.dark.withOpacity(0.2), blurRadius: 16, offset: const Offset(0, 6))],
-      ),
-      child: Row(children: [
-        Container(
-          width: 52,
-          height: 52,
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(colors: [_C.primary, _C.accent]),
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: const Icon(Icons.router_rounded, color: Colors.white, size: 26),
-        ),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Conecta tu MikroTik', style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 3),
-            Text('Guarda la config y pega el script en tu router para activar los bloqueos automáticos.',
-                style: GoogleFonts.spaceGrotesk(color: Colors.white60, fontSize: 12)),
-          ]),
-        ),
-      ]),
-    );
-  }
-
-  Widget _buildInfoScheduler() {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: _C.warning.withOpacity(0.07),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _C.warning.withOpacity(0.25)),
-      ),
-      child: Row(children: [
-        Icon(Icons.info_outline_rounded, color: _C.warning, size: 16),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text(
-            'El MikroTik consultará el servidor cada X minutos para ejecutar bloqueos y desbloqueos automáticamente.',
-            style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11),
-          ),
-        ),
-      ]),
-    );
-  }
-
+  // ── PASO 1: Script source (System → Scripts → starkgo-sync → Source) ─────
   Widget _buildScriptCard() {
+    final src = _buildScriptSource();
     return Container(
       decoration: BoxDecoration(
-        color: _C.dark,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [BoxShadow(color: _C.dark.withOpacity(0.25), blurRadius: 16, offset: const Offset(0, 6))],
-      ),
+          color: _C.dark,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [BoxShadow(color: _C.dark.withOpacity(0.25), blurRadius: 16, offset: const Offset(0, 6))]),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // Header
           Row(children: [
             Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(colors: [_C.success, Color(0xFF16A34A)]),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(Icons.terminal_rounded, color: Colors.white, size: 18),
-            ),
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                    gradient: const LinearGradient(colors: [_C.primary, Color(0xFF1558B0)]), borderRadius: BorderRadius.circular(10)),
+                child: const Icon(Icons.description_rounded, color: Colors.white, size: 18)),
             const SizedBox(width: 10),
             Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('Script para MikroTik',
-                    style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
-                Text('Copia y pega en Terminal de RouterOS', style: GoogleFonts.spaceGrotesk(color: Colors.white60, fontSize: 10)),
-              ]),
-            ),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Paso 1 — Crear el Script',
+                  style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
+              Text('System → Scripts → + → Name: starkgo-sync', style: GoogleFonts.spaceGrotesk(color: Colors.white60, fontSize: 10)),
+            ])),
             GestureDetector(
               onTap: () {
-                Clipboard.setData(ClipboardData(text: _scriptMikrotik));
-                _snack('Script copiado al portapapeles', _C.success);
+                Clipboard.setData(ClipboardData(text: src));
+                _snack('Source copiado', _C.success);
               },
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
                 decoration: BoxDecoration(
-                  color: _C.success.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: _C.success.withOpacity(0.4)),
-                ),
+                    color: _C.primary.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: _C.primary.withOpacity(0.4))),
                 child: Row(children: [
-                  const Icon(Icons.copy_rounded, color: _C.success, size: 14),
+                  const Icon(Icons.copy_rounded, color: _C.primary, size: 14),
                   const SizedBox(width: 5),
-                  Text('Copiar', style: GoogleFonts.spaceGrotesk(color: _C.success, fontSize: 12, fontWeight: FontWeight.w600)),
+                  Text('Copiar', style: GoogleFonts.spaceGrotesk(color: _C.primary, fontSize: 12, fontWeight: FontWeight.w600)),
                 ]),
               ),
             ),
           ]),
           const SizedBox(height: 14),
+
+          _buildPaso(1, Icons.folder_rounded, _C.warning, 'Ve a System → Scripts → presiona +'),
+          _buildPaso(2, Icons.edit_rounded, _C.accent, 'En Name escribe: starkgo-sync'),
+          _buildPaso(3, Icons.policy_rounded, _C.pppoe, 'Marca: read, write, policy, test'),
+          _buildPaso(4, Icons.code_rounded, _C.primary, 'En Source pega el codigo de abajo'),
+          _buildPaso(5, Icons.check_rounded, _C.success, 'Click OK y luego Run Script para probar'),
+          const SizedBox(height: 4),
+
+          // Source code block
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: const Color(0xFF0D1117),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.white12),
+                color: const Color(0xFF0D1117), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.white12)),
+            child: SelectableText(
+              src,
+              style: GoogleFonts.sourceCodePro(color: const Color(0xFF22C55E), fontSize: 12, height: 1.6),
             ),
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Text(
-                _scriptMikrotik,
-                style: GoogleFonts.sourceCodePro(color: const Color(0xFF22C55E), fontSize: 11, height: 1.6),
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: _C.primary.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: _C.primary.withOpacity(0.25)),
-            ),
-            child: Row(children: [
-              Icon(Icons.info_outline_rounded, color: _C.primary, size: 16),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  'Abre Winbox o SSH en tu MikroTik, ve a New Terminal y pega el script completo.',
-                  style: GoogleFonts.spaceGrotesk(color: Colors.white70, fontSize: 11),
-                ),
-              ),
-            ]),
           ),
         ]),
       ),
     );
   }
 
-  Widget _buildBotonGuardar() {
-    return SizedBox(
-      width: double.infinity,
-      height: 56,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        decoration: BoxDecoration(
-          gradient: _model.guardando ? null : const LinearGradient(colors: [_C.primary, _C.accent]),
-          color: _model.guardando ? _C.border : null,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: _model.guardando ? [] : [BoxShadow(color: _C.primary.withOpacity(0.35), blurRadius: 16, offset: const Offset(0, 6))],
-        ),
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: _model.guardando ? null : _guardar,
-            borderRadius: BorderRadius.circular(16),
-            child: Center(
-              child: _model.guardando
-                  ? Row(mainAxisSize: MainAxisSize.min, children: [
-                      SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation(_C.textSec))),
-                      const SizedBox(width: 10),
-                      Text('Guardando...', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 15, fontWeight: FontWeight.w600)),
-                    ])
-                  : Row(mainAxisSize: MainAxisSize.min, children: [
-                      const Icon(Icons.save_rounded, color: Colors.white, size: 20),
-                      const SizedBox(width: 10),
-                      Text('Guardar y generar script',
-                          style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
-                    ]),
+  // ── PASO 2: Comando scheduler (New Terminal) ──────────────────────────────
+  Widget _buildSchedulerCard() {
+    final cmd = _buildComandoScheduler();
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _C.warning.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: _C.warning.withOpacity(0.35)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Header
+        Row(children: [
+          Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                  gradient: const LinearGradient(colors: [_C.warning, Color(0xFFD97706)]), borderRadius: BorderRadius.circular(10)),
+              child: const Icon(Icons.schedule_rounded, color: Colors.white, size: 18)),
+          const SizedBox(width: 10),
+          Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Paso 2 — Crear el Scheduler',
+                style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 14, fontWeight: FontWeight.w700)),
+            Text('New Terminal → pega el comando y presiona Enter', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10)),
+          ])),
+          GestureDetector(
+            onTap: () {
+              Clipboard.setData(ClipboardData(text: cmd));
+              _snack('Comando scheduler copiado', _C.success);
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              decoration: BoxDecoration(
+                  color: _C.warning.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: _C.warning.withOpacity(0.5))),
+              child: Row(children: [
+                Icon(Icons.copy_rounded, color: _C.warning, size: 14),
+                const SizedBox(width: 5),
+                Text('Copiar', style: GoogleFonts.spaceGrotesk(color: _C.warning, fontSize: 12, fontWeight: FontWeight.w600)),
+              ]),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 14),
+
+        // Comando block
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+              color: const Color(0xFF0D1117), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.white12)),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Text(
+              cmd,
+              style: GoogleFonts.sourceCodePro(color: const Color(0xFF22C55E), fontSize: 12, height: 1.5),
             ),
           ),
         ),
-      ),
+        const SizedBox(height: 10),
+
+        // Nota
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(Icons.info_outline_rounded, color: _C.warning, size: 15),
+          const SizedBox(width: 8),
+          Expanded(
+              child: Text(
+                  'El scheduler ejecuta el fetch directamente cada ${_model.schedulerMinutos ?? 2} minuto(s) '
+                  'desde el arranque del router, sin depender del script.',
+                  style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11))),
+        ]),
+      ]),
     );
   }
+
+  Widget _buildPaso(int n, IconData icon, Color color, String texto) => Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: Row(children: [
+          Container(
+            width: 24,
+            height: 24,
+            decoration: BoxDecoration(color: color.withOpacity(0.15), shape: BoxShape.circle),
+            child: Center(child: Text('$n', style: GoogleFonts.spaceGrotesk(color: color, fontSize: 11, fontWeight: FontWeight.w800))),
+          ),
+          const SizedBox(width: 10),
+          Icon(icon, color: color, size: 15),
+          const SizedBox(width: 8),
+          Expanded(child: Text(texto, style: GoogleFonts.spaceGrotesk(color: Colors.white70, fontSize: 12))),
+        ]),
+      );
+
+  Widget _buildApiKeyReadonly() => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: _C.purple.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: _C.purple.withOpacity(0.25), width: 1.2),
+        ),
+        child: Row(children: [
+          Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(color: _C.purple.withOpacity(0.12), borderRadius: BorderRadius.circular(9)),
+              child: Icon(Icons.key_rounded, color: _C.purple, size: 17)),
+          const SizedBox(width: 10),
+          Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('API KEY',
+                style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10, fontWeight: FontWeight.w600, letterSpacing: 0.3)),
+            const SizedBox(height: 2),
+            Text(_model.vpsApiKeyController?.text ?? '...',
+                style: GoogleFonts.sourceCodePro(color: _C.purple, fontSize: 13, fontWeight: FontWeight.w600)),
+          ])),
+          GestureDetector(
+            onTap: () {
+              Clipboard.setData(ClipboardData(text: _model.vpsApiKeyController?.text ?? ''));
+              _snack('API Key copiada', _C.success);
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              decoration: BoxDecoration(
+                  color: _C.purple.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: _C.purple.withOpacity(0.3))),
+              child: Row(children: [
+                Icon(Icons.copy_rounded, color: _C.purple, size: 13),
+                const SizedBox(width: 4),
+                Text('Copiar', style: GoogleFonts.spaceGrotesk(color: _C.purple, fontSize: 11, fontWeight: FontWeight.w600)),
+              ]),
+            ),
+          ),
+        ]),
+      );
+
+  Widget _buildInfoApiKey() => Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+            color: _C.purple.withOpacity(0.05),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: _C.purple.withOpacity(0.2))),
+        child: Row(children: [
+          Icon(Icons.info_outline_rounded, color: _C.purple, size: 16),
+          const SizedBox(width: 10),
+          Expanded(
+              child: Text('Esta clave identifica tu router. Se genera automaticamente y va dentro del source del script.',
+                  style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11))),
+        ]),
+      );
+
+  Widget _buildTopBar() => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+        child: Row(children: [
+          GestureDetector(
+            onTap: () => Navigator.pop(context),
+            child: Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                    color: _C.surface,
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 8, offset: const Offset(0, 2))]),
+                child: const Icon(Icons.arrow_back_ios_new_rounded, color: _C.textPri, size: 18)),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Config. MikroTik', style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 20, fontWeight: FontWeight.w800)),
+            Text('Router + Scheduler + PPPoE', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 12)),
+          ])),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+                color: _C.accent.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: _C.accent.withOpacity(0.3))),
+            child: Row(children: [
+              Icon(Icons.router_rounded, color: _C.accent, size: 13),
+              const SizedBox(width: 5),
+              Text('Auto', style: GoogleFonts.spaceGrotesk(color: _C.accent, fontSize: 12, fontWeight: FontWeight.w600)),
+            ]),
+          ),
+        ]),
+      );
+
+  Widget _buildBanner() => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+            gradient: const LinearGradient(colors: [_C.dark, Color(0xFF1E293B)]),
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [BoxShadow(color: _C.dark.withOpacity(0.2), blurRadius: 16, offset: const Offset(0, 6))]),
+        child: Row(children: [
+          Container(
+              width: 52,
+              height: 52,
+              decoration:
+                  BoxDecoration(gradient: const LinearGradient(colors: [_C.primary, _C.accent]), borderRadius: BorderRadius.circular(14)),
+              child: const Icon(Icons.router_rounded, color: Colors.white, size: 26)),
+          const SizedBox(width: 14),
+          Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Conecta tu MikroTik', style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 3),
+            Text('Bloqueos + Queues + PPPoE. Compatible RouterOS v6 y v7.',
+                style: GoogleFonts.spaceGrotesk(color: Colors.white60, fontSize: 11)),
+          ])),
+        ]),
+      );
+
+  Widget _buildInfoScheduler() => Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+            color: _C.warning.withOpacity(0.07),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: _C.warning.withOpacity(0.25))),
+        child: Row(children: [
+          Icon(Icons.info_outline_rounded, color: _C.warning, size: 16),
+          const SizedBox(width: 10),
+          Expanded(
+              child: Text('El MikroTik consultara el VPS cada X minutos para bloqueos, desbloqueos y PPPoE.',
+                  style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11))),
+        ]),
+      );
+
+  Widget _buildBotonGuardar() => SizedBox(
+        width: double.infinity,
+        height: 56,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          decoration: BoxDecoration(
+              gradient: _model.guardando ? null : const LinearGradient(colors: [_C.primary, _C.accent]),
+              color: _model.guardando ? _C.border : null,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow:
+                  _model.guardando ? [] : [BoxShadow(color: _C.primary.withOpacity(0.35), blurRadius: 16, offset: const Offset(0, 6))]),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: _model.guardando ? null : _guardar,
+              borderRadius: BorderRadius.circular(16),
+              child: Center(
+                  child: _model.guardando
+                      ? Row(mainAxisSize: MainAxisSize.min, children: [
+                          SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation(_C.textSec))),
+                          const SizedBox(width: 10),
+                          Text('Guardando...',
+                              style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 15, fontWeight: FontWeight.w600)),
+                        ])
+                      : Row(mainAxisSize: MainAxisSize.min, children: [
+                          const Icon(Icons.save_rounded, color: Colors.white, size: 20),
+                          const SizedBox(width: 10),
+                          Text('Guardar y generar comandos',
+                              style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
+                        ])),
+            ),
+          ),
+        ),
+      );
 }

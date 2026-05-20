@@ -23,6 +23,6 @@ class ListaclientesModel extends FlutterFlowModel<ListaclientesWidget> {
   @override
   void dispose() {
     textFieldFocusNode?.dispose();
-    textController?.dispose();
+    // textController?.dispose();  // ← comentar o eliminar esta líne
   }
 }

@@ -1,4 +1,6 @@
-import 'package:stark_go/pages/vps_service.dart';
+import 'package:stark_go/services/vps_service.dart';
+import 'package:stark_go/pages/config_evolution_api/config_evolution_api_widget.dart';
+import 'package:stark_go/pages/config_velocidades/config_velocidades_widget.dart';
 
 import '/backend/backend.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
@@ -10,7 +12,6 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'vps_service.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'detalle_cliente_model.dart';
@@ -31,6 +32,43 @@ class _C {
   static const Color purple = Color(0xFF7C3AED);
   static const Color whatsapp = Color(0xFF25D366);
 }
+
+class _PaisItem {
+  final String codigo, bandera, nombre;
+  const _PaisItem({required this.codigo, required this.bandera, required this.nombre});
+  String get etiqueta => '$bandera $codigo';
+}
+
+const List<_PaisItem> _paises = [
+  _PaisItem(codigo: '+57', bandera: '🇨🇴', nombre: 'Colombia'),
+  _PaisItem(codigo: '+1', bandera: '🇺🇸', nombre: 'EE. UU.'),
+  _PaisItem(codigo: '+52', bandera: '🇲🇽', nombre: 'México'),
+  _PaisItem(codigo: '+54', bandera: '🇦🇷', nombre: 'Argentina'),
+  _PaisItem(codigo: '+56', bandera: '🇨🇱', nombre: 'Chile'),
+  _PaisItem(codigo: '+51', bandera: '🇵🇪', nombre: 'Perú'),
+  _PaisItem(codigo: '+58', bandera: '🇻🇪', nombre: 'Venezuela'),
+  _PaisItem(codigo: '+593', bandera: '🇪🇨', nombre: 'Ecuador'),
+  _PaisItem(codigo: '+591', bandera: '🇧🇴', nombre: 'Bolivia'),
+  _PaisItem(codigo: '+598', bandera: '🇺🇾', nombre: 'Uruguay'),
+  _PaisItem(codigo: '+595', bandera: '🇵🇾', nombre: 'Paraguay'),
+  _PaisItem(codigo: '+34', bandera: '🇪🇸', nombre: 'España'),
+  _PaisItem(codigo: '+55', bandera: '🇧🇷', nombre: 'Brasil'),
+  _PaisItem(codigo: '+44', bandera: '🇬🇧', nombre: 'Reino Unido'),
+  _PaisItem(codigo: '+49', bandera: '🇩🇪', nombre: 'Alemania'),
+  _PaisItem(codigo: '+33', bandera: '🇫🇷', nombre: 'Francia'),
+  _PaisItem(codigo: '+39', bandera: '🇮🇹', nombre: 'Italia'),
+  _PaisItem(codigo: '+507', bandera: '🇵🇦', nombre: 'Panamá'),
+  _PaisItem(codigo: '+506', bandera: '🇨🇷', nombre: 'Costa Rica'),
+  _PaisItem(codigo: '+503', bandera: '🇸🇻', nombre: 'El Salvador'),
+  _PaisItem(codigo: '+502', bandera: '🇬🇹', nombre: 'Guatemala'),
+  _PaisItem(codigo: '+504', bandera: '🇭🇳', nombre: 'Honduras'),
+  _PaisItem(codigo: '+505', bandera: '🇳🇮', nombre: 'Nicaragua'),
+  _PaisItem(codigo: '+53', bandera: '🇨🇺', nombre: 'Cuba'),
+  _PaisItem(codigo: '+1787', bandera: '🇵🇷', nombre: 'Puerto Rico'),
+  _PaisItem(codigo: '+1809', bandera: '🇩🇴', nombre: 'Rep. Dominicana'),
+];
+
+_PaisItem _paisPorCodigo(String? codigo) => _paises.firstWhere((p) => p.codigo == codigo, orElse: () => _paises.first);
 
 Color _statusColor(String? s) {
   switch (s) {
@@ -83,8 +121,7 @@ double _parsePlan(dynamic raw) {
 class _DataRow extends StatelessWidget {
   final IconData icon;
   final Color iconColor;
-  final String label;
-  final String value;
+  final String label, value;
   final bool copyable;
   const _DataRow({required this.icon, required this.iconColor, required this.label, required this.value, this.copyable = false});
 
@@ -166,29 +203,13 @@ class _Section extends StatelessWidget {
   }
 }
 
-// ══════════════════════════════════════════════════════════════
-//  MODELO DE PLAN (para el dropdown)
-// ══════════════════════════════════════════════════════════════
 class _PlanItem {
-  final String id;
-  final String nombre;
+  final String id, nombre, simbolo, monedaCodigo;
   final double valor;
-  final String simbolo;
-  final String monedaCodigo;
-
-  const _PlanItem({
-    required this.id,
-    required this.nombre,
-    required this.valor,
-    required this.simbolo,
-    required this.monedaCodigo,
-  });
-
-  /// Texto legible: "Plan Básico — COP $ 50,000"
+  const _PlanItem({required this.id, required this.nombre, required this.valor, required this.simbolo, required this.monedaCodigo});
   String get etiqueta => '$nombre — $simbolo ${valor.toStringAsFixed(0).replaceAllMapped(RegExp(r'(\d)(?=(\d{3})+$)'), (m) => '${m[1]}.')}';
 }
 
-// ═══════════════════════════════════════════════════════════════
 class DetalleClienteWidget extends StatefulWidget {
   const DetalleClienteWidget({super.key, required this.rf});
   final DocumentReference? rf;
@@ -206,28 +227,34 @@ class _DetalleClienteWidgetState extends State<DetalleClienteWidget> {
   bool _guardando = false;
   String? _selectedStatus;
 
-  // ── VPS config ───────────────────────────────────────────────
-  static const String _vpsApiKey = 'starkgo2024';
-  static const String _vpsBaseUrl = 'http://5.161.88.42:3000';
-
-  // ── Credenciales UltraMsg ────────────────────────────────────
-  String? _umInstance;
-  String? _umToken;
-  String? _nequiNumero;
+  // ── Evolution ──
   bool _configCargada = false;
   bool _configExiste = false;
 
-  static const String _kConfigCol = 'config_ultramsg';
-
-  // ── UID del usuario autenticado ──────────────────────────────
   String? get _uid => FirebaseAuth.instance.currentUser?.uid;
 
-  // ── Planes del usuario ───────────────────────────────────────
+  // ── Planes ──
   List<_PlanItem> _planesDisponibles = [];
   bool _cargandoPlanes = false;
-  _PlanItem? _selPlanItem; // plan seleccionado en edición
+  _PlanItem? _selPlanItem;
 
-  // ── Controllers ──────────────────────────────────────────────
+  // ── Velocidades ──
+  List<String> _velocidades = [];
+  bool _cargandoVelocidades = false;
+  static const String _kColVel = 'velocidades';
+
+  // ── Datos empresa ──
+  String _nombreEmpresa = 'StarkGo';
+  String _nombreTitular = '';
+  String _numeroNequi = '';
+  String _whatsappSoporte = '';
+  String _horarioSoporte = 'Lunes a Viernes · 8:00 am – 5:00 pm';
+  String _msgSuspension = '';
+
+  // ── Código país ──
+  _PaisItem _selPais = _paises.first;
+
+  // ── Controllers ──
   final _ctrlNombre = TextEditingController();
   final _ctrlApellido = TextEditingController();
   final _ctrlCc = TextEditingController();
@@ -254,18 +281,6 @@ class _DetalleClienteWidgetState extends State<DetalleClienteWidget> {
   String? _selVelocidad;
   String? _selTipoServicio;
 
-  static const _velocidades = [
-    '2M/2M',
-    '2M/3M',
-    '2M/4M',
-    '2M/5M',
-    '2M/6M',
-    '2M/7M',
-    '2M/8M',
-    '2M/9M',
-    '2M/10M',
-  ];
-
   static const _tiposServicio = ['Fibra Óptica', 'Radio Enlace'];
 
   @override
@@ -273,7 +288,9 @@ class _DetalleClienteWidgetState extends State<DetalleClienteWidget> {
     super.initState();
     _model = createModel(context, () => DetalleClienteModel());
     WidgetsBinding.instance.addPostFrameCallback((_) => safeSetState(() {}));
-    _cargarConfigUltraMsg();
+    _cargarConfigEvolution();
+    _cargarVelocidades();
+    _cargarDatosEmpresa();
   }
 
   @override
@@ -294,41 +311,63 @@ class _DetalleClienteWidgetState extends State<DetalleClienteWidget> {
     super.dispose();
   }
 
-  Future<void> _cargarConfigUltraMsg() async {
+  Future<void> _cargarConfigEvolution() async {
+    if (_uid == null) return;
     try {
-      final snap = await FirebaseFirestore.instance.collection(_kConfigCol).orderBy('creadoEn', descending: false).limit(1).get();
+      final snap = await FirebaseFirestore.instance.collection('whatsapp_instances').where('uid', isEqualTo: _uid).limit(1).get();
       if (!mounted) return;
-      if (snap.docs.isNotEmpty) {
-        final data = snap.docs.first.data();
-        setState(() {
-          _umInstance = data['instance'] as String?;
-          _umToken = data['token'] as String?;
-          _nequiNumero = data['nequi'] as String?;
-          _configExiste = true;
-          _configCargada = true;
-        });
-      } else {
-        setState(() {
-          _configExiste = false;
-          _configCargada = true;
-        });
-      }
+      setState(() {
+        _configExiste =
+            snap.docs.isNotEmpty && (snap.docs.first.data()['status'] == 'connected' || snap.docs.first.data()['status'] == 'open');
+        _configCargada = true;
+      });
     } catch (e) {
-      debugPrint('[StarkGo] Error cargando config UltraMsg: $e');
+      debugPrint('[StarkGo] Error cargando Evolution config: $e');
       if (mounted) setState(() => _configCargada = true);
     }
   }
 
-  // ── Cargar planes del usuario autenticado desde Firestore ──
+  Future<void> _cargarDatosEmpresa() async {
+    if (_uid == null) return;
+    try {
+      final doc = await FirebaseFirestore.instance.collection('config_empresa').doc(_uid).get();
+      if (doc.exists && mounted) {
+        final d = doc.data() as Map<String, dynamic>;
+        setState(() {
+          _nombreEmpresa = (d['nombreEmpresa'] ?? 'StarkGo').toString();
+          _nombreTitular = (d['nombreTitular'] ?? '').toString();
+          _numeroNequi = (d['numeroNequi'] ?? '').toString();
+          _whatsappSoporte = (d['whatsappSoporte'] ?? '').toString();
+          _horarioSoporte = (d['horarioSoporte'] ?? 'Lunes a Viernes · 8:00 am – 5:00 pm').toString();
+          _msgSuspension = (d['msgSuspension'] ?? '').toString();
+        });
+      }
+    } catch (e) {
+      debugPrint('[StarkGo] Error cargando config_empresa: $e');
+    }
+  }
+
+  Future<void> _cargarVelocidades() async {
+    if (_uid == null) return;
+    setState(() => _cargandoVelocidades = true);
+    try {
+      final doc = await FirebaseFirestore.instance.collection(_kColVel).doc(_uid).get();
+      if (doc.exists && mounted) {
+        final raw = (doc.data() as Map<String, dynamic>)['lista'];
+        setState(() => _velocidades = raw is List ? List<String>.from(raw.map((e) => e.toString())) : []);
+      }
+    } catch (e) {
+      debugPrint('[StarkGo] Error cargando velocidades: $e');
+    } finally {
+      if (mounted) setState(() => _cargandoVelocidades = false);
+    }
+  }
+
   Future<void> _cargarPlanesUsuario() async {
     if (_uid == null) return;
     setState(() => _cargandoPlanes = true);
     try {
-      final snap = await FirebaseFirestore.instance
-          .collection('planes')
-          .where('propietarioUid', isEqualTo: _uid)
-          // sin orderBy por ahora
-          .get();
+      final snap = await FirebaseFirestore.instance.collection('planes').where('propietarioUid', isEqualTo: _uid).get();
       if (!mounted) return;
       setState(() {
         _planesDisponibles = snap.docs.map((doc) {
@@ -356,85 +395,96 @@ class _DetalleClienteWidgetState extends State<DetalleClienteWidget> {
     return s.isEmpty ? null : s;
   }
 
-  Future<void> _llamarVPS({required String status, required String ip, required String nombre}) async {
-    final endpoint = status == 'mora' ? '/bloquear' : '/desbloquear';
-    final body = <String, dynamic>{'apikey': _vpsApiKey, 'nombre': nombre};
-    if (status == 'mora') body['ip'] = ip;
+  // ══════════════════════════════════════════════════════════
+  //  ENVIAR WHATSAPP — suspensión
+  // ══════════════════════════════════════════════════════════
+  Future<void> _enviarWhatsApp({
+    required String numero,
+    required String nombreCliente,
+    required String planCliente,
+    required String valorCliente,
+    required String codigoPais,
+  }) async {
+    if (_uid == null) return;
+    QueryDocumentSnapshot? instanciaDoc;
     try {
-      final response = await http
-          .post(Uri.parse('$_vpsBaseUrl$endpoint'), headers: {'Content-Type': 'application/json'}, body: jsonEncode(body))
-          .timeout(const Duration(seconds: 10));
-      if (response.statusCode == 200) {
-        debugPrint('[StarkGo] VPS OK ($endpoint): ${response.body}');
-      } else {
-        debugPrint('[StarkGo] VPS error ${response.statusCode}: ${response.body}');
-        if (mounted) _snackWarning('VPS respondió con error. MikroTik aplicará el cambio en el próximo ciclo.');
+      final snap = await FirebaseFirestore.instance.collection('whatsapp_instances').where('uid', isEqualTo: _uid).limit(1).get();
+      if (snap.docs.isEmpty) {
+        _snackWarning('No tienes WhatsApp configurado. Ve a Configuración → WhatsApp · Evolution.');
+        return;
       }
+      instanciaDoc = snap.docs.first;
     } catch (e) {
-      debugPrint('[StarkGo] VPS no disponible: $e');
-      if (mounted) _snackWarning('VPS no disponible. MikroTik aplicará el cambio en el próximo ciclo.');
+      _snackWarning('Error al obtener configuración de WhatsApp: $e');
+      return;
     }
-  }
 
-  Future<void> _enviarWhatsApp({required String numero, required String nombreCliente, required String planCliente}) async {
-    if (!_configExiste || _umInstance == null || _umToken == null) {
-      _snackWarning('No hay credenciales de WhatsApp. Ve a Configuración → WhatsApp y agrégalas.');
+    final d = instanciaDoc.data() as Map<String, dynamic>;
+    final serverUrl = (d['serverUrl'] ?? '').toString();
+    final instName = (d['instanceName'] ?? '').toString();
+    final apiKey = (d['apiKey'] ?? '').toString();
+    final status = (d['status'] ?? '').toString();
+
+    if (status != 'connected' && status != 'open') {
+      _snackWarning('WhatsApp desconectado ($instName). Reconéctalo en Configuración → WhatsApp · Evolution.');
       return;
     }
 
     String tel = numero.replaceAll(RegExp(r'[\s\-\(\)]'), '');
     if (tel.startsWith('0')) tel = tel.substring(1);
-    if (!tel.startsWith('+') && !tel.startsWith('57')) tel = '57$tel';
-    if (!tel.startsWith('+')) tel = '+$tel';
+    final prefijo = codigoPais.replaceAll('+', '');
+    if (!tel.startsWith(prefijo)) tel = '$prefijo$tel';
 
-    final plan = planCliente.isNotEmpty ? planCliente : 'mensual';
-    final nequi = (_nequiNumero != null && _nequiNumero!.isNotEmpty) ? _nequiNumero! : 'Sin número registrado';
-
-    final mensaje = '''
-🚫 *SERVICIO SUSPENDIDO* 🚫
-
-Estimado/a *$nombreCliente*, le informamos que su servicio de internet ha sido *suspendido temporalmente* por falta de pago del plan \$$plan.
-
-━━━━━━━━━━━━━━━━━━━━
-💳 *INSTRUCCIONES DE PAGO*
-━━━━━━━━━━━━━━━━━━━━
-
-Para restablecer su servicio, realice el pago mediante:
-
-📲 *Nequi:* $nequi
-
-✅ Una vez realizado el pago, envíe el *comprobante* a este número para activar su servicio a la brevedad.
-
-⏰ *Horario de atención:*
-Domingo a Viernes · 8:00 am – 6:00 pm
-
-Agradecemos su comprensión y quedamos atentos a su respuesta.
-
-— *Equipo StarkGo* 🌐''';
+    String mensaje;
+    if (_msgSuspension.trim().isEmpty) {
+      mensaje = '🚫 *SERVICIO SUSPENDIDO* 🚫\n\n'
+          'Estimado/a *$nombreCliente*, su servicio de internet ha sido '
+          '*suspendido temporalmente* por falta de pago del plan '
+          '*$planCliente* por valor de \$$valorCliente.\n\n'
+          '━━━━━━━━━━━━━━━━━━━━\n'
+          '💳 *INSTRUCCIONES DE PAGO*\n'
+          '💜 *Paga fácil por Nequi*\n'
+          'Número: $_numeroNequi\n'
+          'Nombre: $_nombreTitular\n'
+          '━━━━━━━━━━━━━━━━━━━━\n\n'
+          'Envíe el comprobante de pago a este número para reactivar su servicio.\n\n'
+          '⏰ *Horario de atención:*\n$_horarioSoporte\n\n'
+          '📞 *Soporte:* $_whatsappSoporte\n\n'
+          '— *Equipo $_nombreEmpresa* 🌐';
+    } else {
+      mensaje = _msgSuspension
+          .replaceAll('{nombre}', nombreCliente)
+          .replaceAll('{plan}', planCliente)
+          .replaceAll('{valor}', valorCliente)
+          .replaceAll('{dia}', '')
+          .replaceAll('{estado}', '🔴 Servicio suspendido')
+          .replaceAll('{empresa}', _nombreEmpresa)
+          .replaceAll('{nequi}', _numeroNequi)
+          .replaceAll('{titular}', _nombreTitular)
+          .replaceAll('{soporte}', _whatsappSoporte)
+          .replaceAll('{horario}', _horarioSoporte);
+    }
 
     try {
-      final response = await http.post(
-        Uri.parse('https://api.ultramsg.com/$_umInstance/messages/chat'),
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: {'token': _umToken!, 'to': tel, 'body': mensaje},
-      ).timeout(const Duration(seconds: 15));
+      final url = Uri.parse('$serverUrl/message/sendText/$instName');
+      final response = await http
+          .post(url, headers: {'Content-Type': 'application/json', 'apikey': apiKey}, body: jsonEncode({'number': tel, 'text': mensaje}))
+          .timeout(const Duration(seconds: 20));
 
-      if (response.statusCode == 200) {
-        debugPrint('[StarkGo] WhatsApp enviado a $tel');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Row(children: [
-              const Icon(Icons.chat_rounded, color: Colors.white, size: 18),
-              const SizedBox(width: 8),
-              Text('WhatsApp enviado a $nombreCliente', style: GoogleFonts.spaceGrotesk(color: Colors.white)),
-            ]),
-            backgroundColor: _C.whatsapp,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          ));
-        }
+      if (!mounted) return;
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Row(children: [
+            const Icon(Icons.chat_rounded, color: Colors.white, size: 18),
+            const SizedBox(width: 8),
+            Text('WhatsApp de suspensión enviado a $nombreCliente', style: GoogleFonts.spaceGrotesk(color: Colors.white)),
+          ]),
+          backgroundColor: _C.whatsapp,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ));
       } else {
-        if (mounted) _snackWarning('No se pudo enviar el WhatsApp. Verifica la conexión.');
+        _snackWarning('Error al enviar WhatsApp (${response.statusCode}). Verifica la conexión.');
       }
     } catch (e) {
       if (mounted) _snackWarning('Error al enviar WhatsApp: $e');
@@ -456,9 +506,22 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
   }
 
   Future<void> _cargarEquipos() async {
-    final sl = await FirebaseFirestore.instance.collection('starlinks').orderBy('nombre').get();
-    final an = await FirebaseFirestore.instance.collection('equipos').where('tipo', isEqualTo: 'antena').get();
-    final ro = await FirebaseFirestore.instance.collection('equipos').where('tipo', isEqualTo: 'router').get();
+    if (_uid == null) return;
+
+    final sl = await FirebaseFirestore.instance.collection('starlinks').where('propietarioUid', isEqualTo: _uid).get();
+
+    final an = await FirebaseFirestore.instance
+        .collection('equipos')
+        .where('tipo', isEqualTo: 'antena')
+        .where('propietarioUid', isEqualTo: _uid)
+        .get();
+
+    final ro = await FirebaseFirestore.instance
+        .collection('equipos')
+        .where('tipo', isEqualTo: 'router')
+        .where('propietarioUid', isEqualTo: _uid)
+        .get();
+
     if (!mounted) return;
     setState(() {
       _starlinks = sl.docs;
@@ -481,10 +544,13 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
     _ctrlUsuarioRouter.text = c.usuariorouter;
     _ctrlClaveRouter.text = c.claverouter;
 
+    _selPais = _paisPorCodigo(_pick(raw, 'codigoPais'));
     _selStarlinkId = _pick(raw, 'starlinkId');
     _selAntenaId = _pick(raw, 'antenaId');
     _selRouterId = _pick(raw, 'routerId');
-    _selVelocidad = _velocidades.contains(_pick(raw, 'velocidadPlan')) ? _pick(raw, 'velocidadPlan') : null;
+
+    final velGuardada = _pick(raw, 'velocidadPlan');
+    _selVelocidad = (_velocidades.isNotEmpty && _velocidades.contains(velGuardada)) ? velGuardada : null;
     _selTipoServicio = _tiposServicio.contains(_pick(raw, 'tipoServicio')) ? _pick(raw, 'tipoServicio') : null;
     _selPlanItem = null;
     _selStarlinkData = null;
@@ -493,12 +559,10 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
 
     setState(() => _modoEdicion = true);
 
-    // Cargar equipos y planes en paralelo
     Future.wait([_cargarEquipos(), _cargarPlanesUsuario()]).then((_) {
       if (!mounted) return;
       final savedPlanId = _pick(raw, 'planId');
       setState(() {
-        // Restaurar plan guardado
         if (savedPlanId != null) {
           try {
             _selPlanItem = _planesDisponibles.firstWhere((p) => p.id == savedPlanId);
@@ -506,7 +570,6 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
             _selPlanItem = null;
           }
         }
-        // Restaurar equipos
         if (_selStarlinkId != null) {
           final idx = _starlinks.indexWhere((d) => d.id == _selStarlinkId);
           if (idx >= 0) {
@@ -568,6 +631,7 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
       if (vereda.isNotEmpty) updates['vereda'] = vereda;
       if (ccInt != null) updates['cc'] = ccInt;
       if (numInt != null) updates['numero'] = numInt;
+      updates['codigoPais'] = _selPais.codigo;
 
       final ipAtn = _ctrlIpAtn.text.trim();
       final usuarioAtn = _ctrlUsuarioAtn.text.trim();
@@ -599,8 +663,6 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
         updates['routerModelo'] = _selRouterData!['modelo'] ?? '';
         updates['routerIp'] = _selRouterData!['ip'] ?? '';
       }
-
-      // ── NUEVO: guardar planId, nombre, valor y símbolo del plan seleccionado ──
       if (_selPlanItem != null) {
         updates['planId'] = _selPlanItem!.id;
         updates['planCliente'] = _selPlanItem!.nombre;
@@ -608,7 +670,6 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
         updates['planSimbolo'] = _selPlanItem!.simbolo;
         updates['planMoneda'] = _selPlanItem!.monedaCodigo;
       }
-
       if (_selVelocidad != null) updates['velocidadPlan'] = _selVelocidad!;
       if (_selTipoServicio != null) updates['tipoServicio'] = _selTipoServicio!;
 
@@ -616,6 +677,18 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
         final uid = FirebaseAuth.instance.currentUser?.uid;
         if (uid != null) updates['propietarioUid'] = uid;
         await c.reference.update(updates);
+        // ── Si cambió la velocidad, aplicar en VPS ──
+        final velAnterior = raw['velocidadPlan']?.toString();
+        final velNueva = _selVelocidad;
+        if (velNueva != null && velNueva != velAnterior) {
+          final nombre = '${_ctrlNombre.text.trim()} ${_ctrlApellido.text.trim()}'.trim();
+          final ip = _ctrlIpAtn.text.trim().isNotEmpty ? _ctrlIpAtn.text.trim() : c.ipatn;
+          await VpsService.clienteCreado(
+            nombre: nombre,
+            ip: ip,
+            velocidad: velNueva,
+          );
+        }
 
         final prevStarlinkId = _pick(raw, 'starlinkId');
         if (_selStarlinkId != null && _selStarlinkId != prevStarlinkId) {
@@ -656,6 +729,9 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
     }
   }
 
+  // ══════════════════════════════════════════════════════════
+  //  CAMBIAR ESTADO — usa VpsService (apikey dinámico)
+  // ══════════════════════════════════════════════════════════
   Future<void> _cambiarEstado(ClientesRecord cliente, Map<String, dynamic> raw) async {
     if (_selectedStatus == null) return;
 
@@ -713,18 +789,27 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
 
     final ip = cliente.ipatn.trim();
     final nombre = '${cliente.nombre} ${cliente.apellido ?? ''}'.trim();
-    if (ip.isNotEmpty) await _llamarVPS(status: nuevoStatus, ip: ip, nombre: nombre);
 
-    await VpsService.cambiarStatus(
-      status: nuevoStatus,
-      ip: cliente.ipatn.trim(),
-      nombre: '${cliente.nombre} ${cliente.apellido ?? ''}'.trim(),
-    );
+    // ── VpsService lee el apikey de Firestore automáticamente ──
+    await VpsService.cambiarStatus(status: nuevoStatus, ip: ip, nombre: nombre);
+
     if (nuevoStatus == 'mora') {
       final numero = cliente.numero.toString().trim();
       final planCliente = _pick(raw, 'planCliente') ?? '';
+      final codigoPais = _pick(raw, 'codigoPais') ?? '+57';
+      final planValorRaw = raw['planValor'];
+      final valorFmt = planValorRaw != null
+          ? (planValorRaw as num).toStringAsFixed(0).replaceAllMapped(RegExp(r'(\d)(?=(\d{3})+$)'), (m) => '${m[1]}.')
+          : '0';
+
       if (numero.isNotEmpty && numero != '0') {
-        await _enviarWhatsApp(numero: numero, nombreCliente: nombre, planCliente: planCliente);
+        await _enviarWhatsApp(
+          numero: numero,
+          nombreCliente: nombre,
+          planCliente: planCliente,
+          valorCliente: valorFmt,
+          codigoPais: codigoPais,
+        );
       }
     }
 
@@ -773,17 +858,12 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
               const SizedBox(width: 10),
               Expanded(
                   child: Text(
-                'Para poner un cliente en mora y enviar notificación por WhatsApp, primero debes registrar las credenciales de UltraMsg.',
+                'Para poner un cliente en mora y enviar notificación por WhatsApp, '
+                'primero debes configurar Evolution API.',
                 style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 12),
               )),
             ]),
           ),
-          const SizedBox(height: 14),
-          Text('¿Qué necesitas registrar?', style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 13, fontWeight: FontWeight.w600)),
-          const SizedBox(height: 8),
-          _dialogItem(Icons.devices_rounded, _C.accent, 'Instance ID de UltraMsg'),
-          _dialogItem(Icons.vpn_key_rounded, _C.purple, 'Token de UltraMsg'),
-          _dialogItem(Icons.account_balance_wallet_rounded, _C.success, 'Número de Nequi'),
         ]),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: Text('Cancelar', style: GoogleFonts.spaceGrotesk(color: _C.textSec))),
@@ -792,7 +872,7 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
                 backgroundColor: _C.whatsapp, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), elevation: 0),
             onPressed: () {
               Navigator.pop(context);
-              context.pushNamed(ConfigUltraMsgWidget.routeName);
+              context.pushNamed(ConfigEvolutionApiWidget.routeName);
             },
             child: Row(mainAxisSize: MainAxisSize.min, children: [
               const Icon(Icons.settings_rounded, color: Colors.white, size: 15),
@@ -805,20 +885,9 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
     );
   }
 
-  Widget _dialogItem(IconData icon, Color color, String label) {
-    return Padding(
-        padding: const EdgeInsets.only(bottom: 6),
-        child: Row(children: [
-          Container(
-              width: 28,
-              height: 28,
-              decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(7)),
-              child: Icon(icon, color: color, size: 14)),
-          const SizedBox(width: 8),
-          Text(label, style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 12, fontWeight: FontWeight.w500)),
-        ]));
-  }
-
+  // ══════════════════════════════════════════════════════════
+  //  BUILD
+  // ══════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<ClientesRecord>(
@@ -829,12 +898,10 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
               backgroundColor: _C.surfaceDim, body: Center(child: CircularProgressIndicator(color: _C.primary, strokeWidth: 2.5)));
         }
         final c = snapFF.data!;
-
         return StreamBuilder<DocumentSnapshot>(
           stream: widget.rf!.snapshots(),
           builder: (context, snapRaw) {
             final raw = (snapRaw.hasData && snapRaw.data!.exists) ? (snapRaw.data!.data() as Map<String, dynamic>) : <String, dynamic>{};
-
             return GestureDetector(
               onTap: () => FocusScope.of(context).unfocus(),
               child: Scaffold(
@@ -873,7 +940,7 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
                                               icon: Icons.phone_rounded,
                                               iconColor: _C.success,
                                               label: 'Número telefónico',
-                                              value: c.numero.toString(),
+                                              value: '${_pick(raw, 'codigoPais') ?? ''} ${c.numero}'.trim(),
                                               copyable: true),
                                           _DataRow(
                                               icon: Icons.location_on_rounded, iconColor: _C.warning, label: 'Vereda', value: c.vereda),
@@ -953,8 +1020,6 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
                         ),
                       ]),
                     ),
-
-                    // FAB Registrar Pago
                     Align(
                       alignment: Alignment.bottomRight,
                       child: Padding(
@@ -999,14 +1064,11 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
       child: GestureDetector(
-        onTap: () => context.pushNamed(ConfigUltraMsgWidget.routeName),
+        onTap: () => context.pushNamed(ConfigEvolutionApiWidget.routeName),
         child: Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-              gradient: LinearGradient(
-                  colors: [_C.warning.withOpacity(0.12), _C.warning.withOpacity(0.04)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight),
+              gradient: LinearGradient(colors: [_C.warning.withOpacity(0.12), _C.warning.withOpacity(0.04)]),
               borderRadius: BorderRadius.circular(14),
               border: Border.all(color: _C.warning.withOpacity(0.4), width: 1.2)),
           child: Row(children: [
@@ -1020,8 +1082,7 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text('WhatsApp no configurado',
                   style: GoogleFonts.spaceGrotesk(color: _C.warning, fontSize: 13, fontWeight: FontWeight.w700)),
-              Text('Toca aquí para registrar las credenciales de UltraMsg.',
-                  style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11)),
+              Text('Toca aquí para configurar WhatsApp · Evolution API.', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11)),
             ])),
             const Icon(Icons.arrow_forward_ios_rounded, color: _C.warning, size: 14),
           ]),
@@ -1104,8 +1165,10 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
                     shape: BoxShape.circle,
                     gradient: LinearGradient(colors: [sc, sc.withOpacity(0.5)], begin: Alignment.topLeft, end: Alignment.bottomRight)),
                 child: Center(
-                    child: Text(c.nombre.isNotEmpty ? c.nombre[0].toUpperCase() : '?',
-                        style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w800)))),
+                    child: Text(
+                  c.nombre.isNotEmpty ? c.nombre[0].toUpperCase() : '?',
+                  style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w800),
+                ))),
             const SizedBox(width: 16),
             Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1155,8 +1218,7 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
       margin: const EdgeInsets.only(bottom: 14),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-          gradient:
-              const LinearGradient(colors: [Color(0xFFFFF8E7), Color(0xFFFFF3CD)], begin: Alignment.topLeft, end: Alignment.bottomRight),
+          gradient: const LinearGradient(colors: [Color(0xFFFFF8E7), Color(0xFFFFF3CD)]),
           borderRadius: BorderRadius.circular(14),
           border: Border.all(color: _C.warning.withOpacity(0.4), width: 1.2)),
       child: Row(children: [
@@ -1194,6 +1256,41 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
     );
   }
 
+  Widget _editField({
+    required TextEditingController controller,
+    required String label,
+    required IconData icon,
+    required Color color,
+    TextInputType keyboardType = TextInputType.text,
+    List<TextInputFormatter>? inputFormatters,
+  }) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Padding(
+          padding: const EdgeInsets.only(left: 2, bottom: 5),
+          child: Text(label,
+              style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.3))),
+      TextFormField(
+        controller: controller,
+        keyboardType: keyboardType,
+        inputFormatters: inputFormatters,
+        style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 14, fontWeight: FontWeight.w500),
+        decoration: InputDecoration(
+          prefixIcon: Container(
+              margin: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
+              child: Icon(icon, color: color, size: 16)),
+          filled: true,
+          fillColor: _C.surface,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+          enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: _C.border, width: 1.2), borderRadius: BorderRadius.circular(12)),
+          focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: color, width: 1.8), borderRadius: BorderRadius.circular(12)),
+        ),
+      ),
+    ]);
+  }
+
   Widget _buildEditPersonal() {
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -1210,9 +1307,7 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
                 width: 36,
                 height: 36,
                 decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                        colors: [_C.primary, _C.primary.withOpacity(0.6)], begin: Alignment.topLeft, end: Alignment.bottomRight),
-                    borderRadius: BorderRadius.circular(10)),
+                    gradient: LinearGradient(colors: [_C.primary, _C.primary.withOpacity(0.6)]), borderRadius: BorderRadius.circular(10)),
                 child: const Icon(Icons.person_rounded, color: Colors.white, size: 18)),
             const SizedBox(width: 10),
             Expanded(
@@ -1236,13 +1331,68 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
               keyboardType: TextInputType.number,
               inputFormatters: [FilteringTextInputFormatter.digitsOnly]),
           const SizedBox(height: 10),
-          _editField(
-              controller: _ctrlNumero,
-              label: 'TELÉFONO',
-              icon: Icons.phone_rounded,
-              color: _C.success,
-              keyboardType: TextInputType.phone,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly]),
+          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Padding(
+                padding: const EdgeInsets.only(left: 2, bottom: 5),
+                child: Text('TELÉFONO',
+                    style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.3))),
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Container(
+                height: 52,
+                decoration: BoxDecoration(
+                    color: _C.surface, borderRadius: BorderRadius.circular(12), border: Border.all(color: _C.border, width: 1.2)),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<_PaisItem>(
+                    value: _selPais,
+                    borderRadius: BorderRadius.circular(12),
+                    dropdownColor: _C.surface,
+                    icon: const Icon(Icons.keyboard_arrow_down_rounded, color: _C.textSec, size: 16),
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    items: _paises
+                        .map((p) => DropdownMenuItem<_PaisItem>(
+                            value: p,
+                            child: Text('${p.bandera} ${p.codigo}',
+                                style: GoogleFonts.spaceGrotesk(fontSize: 13, fontWeight: FontWeight.w600))))
+                        .toList(),
+                    onChanged: (p) {
+                      if (p != null) setState(() => _selPais = p);
+                    },
+                    selectedItemBuilder: (_) => _paises
+                        .map((p) => Center(
+                            child: Text('${p.bandera} ${p.codigo}',
+                                style: GoogleFonts.spaceGrotesk(fontSize: 13, fontWeight: FontWeight.w700, color: _C.primary))))
+                        .toList(),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: TextFormField(
+                  controller: _ctrlNumero,
+                  keyboardType: TextInputType.phone,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 14, fontWeight: FontWeight.w500),
+                  decoration: InputDecoration(
+                    hintText: 'Número sin prefijo',
+                    hintStyle: GoogleFonts.spaceGrotesk(color: _C.textSec.withOpacity(0.5), fontSize: 13),
+                    prefixIcon: Container(
+                        margin: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+                        width: 34,
+                        height: 34,
+                        decoration: BoxDecoration(color: _C.success.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
+                        child: Icon(Icons.phone_rounded, color: _C.success, size: 16)),
+                    filled: true,
+                    fillColor: _C.surface,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+                    enabledBorder:
+                        OutlineInputBorder(borderSide: BorderSide(color: _C.border, width: 1.2), borderRadius: BorderRadius.circular(12)),
+                    focusedBorder:
+                        OutlineInputBorder(borderSide: BorderSide(color: _C.success, width: 1.8), borderRadius: BorderRadius.circular(12)),
+                  ),
+                ),
+              ),
+            ]),
+          ]),
           const SizedBox(height: 10),
           _editField(controller: _ctrlFinca, label: 'NOMBRE FINCA', icon: Icons.agriculture_rounded, color: _C.accent),
           const SizedBox(height: 10),
@@ -1268,9 +1418,7 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
                 width: 36,
                 height: 36,
                 decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                        colors: [_C.accent, _C.accent.withOpacity(0.6)], begin: Alignment.topLeft, end: Alignment.bottomRight),
-                    borderRadius: BorderRadius.circular(10)),
+                    gradient: LinearGradient(colors: [_C.accent, _C.accent.withOpacity(0.6)]), borderRadius: BorderRadius.circular(10)),
                 child: const Icon(Icons.cell_tower_rounded, color: Colors.white, size: 18)),
             const SizedBox(width: 10),
             Expanded(
@@ -1308,9 +1456,7 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
                 width: 36,
                 height: 36,
                 decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                        colors: [_C.purple, _C.purple.withOpacity(0.6)], begin: Alignment.topLeft, end: Alignment.bottomRight),
-                    borderRadius: BorderRadius.circular(10)),
+                    gradient: LinearGradient(colors: [_C.purple, _C.purple.withOpacity(0.6)]), borderRadius: BorderRadius.circular(10)),
                 child: const Icon(Icons.device_hub_rounded, color: Colors.white, size: 18)),
             const SizedBox(width: 10),
             Expanded(
@@ -1332,40 +1478,6 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
     );
   }
 
-  Widget _editField(
-      {required TextEditingController controller,
-      required String label,
-      required IconData icon,
-      required Color color,
-      TextInputType keyboardType = TextInputType.text,
-      List<TextInputFormatter>? inputFormatters}) {
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Padding(
-          padding: const EdgeInsets.only(left: 2, bottom: 5),
-          child: Text(label,
-              style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.3))),
-      TextFormField(
-        controller: controller,
-        keyboardType: keyboardType,
-        inputFormatters: inputFormatters,
-        style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 14, fontWeight: FontWeight.w500),
-        decoration: InputDecoration(
-          prefixIcon: Container(
-              margin: const EdgeInsets.fromLTRB(12, 8, 8, 8),
-              width: 34,
-              height: 34,
-              decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
-              child: Icon(icon, color: color, size: 16)),
-          filled: true,
-          fillColor: _C.surface,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-          enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: _C.border, width: 1.2), borderRadius: BorderRadius.circular(12)),
-          focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: color, width: 1.8), borderRadius: BorderRadius.circular(12)),
-        ),
-      ),
-    ]);
-  }
-
   Widget _buildStatusSection(ClientesRecord c, Map<String, dynamic> raw) {
     final options = ['activo', 'mora', 'inactivo'];
     return Container(
@@ -1383,9 +1495,7 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
                 width: 36,
                 height: 36,
                 decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                        colors: [_C.warning, _C.warning.withOpacity(0.6)], begin: Alignment.topLeft, end: Alignment.bottomRight),
-                    borderRadius: BorderRadius.circular(10)),
+                    gradient: LinearGradient(colors: [_C.warning, _C.warning.withOpacity(0.6)]), borderRadius: BorderRadius.circular(10)),
                 child: const Icon(Icons.tune_rounded, color: Colors.white, size: 18)),
             const SizedBox(width: 10),
             Text('Cambiar Estado', style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 15, fontWeight: FontWeight.w700)),
@@ -1473,9 +1583,6 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
     );
   }
 
-  // ══════════════════════════════════════════════════════════════
-  //  SECCIÓN EQUIPOS — con dropdown de planes desde Firestore
-  // ══════════════════════════════════════════════════════════════
   Widget _buildEquiposSection(ClientesRecord c, Map<String, dynamic> raw) {
     final starlinkNombre = _pick(raw, 'starlinkNombre');
     final antenaMarca = _pick(raw, 'antenaMarca');
@@ -1484,16 +1591,12 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
     final routerMarca = _pick(raw, 'routerMarca');
     final routerModelo = _pick(raw, 'routerModelo');
     final routerIp = _pick(raw, 'routerIp');
-
-    // ── Datos del plan guardado en el cliente ──
     final planNombre = _pick(raw, 'planCliente');
     final planValor = raw['planValor'];
     final planSimbolo = _pick(raw, 'planSimbolo') ?? '';
-    final planMoneda = _pick(raw, 'planMoneda') ?? '';
     final velocidadPlan = _pick(raw, 'velocidadPlan');
     final tipoServicio = _pick(raw, 'tipoServicio');
 
-    // Texto legible del plan guardado
     String? planTexto;
     if (planNombre != null) {
       final valorFmt =
@@ -1588,23 +1691,19 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
           ])),
         ]);
 
-    // ── Widget dropdown de planes con estado vacío ──
-    Widget _buildPlanDropdown() {
+    Widget buildPlanDropdown() {
       if (_cargandoPlanes) {
         return Container(
-          height: 56,
-          decoration: BoxDecoration(color: _C.surface, borderRadius: BorderRadius.circular(13), border: Border.all(color: _C.border)),
-          child: Center(
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-            SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: _C.primary)),
-            const SizedBox(width: 8),
-            Text('Cargando planes...', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 13)),
-          ])),
-        );
+            height: 56,
+            decoration: BoxDecoration(color: _C.surface, borderRadius: BorderRadius.circular(13), border: Border.all(color: _C.border)),
+            child: Center(
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+              SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: _C.primary)),
+              const SizedBox(width: 8),
+              Text('Cargando planes...', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 13)),
+            ])));
       }
-
       if (_planesDisponibles.isEmpty) {
-        // ── Estado vacío: no hay planes creados ──
         return GestureDetector(
           onTap: () => context.pushNamed(PlanesWidget.routeName),
           child: Container(
@@ -1630,10 +1729,7 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
           ),
         );
       }
-
-      // Hay planes → mostrar dropdown normal
       final safeValue = _planesDisponibles.any((p) => p.id == _selPlanItem?.id) ? _selPlanItem : null;
-
       return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Padding(
             padding: const EdgeInsets.only(left: 2, bottom: 5),
@@ -1664,18 +1760,73 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
               ]),
               items: _planesDisponibles
                   .map((p) => DropdownMenuItem<_PlanItem>(
-                        value: p,
-                        child: dItem(
+                      value: p,
+                      child: dItem(
                           Icons.payments_rounded,
                           p.nombre,
                           '${p.simbolo} ${p.valor.toStringAsFixed(0).replaceAllMapped(RegExp(r'(\d)(?=(\d{3})+$)'), (m) => '${m[1]}.')} / mes · ${p.monedaCodigo}',
-                          _C.success,
-                        ),
-                      ))
+                          _C.success)))
                   .toList(),
               onChanged: (p) => setState(() => _selPlanItem = p),
             ))),
       ]);
+    }
+
+    Widget buildVelocidadDropdown() {
+      if (_cargandoVelocidades) {
+        return Container(
+            height: 56,
+            decoration: BoxDecoration(color: _C.surface, borderRadius: BorderRadius.circular(13), border: Border.all(color: _C.border)),
+            child: Center(
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+              SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: _C.warning)),
+              const SizedBox(width: 8),
+              Text('Cargando velocidades...', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 13)),
+            ])));
+      }
+      if (_velocidades.isEmpty) {
+        return GestureDetector(
+          onTap: () async {
+            await context.pushNamed(ConfigVelocidadesWidget.routeName);
+            _cargarVelocidades();
+          },
+          child: Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+                color: _C.warning.withOpacity(0.05),
+                borderRadius: BorderRadius.circular(13),
+                border: Border.all(color: _C.warning.withOpacity(0.45), width: 1.5)),
+            child: Row(children: [
+              Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(color: _C.warning.withOpacity(0.12), borderRadius: BorderRadius.circular(11)),
+                  child: const Icon(Icons.speed_rounded, color: _C.warning, size: 22)),
+              const SizedBox(width: 12),
+              Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Sin velocidades configuradas',
+                    style: GoogleFonts.spaceGrotesk(color: _C.warning, fontSize: 13, fontWeight: FontWeight.w700)),
+                Text('Toca aquí para configurar velocidades', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11)),
+              ])),
+              const Icon(Icons.arrow_forward_ios_rounded, color: _C.warning, size: 14),
+            ]),
+          ),
+        );
+      }
+      final safeVel = _velocidades.contains(_selVelocidad) ? _selVelocidad : null;
+      return drop<String>(
+          label: 'VELOCIDAD (SUBIDA/BAJADA)',
+          icon: Icons.speed_rounded,
+          color: _C.warning,
+          value: safeVel,
+          items: _velocidades.map((v) {
+            final parts = v.split('/');
+            return DropdownMenuItem<String>(
+                value: v,
+                child: dItem(Icons.speed_rounded, v, '↑ ${parts[0]} subida  ·  ↓ ${parts.length > 1 ? parts[1] : ''} bajada', _C.warning));
+          }).toList(),
+          onChanged: (v) => setState(() => _selVelocidad = v));
     }
 
     return Container(
@@ -1692,9 +1843,8 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
             Container(
                 width: 36,
                 height: 36,
-                decoration: BoxDecoration(
-                    gradient: const LinearGradient(colors: [_C.primary, _C.accent], begin: Alignment.topLeft, end: Alignment.bottomRight),
-                    borderRadius: BorderRadius.circular(10)),
+                decoration:
+                    BoxDecoration(gradient: const LinearGradient(colors: [_C.primary, _C.accent]), borderRadius: BorderRadius.circular(10)),
                 child: const Icon(Icons.satellite_alt_rounded, color: Colors.white, size: 18)),
             const SizedBox(width: 10),
             Expanded(
@@ -1713,7 +1863,6 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
           Divider(color: _C.border, height: 1),
           const SizedBox(height: 14),
           if (!_modoEdicion) ...[
-            // ── VISTA (solo lectura) ──
             infoChip(Icons.satellite_alt_rounded, _C.primary, 'Starlink', starlinkNombre),
             const SizedBox(height: 8),
             infoChip(Icons.cell_tower_rounded, _C.accent, 'Antena',
@@ -1722,19 +1871,13 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
             infoChip(Icons.router_rounded, _C.purple, 'Router',
                 (routerMarca != null && routerModelo != null) ? '$routerMarca $routerModelo  ·  IP: ${routerIp ?? "-"}' : null),
             const SizedBox(height: 8),
-            // Plan con nombre y valor del plan real
             infoChip(Icons.payments_rounded, _C.success, 'Plan del cliente', planTexto),
             const SizedBox(height: 8),
             infoChip(Icons.speed_rounded, _C.warning, 'Velocidad (subida/bajada)', velocidadPlan),
             const SizedBox(height: 8),
-            infoChip(
-              tipoServicio == 'Fibra Óptica' ? Icons.fiber_smart_record_rounded : Icons.cell_tower_rounded,
-              _C.purple,
-              'Tipo de servicio',
-              tipoServicio,
-            ),
+            infoChip(tipoServicio == 'Fibra Óptica' ? Icons.fiber_smart_record_rounded : Icons.cell_tower_rounded, _C.purple,
+                'Tipo de servicio', tipoServicio),
           ] else ...[
-            // ── EDICIÓN ──
             drop<String>(
                 label: 'STARLINK',
                 icon: Icons.satellite_alt_rounded,
@@ -1789,22 +1932,9 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
                   });
                 }),
             const SizedBox(height: 10),
-
-            // ── NUEVO: dropdown dinámico de planes ──
-            _buildPlanDropdown(),
+            buildPlanDropdown(),
             const SizedBox(height: 10),
-
-            drop<String>(
-                label: 'VELOCIDAD (SUBIDA/BAJADA)',
-                icon: Icons.speed_rounded,
-                color: _C.warning,
-                value: _selVelocidad,
-                items: _velocidades.map((v) {
-                  final parts = v.split('/');
-                  return DropdownMenuItem<String>(
-                      value: v, child: dItem(Icons.speed_rounded, v, '↑ ${parts[0]} subida  ·  ↓ ${parts[1]} bajada', _C.warning));
-                }).toList(),
-                onChanged: (v) => setState(() => _selVelocidad = v)),
+            buildVelocidadDropdown(),
             const SizedBox(height: 10),
             drop<String>(
                 label: 'TIPO DE SERVICIO',
@@ -1813,13 +1943,12 @@ Agradecemos su comprensión y quedamos atentos a su respuesta.
                 value: _selTipoServicio,
                 items: _tiposServicio.map((t) {
                   final icon = t == 'Fibra Óptica' ? Icons.fiber_smart_record_rounded : Icons.cell_tower_rounded;
-                  final sub = t == 'Fibra Óptica' ? 'Conexión por fibra óptica' : 'Enlace punto a punto';
-                  return DropdownMenuItem<String>(value: t, child: dItem(icon, t, sub, _C.purple));
+                  return DropdownMenuItem<String>(
+                      value: t,
+                      child: dItem(icon, t, t == 'Fibra Óptica' ? 'Conexión por fibra óptica' : 'Enlace punto a punto', _C.purple));
                 }).toList(),
                 onChanged: (v) => setState(() => _selTipoServicio = v)),
             const SizedBox(height: 16),
-
-            // Botón guardar
             SizedBox(
               width: double.infinity,
               height: 50,

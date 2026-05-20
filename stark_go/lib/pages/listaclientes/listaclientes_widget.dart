@@ -1,8 +1,9 @@
 import '/backend/backend.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
 import '/flutter_flow/flutter_flow_util.dart';
-import '/custom_code/actions/index.dart' as actions;
 import '/index.dart';
+import 'package:stark_go/pages/config_facturacion/config_facturacion_widget.dart';
+import 'package:stark_go/pages/config_evolution_api/config_evolution_api_widget.dart';
 import 'package:easy_debounce/easy_debounce.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -12,6 +13,9 @@ import 'package:provider/provider.dart';
 import 'package:text_search/text_search.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import 'listaclientes_model.dart';
 export 'listaclientes_model.dart';
 
@@ -35,7 +39,7 @@ class _C {
 }
 
 // ─────────────────────────────────────────────
-//  HELPERS
+//  HELPERS DE ESTADO
 // ─────────────────────────────────────────────
 Color _statusColor(String status) {
   switch (status) {
@@ -77,7 +81,28 @@ IconData _statusIcon(String status) {
 }
 
 // ─────────────────────────────────────────────
-//  CARD DE CLIENTE (widget reutilizable)
+//  MODELO EVOLUTION INSTANCE
+// ─────────────────────────────────────────────
+class _EvolutionInstance {
+  final String serverUrl;
+  final String instanceName;
+  final String apiKey;
+  final String phone;
+  final String status;
+
+  const _EvolutionInstance({
+    required this.serverUrl,
+    required this.instanceName,
+    required this.apiKey,
+    required this.phone,
+    required this.status,
+  });
+
+  bool get isConnected => status == 'connected' || status == 'open';
+}
+
+// ─────────────────────────────────────────────
+//  CARD DE CLIENTE (widget reutilizable) — FIXED
 // ─────────────────────────────────────────────
 class _ClientCard extends StatelessWidget {
   final ClientesRecord cliente;
@@ -119,16 +144,17 @@ class _ClientCard extends StatelessWidget {
           child: Padding(
             padding: const EdgeInsets.all(14),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 // ── Avatar con inicial ──
                 Container(
-                  width: 52,
-                  height: 52,
+                  width: 48,
+                  height: 48,
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
                       colors: [
-                        statusColor.withOpacity(0.8),
-                        statusColor.withOpacity(0.4),
+                        statusColor.withOpacity(0.85),
+                        statusColor.withOpacity(0.45),
                       ],
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
@@ -140,7 +166,7 @@ class _ClientCard extends StatelessWidget {
                       inicial,
                       style: GoogleFonts.spaceGrotesk(
                         color: Colors.white,
-                        fontSize: 22,
+                        fontSize: 20,
                         fontWeight: FontWeight.w800,
                       ),
                     ),
@@ -158,7 +184,7 @@ class _ClientCard extends StatelessWidget {
                         '${cliente.nombre} ${cliente.apellido}',
                         style: GoogleFonts.spaceGrotesk(
                           color: _C.textPri,
-                          fontSize: 15,
+                          fontSize: 14,
                           fontWeight: FontWeight.w700,
                         ),
                         maxLines: 1,
@@ -168,14 +194,14 @@ class _ClientCard extends StatelessWidget {
                       // Finca
                       Row(
                         children: [
-                          Icon(Icons.agriculture_rounded, color: _C.accent, size: 13),
+                          Icon(Icons.agriculture_rounded, color: _C.accent, size: 12),
                           const SizedBox(width: 4),
                           Expanded(
                             child: Text(
                               cliente.nombrefinca,
                               style: GoogleFonts.spaceGrotesk(
                                 color: _C.textSec,
-                                fontSize: 12,
+                                fontSize: 11,
                               ),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
@@ -183,27 +209,36 @@ class _ClientCard extends StatelessWidget {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 3),
-                      // Fila teléfono + IP
+                      const SizedBox(height: 2),
+                      // Teléfono
                       Row(
                         children: [
-                          Icon(Icons.phone_rounded, color: _C.primary, size: 13),
+                          Icon(Icons.phone_rounded, color: _C.primary, size: 12),
                           const SizedBox(width: 4),
                           Text(
                             cliente.numero.toString(),
                             style: GoogleFonts.spaceGrotesk(
                               color: _C.textSec,
-                              fontSize: 12,
+                              fontSize: 11,
                             ),
                           ),
-                          const SizedBox(width: 10),
-                          Icon(Icons.router_rounded, color: _C.purple, size: 13),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      // IP (línea separada → evita overflow)
+                      Row(
+                        children: [
+                          Icon(Icons.router_rounded, color: _C.purple, size: 12),
                           const SizedBox(width: 4),
-                          Text(
-                            cliente.ipatn,
-                            style: GoogleFonts.spaceGrotesk(
-                              color: _C.textSec,
-                              fontSize: 12,
+                          Expanded(
+                            child: Text(
+                              cliente.ipatn,
+                              style: GoogleFonts.spaceGrotesk(
+                                color: _C.textSec,
+                                fontSize: 11,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
                         ],
@@ -216,10 +251,11 @@ class _ClientCard extends StatelessWidget {
                 // ── Columna derecha: status + acciones ──
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     // Badge de estado
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
                       decoration: BoxDecoration(
                         color: statusColor.withOpacity(0.12),
                         borderRadius: BorderRadius.circular(20),
@@ -228,40 +264,39 @@ class _ClientCard extends StatelessWidget {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(_statusIcon(cliente.status), color: statusColor, size: 11),
-                          const SizedBox(width: 4),
+                          Icon(_statusIcon(cliente.status), color: statusColor, size: 10),
+                          const SizedBox(width: 3),
                           Text(
                             _statusLabel(cliente.status),
                             style: GoogleFonts.spaceGrotesk(
                               color: statusColor,
-                              fontSize: 11,
+                              fontSize: 10,
                               fontWeight: FontWeight.w700,
                             ),
                           ),
                         ],
                       ),
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 6),
                     // Botón WhatsApp
                     GestureDetector(
                       onTap: onWhatsapp,
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
                         decoration: BoxDecoration(
-                          color: _C.whatsapp.withOpacity(0.1),
+                          color: _C.whatsapp,
                           borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: _C.whatsapp.withOpacity(0.3), width: 1),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(Icons.send_rounded, color: _C.whatsapp, size: 12),
+                            Icon(FontAwesomeIcons.whatsapp, color: Colors.white, size: 11),
                             const SizedBox(width: 4),
                             Text(
                               'WA',
                               style: GoogleFonts.spaceGrotesk(
-                                color: _C.whatsapp,
-                                fontSize: 11,
+                                color: Colors.white,
+                                fontSize: 10,
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
@@ -269,28 +304,29 @@ class _ClientCard extends StatelessWidget {
                         ),
                       ),
                     ),
-                    const SizedBox(height: 6),
-                    // CC + botón eliminar en fila
+                    const SizedBox(height: 5),
+                    // CC + botón eliminar
                     Row(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
                           'CC ${cliente.cc}',
                           style: GoogleFonts.spaceGrotesk(
                             color: _C.textSec,
-                            fontSize: 10,
+                            fontSize: 9,
                           ),
                         ),
-                        const SizedBox(width: 6),
+                        const SizedBox(width: 5),
                         GestureDetector(
                           onTap: onDelete,
                           child: Container(
-                            width: 28,
-                            height: 28,
+                            width: 26,
+                            height: 26,
                             decoration: BoxDecoration(
                               color: _C.danger.withOpacity(0.08),
                               borderRadius: BorderRadius.circular(8),
                             ),
-                            child: Icon(Icons.delete_outline_rounded, color: _C.danger, size: 15),
+                            child: Icon(Icons.delete_outline_rounded, color: _C.danger, size: 14),
                           ),
                         ),
                       ],
@@ -323,9 +359,21 @@ class _ListaclientesWidgetState extends State<ListaclientesWidget> {
   late ListaclientesModel _model;
   final scaffoldKey = GlobalKey<ScaffoldState>();
   final TextEditingController _searchCtrl = TextEditingController();
-  final String? _uid = FirebaseAuth.instance.currentUser?.uid;
+
+  String get _uid => FirebaseAuth.instance.currentUser?.uid ?? '';
+
   List<ClientesRecord> _searchResults = [];
   bool _isSearching = false;
+
+  // ── Config facturación + empresa ──────────
+  int _diaVencimiento = 0;
+  bool _facturacionCargada = false;
+  String _nombreEmpresa = 'StarkGo';
+  String _nombreTitular = '';
+  String _numeroNequi = '';
+  String _whatsappSoporte = '';
+  String _horarioSoporte = 'Lunes a viernes · 8am – 5pm';
+  String _msgRecordatorio = '';
 
   @override
   void initState() {
@@ -333,6 +381,7 @@ class _ListaclientesWidgetState extends State<ListaclientesWidget> {
     _model = createModel(context, () => ListaclientesModel());
     _model.textController ??= _searchCtrl;
     _model.textFieldFocusNode ??= FocusNode();
+    _cargarConfigFacturacion();
     WidgetsBinding.instance.addPostFrameCallback((_) => safeSetState(() {}));
   }
 
@@ -343,24 +392,269 @@ class _ListaclientesWidgetState extends State<ListaclientesWidget> {
     super.dispose();
   }
 
-  // ── Helper para obtener plan del cliente de forma segura ──
+  // ── Cargar config_empresa ─────────────────
+  Future<void> _cargarConfigFacturacion() async {
+    if (_uid.isEmpty) return;
+    try {
+      final doc = await FirebaseFirestore.instance.collection('config_empresa').doc(_uid).get();
+      if (doc.exists && mounted) {
+        final d = doc.data() as Map<String, dynamic>;
+        setState(() {
+          _diaVencimiento = (d['diaVencimiento'] as int?) ?? 0;
+          _nombreEmpresa = (d['nombreEmpresa'] ?? 'StarkGo').toString();
+          _nombreTitular = (d['nombreTitular'] ?? '').toString();
+          _numeroNequi = (d['numeroNequi'] ?? '').toString();
+          _whatsappSoporte = (d['whatsappSoporte'] ?? '').toString();
+          _horarioSoporte = (d['horarioSoporte'] ?? 'Lunes a viernes · 8am – 5pm').toString();
+          _msgRecordatorio = (d['msgRecordatorio'] ?? '').toString();
+          _facturacionCargada = true;
+        });
+      } else {
+        if (mounted) setState(() => _facturacionCargada = true);
+      }
+    } catch (e) {
+      debugPrint('[StarkGo] Error leyendo config_empresa: $e');
+      if (mounted) setState(() => _facturacionCargada = true);
+    }
+  }
+
+  // ── Obtener instancia Evolution API ───────
+  Future<_EvolutionInstance?> _obtenerInstanciaEvolution() async {
+    if (_uid.isEmpty) return null;
+    try {
+      final snap = await FirebaseFirestore.instance.collection('whatsapp_instances').where('uid', isEqualTo: _uid).limit(1).get();
+      if (snap.docs.isEmpty) return null;
+      final d = snap.docs.first.data();
+      return _EvolutionInstance(
+        serverUrl: d['serverUrl'] ?? '',
+        instanceName: d['instanceName'] ?? '',
+        apiKey: d['apiKey'] ?? '',
+        phone: d['phone'] ?? '',
+        status: d['status'] ?? '',
+      );
+    } catch (e) {
+      debugPrint('[StarkGo] Error leyendo whatsapp_instances: $e');
+      return null;
+    }
+  }
+
+  // ── Normalizar número colombiano ──────────
+  String _normalizarNumero(dynamic raw) {
+    if (raw == null) return '';
+    String num = raw.toString().replaceAll(RegExp(r'[^0-9]'), '');
+    if (num.isEmpty || num.length < 10) return '';
+    if (num.length > 10) return num;
+    return '57$num';
+  }
+
+  // ── Formatear pesos colombianos ───────────
+  String _formatearPesos(double valor) {
+    final partes = valor.toStringAsFixed(0).split('');
+    final buffer = StringBuffer();
+    int count = 0;
+    for (int i = partes.length - 1; i >= 0; i--) {
+      if (count > 0 && count % 3 == 0) buffer.write('.');
+      buffer.write(partes[i]);
+      count++;
+    }
+    return '\$ ${buffer.toString().split('').reversed.join('')}';
+  }
+
+  // ── Plan del cliente de forma segura ──────
   double _getPlanCliente(ClientesRecord cliente) {
     try {
+      // Intenta primero planValor (igual que home)
+      final dynamic planV = cliente.planValor;
+      if (planV != null) {
+        if (planV is double) return planV;
+        if (planV is int) return planV.toDouble();
+        if (planV is num) return planV.toDouble();
+        final cleaned = planV.toString().replaceAll('.', '').replaceAll(',', '').trim();
+        return double.tryParse(cleaned) ?? 50000.0;
+      }
+      // Fallback a planCliente
       final dynamic plan = cliente.planCliente;
-
       if (plan == null) return 50000.0;
       if (plan is double) return plan;
       if (plan is int) return plan.toDouble();
       if (plan is num) return plan.toDouble();
-      if (plan is String) return double.tryParse(plan) ?? 50000.0;
-
       return double.tryParse(plan.toString()) ?? 50000.0;
     } catch (_) {
       return 50000.0;
     }
   }
 
-  // ── Búsqueda con debounce 400ms ──
+  // ══════════════════════════════════════════
+  //  ENVIAR WHATSAPP — Evolution API
+  //  (lógica idéntica a home_widget)
+  // ══════════════════════════════════════════
+  Future<void> _enviarWhatsapp(ClientesRecord c) async {
+    if (_diaVencimiento == 0) {
+      _showFechaNoConfiguradaDialog();
+      return;
+    }
+
+    final ok = await showDialog<bool>(
+          context: context,
+          builder: (_) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: Text('Reporte de Pago', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w700)),
+            content: Text('¿Enviar recordatorio de pago a ${c.nombre} vía WhatsApp?', style: GoogleFonts.spaceGrotesk()),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: Text('Cancelar', style: GoogleFonts.spaceGrotesk(color: _C.textSec)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _C.whatsapp,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                onPressed: () => Navigator.pop(context, true),
+                child: Text('Enviar', style: GoogleFonts.spaceGrotesk(color: Colors.white)),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!ok || !mounted) return;
+
+    // Loading dialog
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => Center(
+        child: Container(
+          padding: const EdgeInsets.all(28),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            CircularProgressIndicator(color: _C.whatsapp, strokeWidth: 2.5),
+            const SizedBox(height: 14),
+            Text('Enviando mensaje…', style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 14)),
+          ]),
+        ),
+      ),
+    );
+
+    _EvolutionInstance? instancia;
+    try {
+      instancia = await _obtenerInstanciaEvolution();
+    } catch (e) {
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+      _showErrorDialog('Error de conexión', 'No se pudo consultar la configuración de WhatsApp.\n\nDetalle: $e');
+      return;
+    }
+
+    if (mounted) Navigator.of(context, rootNavigator: true).pop();
+
+    if (instancia == null) {
+      _showNoInstanceDialog();
+      return;
+    }
+    if (!instancia.isConnected) {
+      _showErrorDialog('WhatsApp desconectado', 'Tu instancia (${instancia.instanceName}) no está conectada.\nEstado: ${instancia.status}');
+      return;
+    }
+
+    final String numeroDestino = _normalizarNumero(c.numero);
+    if (numeroDestino.isEmpty) {
+      _showErrorDialog('Número inválido', 'El cliente no tiene un número válido registrado.');
+      return;
+    }
+
+    // ── Estado dinámico según día de vencimiento ──
+    final now = DateTime.now();
+    final diasParaVencer = _diaVencimiento - now.day;
+    String estado;
+    if (diasParaVencer == 0) {
+      estado = '🔴 *Estado:* Vence HOY';
+    } else if (diasParaVencer == 1) {
+      estado = '🔴 *Estado:* Vence mañana, día $_diaVencimiento';
+    } else if (diasParaVencer > 1) {
+      estado = '🟡 *Estado:* Vence en $diasParaVencer días (día $_diaVencimiento)';
+    } else {
+      estado = '🔴 *Estado:* Venció el día $_diaVencimiento (${diasParaVencer.abs()} días de retraso)';
+    }
+
+    final valorFmt = _formatearPesos(_getPlanCliente(c));
+
+    // ── Construir mensaje desde plantilla (o fallback) ──
+    String mensaje;
+    if (_msgRecordatorio.trim().isEmpty) {
+      mensaje = '📢 *$_nombreEmpresa — Recordatorio de Pago*\n\n'
+          'Hola *${c.nombre}*, te recordamos que tu factura vence el día '
+          '$_diaVencimiento del mes.\n\n'
+          '💳 *Valor:* $valorFmt\n'
+          '$estado\n\n'
+          '💜 Nequi: $_numeroNequi · $_nombreTitular\n'
+          'Soporte: $_whatsappSoporte\n$_horarioSoporte\n\n'
+          '— *Equipo $_nombreEmpresa* 🌐';
+    } else {
+      mensaje = _msgRecordatorio
+          .replaceAll('{nombre}', c.nombre)
+          .replaceAll('{plan}', '')
+          .replaceAll('{valor}', valorFmt)
+          .replaceAll('{dia}', '$_diaVencimiento')
+          .replaceAll('{estado}', estado)
+          .replaceAll('{empresa}', _nombreEmpresa)
+          .replaceAll('{nequi}', _numeroNequi)
+          .replaceAll('{titular}', _nombreTitular)
+          .replaceAll('{soporte}', _whatsappSoporte)
+          .replaceAll('{horario}', _horarioSoporte);
+    }
+
+    // ── POST a Evolution API ──
+    try {
+      final url = Uri.parse('${instancia.serverUrl}/message/sendText/${instancia.instanceName}');
+      final response = await http
+          .post(
+            url,
+            headers: {
+              'Content-Type': 'application/json',
+              'apikey': instancia.apiKey,
+            },
+            body: jsonEncode({'number': numeroDestino, 'text': mensaje}),
+          )
+          .timeout(const Duration(seconds: 20));
+
+      if (!mounted) return;
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        _showSuccessDialog(c.nombre, numeroDestino);
+      } else {
+        String detalle = '';
+        try {
+          final body = jsonDecode(response.body);
+          detalle = body['message'] ?? body['error'] ?? response.body;
+        } catch (_) {
+          detalle = response.body;
+        }
+        _showErrorDialog('Error al enviar (${response.statusCode})', 'No se pudo enviar el mensaje.\n\nDetalle: $detalle');
+      }
+    } on Exception catch (e) {
+      if (!mounted) return;
+      _showErrorDialog('Error de red', 'No se pudo conectar con Evolution API.\n\nDetalle: $e');
+    }
+  }
+
+  // ── Eliminar cliente ──────────────────────
+  Future<void> _eliminar(ClientesRecord c) async {
+    final ok = await _confirm('Eliminar Cliente', '¿Desea eliminar a ${c.nombre} ${c.apellido}?');
+    if (ok) await c.reference.delete();
+  }
+
+  // ── Navegar a detalle ─────────────────────
+  void _verDetalle(ClientesRecord c) {
+    context.pushNamed(
+      DetalleClienteWidget.routeName,
+      queryParameters: {
+        'rf': serializeParam(c.reference, ParamType.DocumentReference),
+      }.withoutNulls,
+    );
+  }
+
+  // ── Búsqueda con debounce ─────────────────
   void _onSearchChanged(String query, List<ClientesRecord> allClients) {
     EasyDebounce.debounce(
       'lista_search',
@@ -401,7 +695,7 @@ class _ListaclientesWidgetState extends State<ListaclientesWidget> {
     });
   }
 
-  // ── Diálogo de confirmación genérico ──
+  // ── Diálogo de confirmación genérico ──────
   Future<bool> _confirm(String title, String content) async {
     return await showDialog<bool>(
           context: context,
@@ -429,46 +723,195 @@ class _ListaclientesWidgetState extends State<ListaclientesWidget> {
         false;
   }
 
-  // ── Acción WhatsApp ──
-  Future<void> _enviarWhatsapp(ClientesRecord c) async {
-    final ok = await _confirm('Reporte Pago', '¿Enviar reporte de cobro a ${c.nombre} por WhatsApp?');
-    if (!ok) return;
-    final url = await actions.generarMensajeWhatsapp(c.nombre, c.numero, _getPlanCliente(c));
-    if (url != null) await launchURL(url);
-  }
+  // ══════════════════════════════════════════
+  //  DIALOGS (idénticos a home_widget)
+  // ══════════════════════════════════════════
 
-  // ── Eliminar cliente ──
-  Future<void> _eliminar(ClientesRecord c) async {
-    final ok = await _confirm('Eliminar Cliente', '¿Desea eliminar a ${c.nombre} ${c.apellido}?');
-    if (ok) await c.reference.delete();
-  }
-
-  // ── Navegar a detalle ──
-  void _verDetalle(ClientesRecord c) {
-    context.pushNamed(
-      DetalleClienteWidget.routeName,
-      queryParameters: {
-        'rf': serializeParam(c.reference, ParamType.DocumentReference),
-      }.withoutNulls,
+  void _showFechaNoConfiguradaDialog() {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(color: _C.warning.withOpacity(0.1), shape: BoxShape.circle),
+            child: Icon(Icons.calendar_today_rounded, color: _C.warning, size: 22),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text('Fecha no configurada', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w700, fontSize: 15)),
+          ),
+        ]),
+        content: Text(
+          'Antes de enviar mensajes de pago, configura el día '
+          'de vencimiento y los datos de tu empresa.',
+          style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancelar', style: GoogleFonts.spaceGrotesk(color: _C.textSec)),
+          ),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _C.primary,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            icon: const Icon(Icons.settings_rounded, color: Colors.white, size: 16),
+            label: Text('Configurar', style: GoogleFonts.spaceGrotesk(color: Colors.white, fontWeight: FontWeight.w600)),
+            onPressed: () async {
+              Navigator.pop(context);
+              await context.pushNamed(ConfigFacturacionWidget.routeName);
+              _cargarConfigFacturacion();
+            },
+          ),
+        ],
+      ),
     );
   }
 
+  void _showNoInstanceDialog() {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(color: _C.warning.withOpacity(0.1), shape: BoxShape.circle),
+            child: Icon(Icons.chat_bubble_outline_rounded, color: _C.warning, size: 22),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text('WhatsApp no configurado', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w700, fontSize: 15)),
+          ),
+        ]),
+        content: Text(
+          'No tienes una instancia de Evolution API registrada.\n\n'
+          'Configura WhatsApp para poder enviar mensajes.',
+          style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancelar', style: GoogleFonts.spaceGrotesk(color: _C.textSec)),
+          ),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _C.whatsapp,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            icon: const Icon(Icons.settings_rounded, color: Colors.white, size: 16),
+            label: Text('Configurar ahora', style: GoogleFonts.spaceGrotesk(color: Colors.white, fontWeight: FontWeight.w600)),
+            onPressed: () {
+              Navigator.pop(context);
+              context.pushNamed(ConfigEvolutionApiWidget.routeName);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showSuccessDialog(String nombre, String numero) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(color: _C.success.withOpacity(0.1), shape: BoxShape.circle),
+            child: Icon(FontAwesomeIcons.whatsapp, color: _C.whatsapp, size: 22),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text('¡Mensaje enviado!', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w700, fontSize: 15)),
+          ),
+        ]),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('El recordatorio fue enviado exitosamente.', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 13)),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: _C.success.withOpacity(0.06),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _C.success.withOpacity(0.2)),
+            ),
+            child: Row(children: [
+              Icon(Icons.person_rounded, size: 16, color: _C.success),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(nombre, style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontWeight: FontWeight.w600, fontSize: 13)),
+                  Text('+$numero', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11)),
+                ]),
+              ),
+              Icon(Icons.check_circle_rounded, color: _C.success, size: 20),
+            ]),
+          ),
+        ]),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _C.success,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () => Navigator.pop(context),
+            child: Text('Perfecto', style: GoogleFonts.spaceGrotesk(color: Colors.white, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showErrorDialog(String titulo, String mensaje) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(color: _C.danger.withOpacity(0.1), shape: BoxShape.circle),
+            child: Icon(Icons.error_outline_rounded, color: _C.danger, size: 22),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(titulo, style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w700, fontSize: 15)),
+          ),
+        ]),
+        content: Text(mensaje, style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 13, height: 1.5)),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _C.danger,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () => Navigator.pop(context),
+            child: Text('Entendido', style: GoogleFonts.spaceGrotesk(color: Colors.white, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════
+  //  BUILD
+  // ══════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
-    // ──────────────────────────────────────────────────────────────
-    //  CAMBIO PRINCIPAL: filtrar por propietarioUid del usuario
-    //  autenticado usando currentUserUid (provisto por FlutterFlow)
-    // ──────────────────────────────────────────────────────────────
     return StreamBuilder<List<ClientesRecord>>(
       stream: queryClientesRecord(
         queryBuilder: (q) => q.where(
           'propietarioUid',
-          isEqualTo: _uid ?? '',
+          isEqualTo: _uid,
         ),
         limit: 50,
       ),
       builder: (context, snapshot) {
-        // ── Loading ──
         if (!snapshot.hasData) {
           return Scaffold(
             backgroundColor: _C.surfaceDim,
@@ -481,7 +924,7 @@ class _ListaclientesWidgetState extends State<ListaclientesWidget> {
                     strokeWidth: 2.5,
                   ),
                   const SizedBox(height: 14),
-                  Text('Cargando clientes...', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 13)),
+                  Text('Cargando clientes…', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 13)),
                 ],
               ),
             ),
@@ -491,7 +934,6 @@ class _ListaclientesWidgetState extends State<ListaclientesWidget> {
         final allClients = snapshot.data!;
         final displayList = _isSearching ? _searchResults : allClients;
 
-        // Conteo de estados para el resumen
         final activos = allClients.where((c) => c.status == 'activo').length;
         final mora = allClients.where((c) => c.status == 'mora').length;
         final inactivos = allClients.where((c) => c.status == 'inactivo').length;
@@ -504,16 +946,9 @@ class _ListaclientesWidgetState extends State<ListaclientesWidget> {
             body: SafeArea(
               child: Column(
                 children: [
-                  // ── TOP BAR ──
                   _buildTopBar(context),
-
-                  // ── RESUMEN STATS ──
                   _buildStats(allClients.length, activos, mora, inactivos).animate().fadeIn(duration: 300.ms).slideY(begin: 0.04, end: 0),
-
-                  // ── BARRA DE BÚSQUEDA ──
                   _buildSearchBar(allClients),
-
-                  // ── LISTA ──
                   Expanded(
                     child: displayList.isEmpty
                         ? _buildEmpty()
@@ -654,22 +1089,15 @@ class _ListaclientesWidgetState extends State<ListaclientesWidget> {
                 controller: _searchCtrl,
                 focusNode: _model.textFieldFocusNode,
                 onChanged: (q) => _onSearchChanged(q, allClients),
-                style: GoogleFonts.spaceGrotesk(
-                  color: _C.textPri,
-                  fontSize: 14,
-                ),
+                style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 14),
                 decoration: InputDecoration(
                   hintText: 'Buscar por nombre, finca o IP...',
-                  hintStyle: GoogleFonts.spaceGrotesk(
-                    color: _C.textSec.withOpacity(0.6),
-                    fontSize: 13,
-                  ),
+                  hintStyle: GoogleFonts.spaceGrotesk(color: _C.textSec.withOpacity(0.6), fontSize: 13),
                   border: InputBorder.none,
                 ),
               ),
             ),
             if (_isSearching) ...[
-              // Contador de resultados
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
@@ -727,10 +1155,7 @@ class _ListaclientesWidgetState extends State<ListaclientesWidget> {
           const SizedBox(height: 14),
           Text(
             _isSearching ? 'Sin resultados para esa búsqueda' : 'No hay clientes registrados',
-            style: GoogleFonts.spaceGrotesk(
-              color: _C.textSec,
-              fontSize: 14,
-            ),
+            style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 14),
           ),
         ],
       ),
@@ -753,18 +1178,11 @@ class _StatChip extends StatelessWidget {
       children: [
         Text(
           '$value',
-          style: GoogleFonts.spaceGrotesk(
-            color: color,
-            fontSize: 20,
-            fontWeight: FontWeight.w800,
-          ),
+          style: GoogleFonts.spaceGrotesk(color: color, fontSize: 20, fontWeight: FontWeight.w800),
         ),
         Text(
           label,
-          style: GoogleFonts.spaceGrotesk(
-            color: Colors.white54,
-            fontSize: 11,
-          ),
+          style: GoogleFonts.spaceGrotesk(color: Colors.white54, fontSize: 11),
         ),
       ],
     );
@@ -774,10 +1192,6 @@ class _StatChip extends StatelessWidget {
 class _Divider extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 1,
-      height: 28,
-      color: Colors.white.withOpacity(0.1),
-    );
+    return Container(width: 1, height: 28, color: Colors.white.withOpacity(0.1));
   }
 }

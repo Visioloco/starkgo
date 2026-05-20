@@ -1,10 +1,14 @@
 import '/flutter_flow/flutter_flow_util.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart'; // ← NUEVO
+import 'package:firebase_auth/firebase_auth.dart';
 
+// ─────────────────────────────────────────────
+//  PALETA
+// ─────────────────────────────────────────────
 class _C {
   static const Color primary = Color(0xFF1A73E8);
   static const Color accent = Color(0xFF00C6AE);
@@ -20,6 +24,114 @@ class _C {
   static const Color purple = Color(0xFF7C3AED);
 }
 
+// ─────────────────────────────────────────────
+//  MONEDAS POR PAÍS
+// ─────────────────────────────────────────────
+class _Moneda {
+  final String codigo;
+  final String nombre;
+  final String simbolo;
+  final String bandera;
+  const _Moneda(this.codigo, this.nombre, this.simbolo, this.bandera);
+}
+
+const _monedas = [
+  _Moneda('COP', 'Peso Colombiano', 'COP \$', '🇨🇴'),
+  _Moneda('USD', 'Dólar Estadounidense', 'USD \$', '🇺🇸'),
+  _Moneda('EUR', 'Euro', '€', '🇪🇺'),
+  _Moneda('MXN', 'Peso Mexicano', 'MXN \$', '🇲🇽'),
+  _Moneda('ARS', 'Peso Argentino', 'ARS \$', '🇦🇷'),
+  _Moneda('CLP', 'Peso Chileno', 'CLP \$', '🇨🇱'),
+  _Moneda('PEN', 'Sol Peruano', 'S/', '🇵🇪'),
+  _Moneda('BRL', 'Real Brasileño', 'R\$', '🇧🇷'),
+  _Moneda('VES', 'Bolívar Venezolano', 'Bs.', '🇻🇪'),
+  _Moneda('GTQ', 'Quetzal Guatemalteco', 'Q', '🇬🇹'),
+  _Moneda('HNL', 'Lempira Hondureño', 'L', '🇭🇳'),
+  _Moneda('GBP', 'Libra Esterlina', '£', '🇬🇧'),
+  _Moneda('CAD', 'Dólar Canadiense', 'CAD \$', '🇨🇦'),
+];
+
+// ─────────────────────────────────────────────
+//  HELPER — formatear con puntos de miles
+// ─────────────────────────────────────────────
+String _formatearValor(dynamic raw) {
+  final num valor = (raw is num) ? raw : double.tryParse(raw.toString()) ?? 0;
+  final String sinDecimales = valor.toStringAsFixed(0);
+  final buffer = StringBuffer();
+  int count = 0;
+  for (int i = sinDecimales.length - 1; i >= 0; i--) {
+    if (count > 0 && count % 3 == 0) buffer.write('.');
+    buffer.write(sinDecimales[i]);
+    count++;
+  }
+  return buffer.toString().split('').reversed.join('');
+}
+
+// ─────────────────────────────────────────────
+//  HELPER — parsear valor ingresado por el usuario
+//
+//  Casos cubiertos:
+//    "150000"      → 150000.0  (sin formato)
+//    "150.000"     → 150000.0  (punto = miles, formato colombiano)
+//    "150,000"     → 150000.0  (coma = miles, formato anglosajón)
+//    "150.000,50"  → 150000.5  (punto miles + coma decimal)
+//    "150,000.50"  → 150000.5  (coma miles + punto decimal)
+//    "1500.50"     → 1500.5    (punto decimal, menos de 3 dígitos después)
+//    "1500,50"     → 1500.5    (coma decimal, menos de 3 dígitos después)
+// ─────────────────────────────────────────────
+double _parsearValor(String raw) {
+  final s = raw.trim();
+  if (s.isEmpty) return 0;
+
+  final tienePunto = s.contains('.');
+  final tieneComa = s.contains(',');
+
+  String limpio;
+
+  if (tienePunto && tieneComa) {
+    // Ambos presentes → el último es el separador decimal
+    final ultimoPunto = s.lastIndexOf('.');
+    final ultimaComa = s.lastIndexOf(',');
+    if (ultimaComa > ultimoPunto) {
+      // "150.000,50" → punto=miles, coma=decimal
+      limpio = s.replaceAll('.', '').replaceAll(',', '.');
+    } else {
+      // "150,000.50" → coma=miles, punto=decimal
+      limpio = s.replaceAll(',', '');
+    }
+  } else if (tienePunto && !tieneComa) {
+    // Solo punto → si hay exactamente 3 dígitos tras él, es miles
+    final partes = s.split('.');
+    final digitosDespues = partes.last.length;
+    if (digitosDespues == 3 && partes.length >= 2) {
+      // "150.000" → miles → quitar punto
+      limpio = s.replaceAll('.', '');
+    } else {
+      // "150.5" → decimal → dejar como está
+      limpio = s;
+    }
+  } else if (!tienePunto && tieneComa) {
+    // Solo coma → si hay exactamente 3 dígitos tras ella, es miles
+    final partes = s.split(',');
+    final digitosDespues = partes.last.length;
+    if (digitosDespues == 3 && partes.length >= 2) {
+      // "150,000" → miles → quitar coma
+      limpio = s.replaceAll(',', '');
+    } else {
+      // "150,5" → decimal → convertir coma a punto
+      limpio = s.replaceAll(',', '.');
+    }
+  } else {
+    // Solo dígitos
+    limpio = s;
+  }
+
+  return double.tryParse(limpio) ?? 0;
+}
+
+// ─────────────────────────────────────────────
+//  CAMPO DE TEXTO GENÉRICO
+// ─────────────────────────────────────────────
 class _Field extends StatelessWidget {
   final TextEditingController controller;
   final FocusNode focusNode;
@@ -28,6 +140,7 @@ class _Field extends StatelessWidget {
   final Color iconColor;
   final TextInputType keyboardType;
   final String? Function(String?)? validator;
+  final List<TextInputFormatter>? inputFormatters;
 
   const _Field({
     required this.controller,
@@ -38,6 +151,7 @@ class _Field extends StatelessWidget {
     required this.iconColor,
     this.keyboardType = TextInputType.text,
     this.validator,
+    this.inputFormatters,
   });
 
   @override
@@ -52,6 +166,7 @@ class _Field extends StatelessWidget {
         controller: controller,
         focusNode: focusNode,
         keyboardType: keyboardType,
+        inputFormatters: inputFormatters,
         validator: validator,
         style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 14, fontWeight: FontWeight.w500),
         decoration: InputDecoration(
@@ -97,25 +212,28 @@ class _CrearStarlinkWidgetState extends State<CrearStarlinkWidget> {
 
   final _nombreCtrl = TextEditingController();
   final _ubicacionCtrl = TextEditingController();
-  final _planCtrl = TextEditingController();
+  final _planValorCtrl = TextEditingController();
   final _notasCtrl = TextEditingController();
 
   final _nombreFocus = FocusNode();
   final _ubicacionFocus = FocusNode();
-  final _planFocus = FocusNode();
+  final _planValorFocus = FocusNode();
   final _notasFocus = FocusNode();
 
   DateTime _fechaInstalacion = DateTime.now();
+
+  _Moneda? _monedaSel;
+  String? _monedaError;
 
   @override
   void dispose() {
     _nombreCtrl.dispose();
     _ubicacionCtrl.dispose();
-    _planCtrl.dispose();
+    _planValorCtrl.dispose();
     _notasCtrl.dispose();
     _nombreFocus.dispose();
     _ubicacionFocus.dispose();
-    _planFocus.dispose();
+    _planValorFocus.dispose();
     _notasFocus.dispose();
     super.dispose();
   }
@@ -135,23 +253,30 @@ class _CrearStarlinkWidgetState extends State<CrearStarlinkWidget> {
   }
 
   Future<void> _guardar() async {
+    setState(() => _monedaError = _monedaSel == null ? 'Selecciona una moneda' : null);
     if (!_formKey.currentState!.validate()) return;
+    if (_monedaSel == null) return;
+
     setState(() => _isLoading = true);
     try {
-      // ── UID del usuario autenticado ──────────────────────────
       final uid = FirebaseAuth.instance.currentUser?.uid;
-      // ────────────────────────────────────────────────────────
+
+      // ✅ "150.000" → 150000.0  |  "250" → 250.0  |  "1500,50" → 1500.5
+      final valorDouble = _parsearValor(_planValorCtrl.text);
 
       await FirebaseFirestore.instance.collection('starlinks').add({
         'nombre': _nombreCtrl.text.trim(),
         'ubicacion': _ubicacionCtrl.text.trim(),
-        'plan_pago': _planCtrl.text.trim(),
+        'plan_pago': valorDouble,
+        'plan_pago_moneda_codigo': _monedaSel!.codigo,
+        'plan_pago_moneda_nombre': _monedaSel!.nombre,
+        'plan_pago_moneda_simbolo': _monedaSel!.simbolo,
         'notas': _notasCtrl.text.trim(),
         'fecha_instalacion': Timestamp.fromDate(_fechaInstalacion),
         'fecha_registro': FieldValue.serverTimestamp(),
         'activo': true,
         'clientes_count': 0,
-        'propietarioUid': uid, // ← NUEVO
+        'propietarioUid': uid,
       });
 
       if (mounted) {
@@ -178,6 +303,79 @@ class _CrearStarlinkWidgetState extends State<CrearStarlinkWidget> {
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  Widget _buildMonedaDropdown() {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Padding(
+        padding: const EdgeInsets.only(left: 4, bottom: 6),
+        child: Text('MONEDA',
+            style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 12, fontWeight: FontWeight.w600, letterSpacing: 0.3)),
+      ),
+      Container(
+        decoration: BoxDecoration(
+          color: _C.surface,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: _monedaError != null ? _C.danger : (_monedaSel != null ? _C.success : _C.border),
+            width: _monedaSel != null ? 1.8 : 1.2,
+          ),
+        ),
+        child: DropdownButtonHideUnderline(
+          child: DropdownButton<_Moneda>(
+            value: _monedaSel,
+            isExpanded: true,
+            borderRadius: BorderRadius.circular(14),
+            dropdownColor: _C.surface,
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            icon: Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Icon(Icons.keyboard_arrow_down_rounded, color: _C.textSec),
+            ),
+            hint: Row(children: [
+              Container(
+                margin: const EdgeInsets.only(left: 6, right: 10),
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(color: _C.success.withOpacity(0.1), borderRadius: BorderRadius.circular(9)),
+                child: Icon(Icons.currency_exchange_rounded, color: _C.success, size: 16),
+              ),
+              Text('Selecciona la moneda', style: GoogleFonts.spaceGrotesk(color: _C.textSec.withOpacity(0.6), fontSize: 14)),
+            ]),
+            items: _monedas
+                .map((m) => DropdownMenuItem<_Moneda>(
+                      value: m,
+                      child: Row(children: [
+                        Container(
+                          margin: const EdgeInsets.only(left: 4, right: 10),
+                          width: 32,
+                          height: 32,
+                          decoration: BoxDecoration(color: _C.success.withOpacity(0.08), borderRadius: BorderRadius.circular(8)),
+                          child: Center(child: Text(m.bandera, style: const TextStyle(fontSize: 17))),
+                        ),
+                        Expanded(
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                            Text('${m.codigo} — ${m.simbolo}',
+                                style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 13, fontWeight: FontWeight.w600)),
+                            Text(m.nombre, style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11)),
+                          ]),
+                        ),
+                      ]),
+                    ))
+                .toList(),
+            onChanged: (m) => setState(() {
+              _monedaSel = m;
+              _monedaError = null;
+            }),
+          ),
+        ),
+      ),
+      if (_monedaError != null)
+        Padding(
+          padding: const EdgeInsets.only(left: 4, top: 4),
+          child: Text(_monedaError!, style: GoogleFonts.spaceGrotesk(color: _C.danger, fontSize: 11)),
+        ),
+    ]);
   }
 
   @override
@@ -234,7 +432,7 @@ class _CrearStarlinkWidgetState extends State<CrearStarlinkWidget> {
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 30),
                   child: Column(children: [
-                    // Banner
+                    // ── Banner ──
                     Container(
                       width: double.infinity,
                       padding: const EdgeInsets.all(18),
@@ -266,7 +464,7 @@ class _CrearStarlinkWidgetState extends State<CrearStarlinkWidget> {
                     ).animate().fadeIn(duration: 350.ms).slideY(begin: 0.04, end: 0),
                     const SizedBox(height: 16),
 
-                    // ── Sección info ──
+                    // ── Sección: Información ──
                     _seccion(
                       icon: Icons.satellite_alt_rounded,
                       color: _C.primary,
@@ -296,7 +494,7 @@ class _CrearStarlinkWidgetState extends State<CrearStarlinkWidget> {
                     ),
                     const SizedBox(height: 14),
 
-                    // ── Plan que se le paga a Starlink ──
+                    // ── Sección: Plan ──
                     _seccion(
                       icon: Icons.payments_rounded,
                       color: _C.success,
@@ -305,45 +503,45 @@ class _CrearStarlinkWidgetState extends State<CrearStarlinkWidget> {
                       delay: 180,
                       children: [
                         _Field(
-                          controller: _planCtrl,
-                          focusNode: _planFocus,
-                          label: 'PLAN / COSTO MENSUAL',
-                          hint: 'Ej: \$150/mes  ó  \$250/mes',
+                          controller: _planValorCtrl,
+                          focusNode: _planValorFocus,
+                          label: 'VALOR / COSTO MENSUAL',
+                          hint: 'Ej: 150.000  ó  250',
                           icon: Icons.receipt_long_rounded,
                           iconColor: _C.success,
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d.,]'))],
                           validator: (v) => (v == null || v.trim().isEmpty) ? 'Campo requerido' : null,
                         ),
-                        // Chips de referencia rápida
+                        // Chips de referencia rápida — ahora con formato colombiano
                         Wrap(
                             spacing: 8,
-                            children: ['\$150/mes', '\$250/mes', '\$300/mes']
+                            children: ['150.000', '250.000', '300.000']
                                 .map(
                                   (p) => GestureDetector(
-                                    onTap: () {
-                                      _planCtrl.text = p;
-                                      setState(() {});
-                                    },
+                                    onTap: () => setState(() => _planValorCtrl.text = p),
                                     child: Container(
                                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                                       decoration: BoxDecoration(
-                                        color: _planCtrl.text == p ? _C.success.withOpacity(0.15) : _C.surfaceDim,
+                                        color: _planValorCtrl.text == p ? _C.success.withOpacity(0.15) : _C.surfaceDim,
                                         borderRadius: BorderRadius.circular(20),
-                                        border: Border.all(color: _planCtrl.text == p ? _C.success : _C.border, width: 1.2),
+                                        border: Border.all(color: _planValorCtrl.text == p ? _C.success : _C.border, width: 1.2),
                                       ),
                                       child: Text(p,
                                           style: GoogleFonts.spaceGrotesk(
-                                              color: _planCtrl.text == p ? _C.success : _C.textSec,
+                                              color: _planValorCtrl.text == p ? _C.success : _C.textSec,
                                               fontSize: 12,
                                               fontWeight: FontWeight.w600)),
                                     ),
                                   ),
                                 )
                                 .toList()),
+                        _buildMonedaDropdown(),
                       ],
                     ),
                     const SizedBox(height: 14),
 
-                    // ── Fecha ──
+                    // ── Sección: Fecha ──
                     _seccion(
                       icon: Icons.calendar_month_rounded,
                       color: _C.warning,
@@ -374,7 +572,9 @@ class _CrearStarlinkWidgetState extends State<CrearStarlinkWidget> {
                                     style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11, fontWeight: FontWeight.w600)),
                                 const SizedBox(height: 2),
                                 Text(
-                                    '${_fechaInstalacion.day.toString().padLeft(2, '0')}/${_fechaInstalacion.month.toString().padLeft(2, '0')}/${_fechaInstalacion.year}',
+                                    '${_fechaInstalacion.day.toString().padLeft(2, '0')}/'
+                                    '${_fechaInstalacion.month.toString().padLeft(2, '0')}/'
+                                    '${_fechaInstalacion.year}',
                                     style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 14, fontWeight: FontWeight.w600)),
                               ])),
                               Icon(Icons.edit_calendar_rounded, color: _C.textSec.withOpacity(0.5), size: 18),
@@ -385,7 +585,7 @@ class _CrearStarlinkWidgetState extends State<CrearStarlinkWidget> {
                     ),
                     const SizedBox(height: 14),
 
-                    // ── Notas ──
+                    // ── Sección: Notas ──
                     _seccion(
                       icon: Icons.notes_rounded,
                       color: _C.purple,
@@ -405,7 +605,7 @@ class _CrearStarlinkWidgetState extends State<CrearStarlinkWidget> {
                     ),
                     const SizedBox(height: 20),
 
-                    // ── Botón ──
+                    // ── Botón guardar ──
                     SizedBox(
                       width: double.infinity,
                       height: 56,

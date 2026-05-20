@@ -56,6 +56,22 @@ const _monedas = [
 ];
 
 // ─────────────────────────────────────────────
+//  HELPER — formatear con puntos de miles
+// ─────────────────────────────────────────────
+String _formatearValor(dynamic raw) {
+  final num valor = (raw is num) ? raw : double.tryParse(raw.toString()) ?? 0;
+  final String sinDecimales = valor.toStringAsFixed(0);
+  final buffer = StringBuffer();
+  int count = 0;
+  for (int i = sinDecimales.length - 1; i >= 0; i--) {
+    if (count > 0 && count % 3 == 0) buffer.write('.');
+    buffer.write(sinDecimales[i]);
+    count++;
+  }
+  return buffer.toString().split('').reversed.join('');
+}
+
+// ─────────────────────────────────────────────
 //  CAMPO DE TEXTO
 // ─────────────────────────────────────────────
 class _FormField extends StatelessWidget {
@@ -217,15 +233,16 @@ class _PlanesWidgetState extends State<PlanesWidget> {
     super.dispose();
   }
 
+  // ─────────────────────────────────────────
+  //  HELPER — formatear con puntos de miles
+  // ─────────────────────────────────────────
+  String _fmt(dynamic raw) => _formatearValor(raw);
+
   // ── Cargar planes del usuario autenticado ──
   Future<void> _cargarPlanes() async {
     if (_uid == null) return;
     setState(() => _cargandoPlanes = true);
-    final snap = await FirebaseFirestore.instance
-        .collection('planes')
-        .where('propietarioUid', isEqualTo: _uid)
-        .orderBy('fechaCreacion', descending: true)
-        .get();
+    final snap = await FirebaseFirestore.instance.collection('planes').where('propietarioUid', isEqualTo: _uid).get();
     if (mounted) {
       setState(() {
         _planes = snap.docs;
@@ -245,6 +262,13 @@ class _PlanesWidgetState extends State<PlanesWidget> {
     });
   }
 
+  // ── Parsear valor escrito (quitar puntos de miles si el usuario los escribió) ──
+  double _parsearValorInput(String raw) {
+    // Elimina puntos de miles y comas, deja solo dígitos y punto decimal real
+    final limpio = raw.trim().replaceAll('.', '').replaceAll(',', '.');
+    return double.tryParse(limpio) ?? 0;
+  }
+
   // ── Guardar plan ──
   Future<void> _guardar() async {
     setState(() => _monedaError = _monedaSel == null ? 'Selecciona una moneda' : null);
@@ -257,14 +281,14 @@ class _PlanesWidgetState extends State<PlanesWidget> {
 
     setState(() => _isLoading = true);
     try {
+      final valorDouble = _parsearValorInput(_model.tcValor.text);
       await FirebaseFirestore.instance.collection('planes').add({
         'nombre': _model.tcNombre.text.trim(),
-        'valor': double.tryParse(_model.tcValor.text.trim()) ?? 0,
+        'valor': valorDouble, // ✅ se guarda como double limpio
         'descripcion': _model.tcDescripcion.text.trim(),
         'monedaCodigo': _monedaSel!.codigo,
         'monedaNombre': _monedaSel!.nombre,
         'monedaSimbolo': _monedaSel!.simbolo,
-        // ── NUEVO: uid del propietario ──
         'propietarioUid': _uid,
         'fechaCreacion': FieldValue.serverTimestamp(),
       });
@@ -308,8 +332,10 @@ class _PlanesWidgetState extends State<PlanesWidget> {
   // ── Editar plan (bottom sheet) ──
   Future<void> _editarPlan(QueryDocumentSnapshot doc) async {
     final d = doc.data() as Map<String, dynamic>;
+    // ✅ Muestra el valor formateado con puntos de miles al editar
+    final valorFormateado = _fmt(d['valor'] ?? 0);
     final tcN = TextEditingController(text: d['nombre'] ?? '');
-    final tcV = TextEditingController(text: (d['valor'] ?? '').toString());
+    final tcV = TextEditingController(text: valorFormateado);
     final tcD = TextEditingController(text: d['descripcion'] ?? '');
     _Moneda? monedaEdit = _monedas.cast<_Moneda?>().firstWhere((m) => m?.codigo == (d['monedaCodigo'] ?? ''), orElse: () => null);
     String? mError;
@@ -361,9 +387,10 @@ class _PlanesWidgetState extends State<PlanesWidget> {
                 // Campos
                 _editField(tcN, 'NOMBRE DEL PLAN', 'Ej: Plan Básico', Icons.label_rounded, _C.primary),
                 const SizedBox(height: 14),
-                _editField(tcV, 'VALOR', 'Ej: 50000', Icons.payments_rounded, _C.success,
+                _editField(tcV, 'VALOR', 'Ej: 50.000', Icons.payments_rounded, _C.success,
                     keyboardType: TextInputType.numberWithOptions(decimal: true),
-                    formatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d.]'))]),
+                    // ✅ Permite dígitos, puntos y comas
+                    formatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d.,]'))]),
                 const SizedBox(height: 14),
                 _editField(tcD, 'DESCRIPCIÓN', 'Descripción del plan', Icons.description_rounded, _C.accent),
                 const SizedBox(height: 14),
@@ -404,10 +431,11 @@ class _PlanesWidgetState extends State<PlanesWidget> {
                                   return;
                                 }
                                 setBS(() => saving = true);
-                                // ── NUEVO: conservar propietarioUid al editar ──
+                                // ✅ Parsear valor correctamente al guardar edición
+                                final valorDouble = _parsearValorInput(tcV.text);
                                 await FirebaseFirestore.instance.collection('planes').doc(doc.id).update({
                                   'nombre': tcN.text.trim(),
-                                  'valor': double.tryParse(tcV.text.trim()) ?? 0,
+                                  'valor': valorDouble,
                                   'descripcion': tcD.text.trim(),
                                   'monedaCodigo': monedaEdit!.codigo,
                                   'monedaNombre': monedaEdit!.nombre,
@@ -622,11 +650,12 @@ class _PlanesWidgetState extends State<PlanesWidget> {
                           controller: _model.tcValor,
                           focusNode: _model.fnValor,
                           label: 'VALOR DEL PLAN',
-                          hint: 'Ej: 50000',
+                          hint: 'Ej: 60.000',
                           icon: Icons.payments_rounded,
                           iconColor: _C.success,
+                          // ✅ Permite dígitos, puntos de miles y coma decimal
                           keyboardType: TextInputType.numberWithOptions(decimal: true),
-                          inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d.]'))],
+                          inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d.,]'))],
                           validator: (v) => (v == null || v.trim().isEmpty) ? 'El valor es obligatorio' : null,
                         ),
                         _FormField(
@@ -838,7 +867,10 @@ class _PlanesWidgetState extends State<PlanesWidget> {
         final d = doc.data() as Map<String, dynamic>;
         final moneda = d['monedaCodigo'] ?? '';
         final simbolo = d['monedaSimbolo'] ?? '';
-        final valor = (d['valor'] ?? 0).toStringAsFixed(0);
+
+        // ✅ CORRECCIÓN PRINCIPAL: mostrar valor formateado con puntos de miles
+        final valor = _fmt(d['valor'] ?? 0);
+
         final bandera = _monedas.cast<_Moneda?>().firstWhere((m) => m?.codigo == moneda, orElse: () => null)?.bandera ?? '💵';
 
         final colors = [_C.primary, _C.accent, _C.success, _C.warning, _C.purple];

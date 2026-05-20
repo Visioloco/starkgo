@@ -2,8 +2,18 @@ import 'package:stark_go/pages/ConfigMikroTik/config_mikro_tik_widget.dart';
 import 'package:stark_go/pages/lista_equipos/lista_equipos_widget.dart';
 import 'package:stark_go/pages/lista_starlinks/lista_starlinks_widget.dart';
 import 'package:stark_go/pages/planes/planes_widget.dart';
-import 'package:stark_go/pages/config_ultra_msg/config_ultra_msg_widget.dart';
+import 'package:stark_go/pages/config_evolution_api/config_evolution_api_widget.dart';
+import 'package:stark_go/pages/Crear_cuenta/crear_cuenta_widget.dart';
+import 'package:stark_go/pages/config_facturacion/config_facturacion_widget.dart';
+import 'package:stark_go/pages/config_velocidades/config_velocidades_widget.dart';
+import 'package:stark_go/pages/informes/informes_widget.dart';
+import 'package:stark_go/pages/lista_operadores/lista_operadores_widget.dart';
+import 'package:stark_go/pages/tutorial/tutorial_widget.dart';
+import 'package:stark_go/pages/pppoe_clientes/pppoe_clientes_widget.dart';
+import '/pages/renovar_membresia/renovar_membresia_widget.dart';
+import 'package:stark_go/pages/lista_starlinks_clientes/lista_starlinks_clientes_widget.dart';
 
+import '/auth/firebase_auth/auth_util.dart';
 import '/backend/backend.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
 import '/flutter_flow/flutter_flow_util.dart';
@@ -12,11 +22,15 @@ import '/index.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:easy_debounce/easy_debounce.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:text_search/text_search.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import 'home_model.dart';
 export 'home_model.dart';
 
@@ -36,6 +50,7 @@ class _AppColors {
   static const Color drawerBg = Color(0xFF0F172A);
   static const Color cardBorder = Color(0xFFE2E8F0);
   static const Color purple = Color(0xFF7C3AED);
+  static const Color whatsapp = Color(0xFF25D366);
 }
 
 // ─────────────────────────────────────────────
@@ -48,6 +63,27 @@ double _parsePlanCliente(dynamic plan) {
   if (plan is num) return plan.toDouble();
   final cleaned = plan.toString().replaceAll('.', '').replaceAll(',', '').trim();
   return double.tryParse(cleaned) ?? 50000.0;
+}
+
+// ─────────────────────────────────────────────
+//  MODELO EVOLUTION INSTANCE
+// ─────────────────────────────────────────────
+class _EvolutionInstance {
+  final String serverUrl;
+  final String instanceName;
+  final String apiKey;
+  final String phone;
+  final String status;
+
+  const _EvolutionInstance({
+    required this.serverUrl,
+    required this.instanceName,
+    required this.apiKey,
+    required this.phone,
+    required this.status,
+  });
+
+  bool get isConnected => status == 'connected' || status == 'open';
 }
 
 // ─────────────────────────────────────────────
@@ -403,9 +439,12 @@ class _ClientCard extends StatelessWidget {
                       onTap: onWhatsapp,
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                        decoration: BoxDecoration(color: const Color(0xFF25D366), borderRadius: BorderRadius.circular(20)),
+                        decoration: BoxDecoration(
+                          color: _AppColors.whatsapp,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
                         child: Row(mainAxisSize: MainAxisSize.min, children: [
-                          const Icon(FontAwesomeIcons.whatsapp, color: Colors.white, size: 11),
+                          Icon(FontAwesomeIcons.whatsapp, color: Colors.white, size: 11),
                           const SizedBox(width: 4),
                           Text('WA', style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700)),
                         ]),
@@ -584,7 +623,7 @@ class HomeWidget extends StatefulWidget {
   State<HomeWidget> createState() => _HomeWidgetState();
 }
 
-class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin {
+class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, WidgetsBindingObserver {
   late HomeModel _model;
   final scaffoldKey = GlobalKey<ScaffoldState>();
   late AnimationController _drawerCtrl;
@@ -595,34 +634,139 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin {
   bool _isSearching = false;
   List<ClientesRecord> _searchResults = [];
 
-  List<_StarlinkInfo> _starlinks = [];
+  // ── STARLINKS: ahora con Stream en tiempo real ──
+  Stream<List<_StarlinkInfo>>? _starlinksStream;
   String? _selectedStarlinkId;
-  bool _starlinksCargadas = false;
+
+  bool _esAdmin = false;
+
+  // ── Facturación ──────────────────────────────
+  int _diaVencimiento = 0;
+  int _diasAviso = 1;
+  bool _facturacionCargada = false;
+
+  // ── Datos empresa + plantilla recordatorio ───
+  String _nombreEmpresa = 'StarkGo';
+  String _nombreTitular = '';
+  String _numeroNequi = '';
+  String _whatsappSoporte = '';
+  String _horarioSoporte = 'Lunes a viernes · 8am – 5pm';
+  String _msgRecordatorio = '';
+
+  String get _uid => FirebaseAuth.instance.currentUser?.uid ?? '';
 
   @override
   void initState() {
     super.initState();
     _model = createModel(context, () => HomeModel());
+
     _drawerCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 350));
     _drawerAnim = CurvedAnimation(parent: _drawerCtrl, curve: Curves.easeInOutCubic);
-    _cargarStarlinks();
+
+    // ── Inicia stream de Starlinks en tiempo real ──
+    _initStarlinksStream();
+
+    _cargarRolAdmin();
+    _cargarConfigFacturacion();
+    _verificarMembresia();
+
+    WidgetsBinding.instance.addObserver(this);
+
+    SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.dark,
+      statusBarBrightness: Brightness.light,
+    ));
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _drawerCtrl.dispose();
     _searchCtrl.dispose();
     _model.dispose();
     super.dispose();
   }
 
-  Future<void> _cargarStarlinks() async {
-    final snap = await FirebaseFirestore.instance.collection('starlinks').orderBy('nombre').get();
-    if (mounted) {
-      setState(() {
-        _starlinks = snap.docs.map((d) => _StarlinkInfo.fromDoc(d)).toList();
-        _starlinksCargadas = true;
-      });
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _verificarMembresia();
+    }
+  }
+
+  // ──────────────────────────────────────────
+  //  VERIFICAR MEMBRESÍA AL ENTRAR AL HOME
+  // ──────────────────────────────────────────
+  Future<void> _verificarMembresia() async {
+    if (_uid.isEmpty) return;
+    try {
+      final doc = await FirebaseFirestore.instance.collection('user').doc(_uid).get();
+      final ts = doc.data()?['fechaVencimiento'] as Timestamp?;
+      if (ts != null && DateTime.now().isAfter(ts.toDate())) {
+        if (mounted) {
+          context.goNamed(RenovarMembresiaWidget.routeName);
+        }
+      }
+    } catch (_) {}
+  }
+
+  // ──────────────────────────────────────────
+  //  STREAM STARLINKS — tiempo real
+  //  Al borrar/crear/editar una Starlink en
+  //  Firestore, el chip se actualiza solo.
+  // ──────────────────────────────────────────
+  void _initStarlinksStream() {
+    if (_uid.isEmpty) return;
+    _starlinksStream = FirebaseFirestore.instance
+        .collection('starlinks')
+        .where('propietarioUid', isEqualTo: _uid)
+        .snapshots()
+        .map((snap) => snap.docs.map((d) => _StarlinkInfo.fromDoc(d)).toList());
+  }
+
+  // ──────────────────────────────────────────
+  //  CARGAR ROL ADMIN
+  // ──────────────────────────────────────────
+  Future<void> _cargarRolAdmin() async {
+    if (_uid.isEmpty) return;
+    try {
+      final doc = await FirebaseFirestore.instance.collection('user').doc(_uid).get();
+      if (doc.exists && mounted) {
+        final data = doc.data() as Map<String, dynamic>;
+        setState(() => _esAdmin = data['admin'] == true);
+      }
+    } catch (e) {
+      debugPrint('[StarkGo] Error leyendo rol admin: $e');
+    }
+  }
+
+  // ──────────────────────────────────────────
+  //  CARGAR CONFIG FACTURACIÓN + EMPRESA
+  // ──────────────────────────────────────────
+  Future<void> _cargarConfigFacturacion() async {
+    if (_uid.isEmpty) return;
+    try {
+      final doc = await FirebaseFirestore.instance.collection('config_empresa').doc(_uid).get();
+      if (doc.exists && mounted) {
+        final d = doc.data() as Map<String, dynamic>;
+        setState(() {
+          _diaVencimiento = (d['diaVencimiento'] as int?) ?? 0;
+          _diasAviso = (d['diasAviso'] as int?) ?? 1;
+          _nombreEmpresa = (d['nombreEmpresa'] ?? 'StarkGo').toString();
+          _nombreTitular = (d['nombreTitular'] ?? '').toString();
+          _numeroNequi = (d['numeroNequi'] ?? '').toString();
+          _whatsappSoporte = (d['whatsappSoporte'] ?? '').toString();
+          _horarioSoporte = (d['horarioSoporte'] ?? 'Lunes a viernes · 8am – 5pm').toString();
+          _msgRecordatorio = (d['msgRecordatorio'] ?? '').toString();
+          _facturacionCargada = true;
+        });
+      } else {
+        if (mounted) setState(() => _facturacionCargada = true);
+      }
+    } catch (e) {
+      debugPrint('[StarkGo] Error leyendo config_empresa: $e');
+      if (mounted) setState(() => _facturacionCargada = true);
     }
   }
 
@@ -652,13 +796,48 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin {
     });
   }
 
-  Future<void> _sendWhatsapp(BuildContext ctx, String nombre, int numero, double planCliente) async {
+  // ──────────────────────────────────────────
+  //  EVOLUTION API — obtener instancia
+  // ──────────────────────────────────────────
+  Future<_EvolutionInstance?> _obtenerInstanciaEvolution() async {
+    if (_uid.isEmpty) return null;
+    try {
+      final snap = await FirebaseFirestore.instance.collection('whatsapp_instances').where('uid', isEqualTo: _uid).limit(1).get();
+      if (snap.docs.isEmpty) return null;
+      final d = snap.docs.first.data();
+      return _EvolutionInstance(
+        serverUrl: d['serverUrl'] ?? '',
+        instanceName: d['instanceName'] ?? '',
+        apiKey: d['apiKey'] ?? '',
+        phone: d['phone'] ?? '',
+        status: d['status'] ?? '',
+      );
+    } catch (e) {
+      debugPrint('[StarkGo] Error leyendo whatsapp_instances: $e');
+      return null;
+    }
+  }
+
+  // ──────────────────────────────────────────
+  //  ENVIAR WHATSAPP
+  // ──────────────────────────────────────────
+  Future<void> _sendWhatsapp(
+    BuildContext ctx,
+    String nombre,
+    dynamic numeroRaw,
+    double planCliente,
+  ) async {
+    if (_diaVencimiento == 0) {
+      _showFechaNoConfiguradaDialog();
+      return;
+    }
+
     final ok = await showDialog<bool>(
           context: ctx,
           builder: (_) => AlertDialog(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
             title: Text('Reporte de Pago', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w700)),
-            content: Text('Enviar reporte de pago a $nombre vía WhatsApp?', style: GoogleFonts.spaceGrotesk()),
+            content: Text('Enviar recordatorio de pago a $nombre vía WhatsApp?', style: GoogleFonts.spaceGrotesk()),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx, false),
@@ -666,7 +845,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin {
               ),
               ElevatedButton(
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF25D366),
+                  backgroundColor: _AppColors.whatsapp,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),
                 onPressed: () => Navigator.pop(ctx, true),
@@ -677,25 +856,377 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin {
         ) ??
         false;
 
-    if (ok) {
-      final url = await actions.generarMensajeWhatsapp(nombre, numero, planCliente);
-      if (url != null) await launchURL(url);
+    if (!ok || !mounted) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => Center(
+        child: Container(
+          padding: const EdgeInsets.all(28),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            CircularProgressIndicator(color: _AppColors.whatsapp, strokeWidth: 2.5),
+            const SizedBox(height: 14),
+            Text('Enviando mensaje…', style: GoogleFonts.spaceGrotesk(color: _AppColors.textPri, fontSize: 14)),
+          ]),
+        ),
+      ),
+    );
+
+    _EvolutionInstance? instancia;
+    try {
+      instancia = await _obtenerInstanciaEvolution();
+    } catch (e) {
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+      _showErrorDialog('Error de conexión', 'No se pudo consultar la configuración de WhatsApp.\n\nDetalle: $e');
+      return;
+    }
+
+    if (mounted) Navigator.of(context, rootNavigator: true).pop();
+
+    if (instancia == null) {
+      _showNoInstanceDialog();
+      return;
+    }
+    if (!instancia.isConnected) {
+      _showErrorDialog('WhatsApp desconectado', 'Tu instancia (${instancia.instanceName}) no está conectada.\nEstado: ${instancia.status}');
+      return;
+    }
+
+    final String numeroDestino = _normalizarNumero(numeroRaw);
+    if (numeroDestino.isEmpty) {
+      _showErrorDialog('Número inválido', 'El cliente no tiene un número válido registrado.');
+      return;
+    }
+
+    final now = DateTime.now();
+    final diasParaVencer = _diaVencimiento - now.day;
+
+    String estado;
+    if (diasParaVencer == 0) {
+      estado = '🔴 *Estado:* Vence HOY';
+    } else if (diasParaVencer == 1) {
+      estado = '🔴 *Estado:* Vence mañana, día $_diaVencimiento';
+    } else if (diasParaVencer > 1) {
+      estado = '🟡 *Estado:* Vence en $diasParaVencer días (día $_diaVencimiento)';
+    } else {
+      estado = '🔴 *Estado:* Venció el día $_diaVencimiento (${diasParaVencer.abs()} días de retraso)';
+    }
+
+    final valorFmt = _formatearPesos(planCliente);
+
+    String mensaje;
+    if (_msgRecordatorio.trim().isEmpty) {
+      mensaje = '📢 *$_nombreEmpresa — Recordatorio de Pago*\n\n'
+          'Hola *$nombre*, te recordamos que tu factura vence el día '
+          '$_diaVencimiento del mes.\n\n'
+          '💳 *Valor:* $valorFmt\n'
+          '$estado\n\n'
+          '💜 Nequi: $_numeroNequi · $_nombreTitular\n'
+          'Soporte: $_whatsappSoporte\n$_horarioSoporte\n\n'
+          '— *Equipo $_nombreEmpresa* 🌐';
+    } else {
+      mensaje = _msgRecordatorio
+          .replaceAll('{nombre}', nombre)
+          .replaceAll('{plan}', '')
+          .replaceAll('{valor}', valorFmt)
+          .replaceAll('{dia}', '$_diaVencimiento')
+          .replaceAll('{estado}', estado)
+          .replaceAll('{empresa}', _nombreEmpresa)
+          .replaceAll('{nequi}', _numeroNequi)
+          .replaceAll('{titular}', _nombreTitular)
+          .replaceAll('{soporte}', _whatsappSoporte)
+          .replaceAll('{horario}', _horarioSoporte);
+    }
+
+    try {
+      final url = Uri.parse('${instancia.serverUrl}/message/sendText/${instancia.instanceName}');
+      final response = await http
+          .post(
+            url,
+            headers: {
+              'Content-Type': 'application/json',
+              'apikey': instancia.apiKey,
+            },
+            body: jsonEncode({'number': numeroDestino, 'text': mensaje}),
+          )
+          .timeout(const Duration(seconds: 20));
+
+      if (!mounted) return;
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        _showSuccessDialog(nombre, numeroDestino);
+      } else {
+        String detalle = '';
+        try {
+          final body = jsonDecode(response.body);
+          detalle = body['message'] ?? body['error'] ?? response.body;
+        } catch (_) {
+          detalle = response.body;
+        }
+        _showErrorDialog('Error al enviar (${response.statusCode})', 'No se pudo enviar el mensaje.\n\nDetalle: $detalle');
+      }
+    } on Exception catch (e) {
+      if (!mounted) return;
+      _showErrorDialog('Error de red', 'No se pudo conectar con Evolution API.\n\nDetalle: $e');
     }
   }
 
-  // ═══════════════════════════════════════════
+  // ──────────────────────────────────────────
+  //  HELPERS
+  // ──────────────────────────────────────────
+  String _normalizarNumero(dynamic raw) {
+    if (raw == null) return '';
+    String num = raw.toString().replaceAll(RegExp(r'[^0-9]'), '');
+    if (num.isEmpty) return '';
+    if (num.length < 10) return '';
+    if (num.length > 10) return num;
+    return '57$num';
+  }
+
+  String _formatearPesos(double valor) {
+    final partes = valor.toStringAsFixed(0).split('');
+    final buffer = StringBuffer();
+    int count = 0;
+    for (int i = partes.length - 1; i >= 0; i--) {
+      if (count > 0 && count % 3 == 0) buffer.write('.');
+      buffer.write(partes[i]);
+      count++;
+    }
+    return '\$ ${buffer.toString().split('').reversed.join('')}';
+  }
+
+  // ── Dialogs ──────────────────────────────────
+  void _showFechaNoConfiguradaDialog() {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(color: _AppColors.warning.withOpacity(0.1), shape: BoxShape.circle),
+            child: Icon(Icons.calendar_today_rounded, color: _AppColors.warning, size: 22),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text('Fecha no configurada', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w700, fontSize: 15)),
+          ),
+        ]),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(
+            'Antes de enviar mensajes de pago, configura el día '
+            'de vencimiento y los datos de tu empresa.',
+            style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 13, height: 1.5),
+          ),
+        ]),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancelar', style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec)),
+          ),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _AppColors.primary,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            icon: const Icon(Icons.settings_rounded, color: Colors.white, size: 16),
+            label: Text('Configurar', style: GoogleFonts.spaceGrotesk(color: Colors.white, fontWeight: FontWeight.w600)),
+            onPressed: () async {
+              Navigator.pop(context);
+              await context.pushNamed(ConfigFacturacionWidget.routeName);
+              _cargarConfigFacturacion();
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showNoInstanceDialog() {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(color: _AppColors.warning.withOpacity(0.1), shape: BoxShape.circle),
+            child: Icon(Icons.chat_bubble_outline_rounded, color: _AppColors.warning, size: 22),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text('WhatsApp no configurado', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w700, fontSize: 15)),
+          ),
+        ]),
+        content: Text(
+          'No tienes una instancia de Evolution API registrada.\n\n'
+          'Configura WhatsApp para poder enviar mensajes.',
+          style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancelar', style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec)),
+          ),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _AppColors.whatsapp,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            icon: const Icon(Icons.settings_rounded, color: Colors.white, size: 16),
+            label: Text('Configurar ahora', style: GoogleFonts.spaceGrotesk(color: Colors.white, fontWeight: FontWeight.w600)),
+            onPressed: () {
+              Navigator.pop(context);
+              context.pushNamed(ConfigEvolutionApiWidget.routeName);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showSuccessDialog(String nombre, String numero) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(color: _AppColors.success.withOpacity(0.1), shape: BoxShape.circle),
+            child: Icon(FontAwesomeIcons.whatsapp, color: _AppColors.whatsapp, size: 22),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text('¡Mensaje enviado!', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w700, fontSize: 15)),
+          ),
+        ]),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('El recordatorio fue enviado exitosamente.', style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 13)),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: _AppColors.success.withOpacity(0.06),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _AppColors.success.withOpacity(0.2)),
+            ),
+            child: Row(children: [
+              Icon(Icons.person_rounded, size: 16, color: _AppColors.success),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(nombre, style: GoogleFonts.spaceGrotesk(color: _AppColors.textPri, fontWeight: FontWeight.w600, fontSize: 13)),
+                  Text('+$numero', style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 11)),
+                ]),
+              ),
+              Icon(Icons.check_circle_rounded, color: _AppColors.success, size: 20),
+            ]),
+          ),
+        ]),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _AppColors.success,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () => Navigator.pop(context),
+            child: Text('Perfecto', style: GoogleFonts.spaceGrotesk(color: Colors.white, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showErrorDialog(String titulo, String mensaje) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(color: _AppColors.danger.withOpacity(0.1), shape: BoxShape.circle),
+            child: Icon(Icons.error_outline_rounded, color: _AppColors.danger, size: 22),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(titulo, style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w700, fontSize: 15)),
+          ),
+        ]),
+        content: Text(mensaje, style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 13, height: 1.5)),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _AppColors.danger,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () => Navigator.pop(context),
+            child: Text('Entendido', style: GoogleFonts.spaceGrotesk(color: Colors.white, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _cerrarSesion() async {
+    final ok = await showDialog<bool>(
+          context: context,
+          builder: (_) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: Text('Cerrar sesión', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w700)),
+            content: Text('¿Estás seguro que deseas cerrar sesión?', style: GoogleFonts.spaceGrotesk()),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: Text('Cancelar', style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _AppColors.danger,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                onPressed: () => Navigator.pop(context, true),
+                child: Text('Cerrar sesión', style: GoogleFonts.spaceGrotesk(color: Colors.white)),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (ok && mounted) {
+      SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.light,
+        statusBarBrightness: Brightness.dark,
+      ));
+      await authManager.signOut();
+      if (mounted) {
+        context.goNamedAuth(LoginWidget.routeName, context.mounted);
+      }
+    }
+  }
+
+  // ══════════════════════════════════════════
   //  BUILD
-  // ═══════════════════════════════════════════
+  // ══════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     context.watch<FFAppState>();
+
     return StreamBuilder<List<ClientesRecord>>(
-      stream: queryClientesRecord(),
+      stream: queryClientesRecord(
+        queryBuilder: (q) => q.where('propietarioUid', isEqualTo: _uid),
+      ),
       builder: (context, snapshot) {
         if (!snapshot.hasData) {
           return Scaffold(
             backgroundColor: _AppColors.surfaceDim,
-            body: Center(child: CircularProgressIndicator(color: _AppColors.primary, strokeWidth: 2.5)),
+            body: Center(
+              child: CircularProgressIndicator(color: _AppColors.primary, strokeWidth: 2.5),
+            ),
           );
         }
 
@@ -749,9 +1280,9 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin {
     );
   }
 
-  // ─────────────────────────────────────────
-  //  DRAWER  ← método completo y correcto
-  // ─────────────────────────────────────────
+  // ──────────────────────────────────────────
+  //  DRAWER
+  // ──────────────────────────────────────────
   Widget _buildDrawer(BuildContext context, List<ClientesRecord> allClients) {
     return Positioned(
       left: 0,
@@ -764,7 +1295,6 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // ── Header ──────────────────────────────────
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
                 child: Row(children: [
@@ -784,25 +1314,17 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin {
                   ]),
                 ]),
               ),
-
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                 child: Divider(color: Colors.white.withOpacity(0.08), height: 1),
               ),
-
-              // ── Items con scroll ─────────────────────────
               Expanded(
                 child: SingleChildScrollView(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const _DrawerSectionHeader(title: 'Principal'),
-                      _DrawerItem(
-                        icon: Icons.dashboard_rounded,
-                        label: 'Inicio',
-                        active: true,
-                        onTap: _toggleDrawer,
-                      ),
+                      _DrawerItem(icon: Icons.dashboard_rounded, label: 'Inicio', active: true, onTap: _toggleDrawer),
                       _DrawerItem(
                         icon: Icons.people_alt_rounded,
                         label: 'Clientes',
@@ -817,6 +1339,15 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin {
                         onTap: () {
                           _toggleDrawer();
                           context.pushNamed(PlanesWidget.routeName);
+                        },
+                      ),
+                      _DrawerItem(
+                        icon: Icons.cable_rounded,
+                        label: 'Clientes PPPoE',
+                        iconColor: Color(0xFF0EA5E9),
+                        onTap: () {
+                          _toggleDrawer();
+                          context.pushNamed(PppoeClientesWidget.routeName);
                         },
                       ),
                       _DrawerItem(
@@ -836,74 +1367,62 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin {
                         },
                       ),
                       _DrawerItem(
-                        icon: Icons.warning_amber_rounded,
-                        label: 'Mora',
-                        iconColor: _AppColors.warning,
-                        onTap: () async {
+                        icon: Icons.satellite_alt_rounded,
+                        label: 'Mis Starlinks · Cobros',
+                        iconColor: _AppColors.success,
+                        onTap: () {
                           _toggleDrawer();
-                          final ok = await showDialog<bool>(
-                                context: context,
-                                builder: (_) => AlertDialog(
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                                  title: Text('Actualizar Mora', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w700)),
-                                  content: Text('¿Confirmas que hoy es el día 24 del mes?', style: GoogleFonts.spaceGrotesk()),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(context, false),
-                                      child: const Text('No'),
-                                    ),
-                                    ElevatedButton(
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: _AppColors.danger,
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                      ),
-                                      onPressed: () => Navigator.pop(context, true),
-                                      child: Text('Sí, actualizar', style: GoogleFonts.spaceGrotesk(color: Colors.white)),
-                                    ),
-                                  ],
-                                ),
-                              ) ??
-                              false;
-
-                          if (ok) {
-                            final allC = await queryClientesRecordOnce();
-                            final res = await actions.actualizarMoraPorBoton(allC.map((e) => e.reference).toList());
-                            if (mounted) {
-                              showDialog(
-                                context: context,
-                                builder: (_) => AlertDialog(
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                                  title: Text('Mora actualizada', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w700)),
-                                  content: Text(res ?? '', style: GoogleFonts.spaceGrotesk()),
-                                  actions: [
-                                    ElevatedButton(
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: _AppColors.primary,
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                      ),
-                                      onPressed: () => Navigator.pop(context),
-                                      child: Text('Ok', style: GoogleFonts.spaceGrotesk(color: Colors.white)),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            }
-                          }
+                          context.pushNamed(ListaStarlinksClientesWidget.routeName);
                         },
                       ),
                       _DrawerItem(
                         icon: Icons.bar_chart_rounded,
                         label: 'Informes',
-                        onTap: () {},
+                        onTap: () {
+                          _toggleDrawer();
+                          context.pushNamed(InformesWidget.routeName);
+                        },
                       ),
+                      _DrawerItem(
+                        icon: Icons.play_circle_rounded,
+                        label: 'Tutorial',
+                        iconColor: const Color(0xFFFF6B35),
+                        onTap: () {
+                          _toggleDrawer();
+                          context.pushNamed(TutorialWidget.routeName);
+                        },
+                      ),
+                      if (_esAdmin) ...[
+                        const _DrawerSectionHeader(title: 'Administración'),
+                        _DrawerItem(
+                          icon: Icons.person_add_rounded,
+                          label: 'Crear operador',
+                          iconColor: _AppColors.purple,
+                          badge: 'Admin',
+                          onTap: () {
+                            _toggleDrawer();
+                            context.pushNamed(CrearCuentaWidget.routeName);
+                          },
+                        ),
+                        _DrawerItem(
+                          icon: Icons.people_rounded,
+                          label: 'Lista operadores',
+                          iconColor: _AppColors.purple,
+                          badge: 'Admin',
+                          onTap: () {
+                            _toggleDrawer();
+                            context.pushNamed(ListaOperadoresWidget.routeName);
+                          },
+                        ),
+                      ],
                       const _DrawerSectionHeader(title: 'Configuración'),
                       _DrawerItem(
                         icon: Icons.chat_rounded,
-                        label: 'WhatsApp · UltraMsg',
-                        iconColor: const Color(0xFF25D366),
+                        label: 'WhatsApp · Evolution',
+                        iconColor: _AppColors.whatsapp,
                         onTap: () {
                           _toggleDrawer();
-                          context.pushNamed(ConfigUltraMsgWidget.routeName);
+                          context.pushNamed(ConfigEvolutionApiWidget.routeName);
                         },
                       ),
                       _DrawerItem(
@@ -917,32 +1436,37 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin {
                         },
                       ),
                       _DrawerItem(
-                        icon: Icons.settings_rounded,
-                        label: 'Configuración',
-                        onTap: () {},
+                        icon: Icons.speed_rounded,
+                        label: 'Velocidades MikroTik',
+                        iconColor: _AppColors.accent,
+                        onTap: () {
+                          _toggleDrawer();
+                          context.pushNamed(ConfigVelocidadesWidget.routeName);
+                        },
                       ),
-                      const SizedBox(height: 8),
+                      _DrawerItem(
+                        icon: Icons.calendar_month_rounded,
+                        label: 'Facturación & Mensajes',
+                        iconColor: _AppColors.primary,
+                        badge: _facturacionCargada && _diaVencimiento == 0 ? '⚠️' : null,
+                        onTap: () async {
+                          _toggleDrawer();
+                          await context.pushNamed(ConfigFacturacionWidget.routeName);
+                          _cargarConfigFacturacion();
+                        },
+                      ),
                     ],
                   ),
                 ),
               ),
-
-              // ── Footer fijo ──────────────────────────────
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 child: Divider(color: Colors.white.withOpacity(0.08), height: 1),
               ),
-
-              _DrawerItem(
-                icon: Icons.logout_rounded,
-                label: 'Cerrar sesión',
-                iconColor: _AppColors.danger,
-                onTap: () {},
-              ),
-
+              _DrawerItem(icon: Icons.logout_rounded, label: 'Cerrar sesión', iconColor: _AppColors.danger, onTap: _cerrarSesion),
               Padding(
                 padding: const EdgeInsets.all(20),
-                child: Text('v1.0.1', style: GoogleFonts.spaceGrotesk(color: Colors.white24, fontSize: 11)),
+                child: Text('v1.0.0+5', style: GoogleFonts.spaceGrotesk(color: Colors.white24, fontSize: 11)),
               ),
             ],
           ),
@@ -951,9 +1475,9 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin {
     );
   }
 
-  // ─────────────────────────────────────────
+  // ──────────────────────────────────────────
   //  MAIN CONTENT
-  // ─────────────────────────────────────────
+  // ──────────────────────────────────────────
   Widget _buildMainContent(
     BuildContext context,
     List<ClientesRecord> allClients,
@@ -969,9 +1493,39 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin {
         child: Column(children: [
           _buildTopBar(context),
           const SizedBox(height: 4),
+          if (_facturacionCargada && _diaVencimiento == 0) _buildFechaAlertBanner(),
           _buildStatsRow(filteredClients.length, activoCount, moraCount, inactivoCount),
           const SizedBox(height: 10),
-          if (_starlinksCargadas && _starlinks.isNotEmpty) _buildStarlinkChips(allClients),
+
+          // ── CHIPS STARLINKS — Stream en tiempo real ──
+          StreamBuilder<List<_StarlinkInfo>>(
+            stream: _starlinksStream,
+            builder: (context, slSnap) {
+              final starlinks = slSnap.data ?? [];
+
+              // Si la Starlink seleccionada fue borrada,
+              // limpia el filtro automáticamente
+              if (_selectedStarlinkId != null && !starlinks.any((s) => s.id == _selectedStarlinkId)) {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted) {
+                    setState(() {
+                      _selectedStarlinkId = null;
+                      _isSearching = false;
+                      _searchResults = [];
+                      _searchCtrl.clear();
+                    });
+                  }
+                });
+              }
+
+              if (starlinks.isEmpty) {
+                return const SizedBox.shrink();
+              }
+
+              return _buildStarlinkChipsFromList(allClients, starlinks);
+            },
+          ),
+
           const SizedBox(height: 8),
           _buildSearchBar(context, filteredClients),
           const SizedBox(height: 6),
@@ -994,7 +1548,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin {
                           context,
                           c.nombre,
                           c.numero,
-                          _parsePlanCliente(c.planCliente),
+                          c.planValor,
                         ),
                       ).animate().fadeIn(duration: 280.ms, delay: (i * 35).ms);
                     },
@@ -1005,10 +1559,10 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin {
     );
   }
 
-  // ─────────────────────────────────────────
-  //  CHIPS DE STARLINK
-  // ─────────────────────────────────────────
-  Widget _buildStarlinkChips(List<ClientesRecord> allClients) {
+  // ──────────────────────────────────────────
+  //  CHIPS desde lista viva del stream
+  // ──────────────────────────────────────────
+  Widget _buildStarlinkChipsFromList(List<ClientesRecord> allClients, List<_StarlinkInfo> starlinks) {
     return SizedBox(
       height: 52,
       child: ListView(
@@ -1025,7 +1579,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin {
               _searchCtrl.clear();
             }),
           ),
-          ..._starlinks.map((sl) => _StarlinkChip(
+          ...starlinks.map((sl) => _StarlinkChip(
                 starlink: sl,
                 selected: _selectedStarlinkId == sl.id,
                 onTap: () => setState(() {
@@ -1040,69 +1594,112 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin {
     );
   }
 
-  // ─────────────────────────────────────────
-  //  BANNER FILTRO ACTIVO
-  // ─────────────────────────────────────────
-  Widget _buildFilterBanner(List<ClientesRecord> allClients) {
-    final sl = _starlinks.firstWhere(
-      (s) => s.id == _selectedStarlinkId,
-      orElse: () => _StarlinkInfo(id: '', nombre: '', ubicacion: '', activo: false, clientesCount: 0),
-    );
-    final count = allClients.where((c) => c.starlinkId == _selectedStarlinkId).length;
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+  Widget _buildFechaAlertBanner() {
+    return GestureDetector(
+      onTap: () async {
+        await context.pushNamed(ConfigFacturacionWidget.routeName);
+        _cargarConfigFacturacion();
+      },
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [Color(0xFFEFF6FF), Color(0xFFE0F7F5)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
+          gradient: LinearGradient(
+            colors: [_AppColors.warning.withOpacity(0.15), _AppColors.warning.withOpacity(0.05)],
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
           ),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: _AppColors.primary.withOpacity(0.2), width: 1),
+          border: Border.all(color: _AppColors.warning.withOpacity(0.4), width: 1.2),
         ),
         child: Row(children: [
           Container(
-            width: 28,
-            height: 28,
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(colors: [_AppColors.primary, _AppColors.accent]),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: const Icon(Icons.satellite_alt_rounded, color: Colors.white, size: 14),
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(color: _AppColors.warning.withOpacity(0.15), shape: BoxShape.circle),
+            child: const Icon(Icons.calendar_today_rounded, color: _AppColors.warning, size: 16),
           ),
           const SizedBox(width: 10),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Filtrando: ${sl.nombre}',
-                  style: GoogleFonts.spaceGrotesk(color: _AppColors.primary, fontSize: 12, fontWeight: FontWeight.w700)),
-              Text('$count cliente${count != 1 ? 's' : ''} en esta Starlink',
-                  style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 10)),
+              Text(
+                'Facturación no configurada',
+                style: GoogleFonts.spaceGrotesk(color: _AppColors.warning, fontSize: 12, fontWeight: FontWeight.w700),
+              ),
+              Text(
+                'Toca aquí para configurar antes de enviar mensajes.',
+                style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 11),
+              ),
             ]),
           ),
-          GestureDetector(
-            onTap: () => setState(() {
-              _selectedStarlinkId = null;
-              _isSearching = false;
-              _searchResults = [];
-              _searchCtrl.clear();
-            }),
-            child: Container(
-              padding: const EdgeInsets.all(4),
-              decoration: const BoxDecoration(color: Color(0x1A1A73E8), shape: BoxShape.circle),
-              child: const Icon(Icons.close_rounded, size: 14, color: _AppColors.primary),
-            ),
-          ),
+          const Icon(Icons.arrow_forward_ios_rounded, size: 13, color: _AppColors.warning),
         ]),
       ),
     );
   }
 
-  // ─────────────────────────────────────────
-  //  TOP BAR
-  // ─────────────────────────────────────────
+  Widget _buildFilterBanner(List<ClientesRecord> allClients) {
+    final count = allClients.where((c) => c.starlinkId == _selectedStarlinkId).length;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+      child: StreamBuilder<List<_StarlinkInfo>>(
+        stream: _starlinksStream,
+        builder: (context, snap) {
+          final starlinks = snap.data ?? [];
+          final found = starlinks.firstWhere(
+            (s) => s.id == _selectedStarlinkId,
+            orElse: () => _StarlinkInfo(id: '', nombre: '...', ubicacion: '', activo: false, clientesCount: 0),
+          );
+          return Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFFEFF6FF), Color(0xFFE0F7F5)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _AppColors.primary.withOpacity(0.2), width: 1),
+            ),
+            child: Row(children: [
+              Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(colors: [_AppColors.primary, _AppColors.accent]),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.satellite_alt_rounded, color: Colors.white, size: 14),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('Filtrando: ${found.nombre}',
+                      style: GoogleFonts.spaceGrotesk(color: _AppColors.primary, fontSize: 12, fontWeight: FontWeight.w700)),
+                  Text('$count cliente${count != 1 ? 's' : ''} en esta Starlink',
+                      style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 10)),
+                ]),
+              ),
+              GestureDetector(
+                onTap: () => setState(() {
+                  _selectedStarlinkId = null;
+                  _isSearching = false;
+                  _searchResults = [];
+                  _searchCtrl.clear();
+                }),
+                child: Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: const BoxDecoration(color: Color(0x1A1A73E8), shape: BoxShape.circle),
+                  child: const Icon(Icons.close_rounded, size: 14, color: _AppColors.primary),
+                ),
+              ),
+            ]),
+          );
+        },
+      ),
+    );
+  }
+
   Widget _buildTopBar(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
@@ -1127,7 +1724,35 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin {
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('Bienvenido 👋', style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 12)),
-            Text('Fabian', style: GoogleFonts.spaceGrotesk(color: _AppColors.textPri, fontSize: 20, fontWeight: FontWeight.w800)),
+            FutureBuilder<DocumentSnapshot>(
+              future: FirebaseFirestore.instance.collection('user').doc(_uid).get(),
+              builder: (context, snap) {
+                final nombre =
+                    snap.hasData && snap.data!.exists ? (snap.data!.data() as Map<String, dynamic>)['nombre'] ?? 'Usuario' : 'Usuario';
+                return RichText(
+                  text: TextSpan(
+                    children: [
+                      TextSpan(
+                        text: '$nombre, ',
+                        style: GoogleFonts.spaceGrotesk(
+                          color: _AppColors.textPri,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      TextSpan(
+                        text: 'Ing.',
+                        style: GoogleFonts.spaceGrotesk(
+                          color: _AppColors.primary,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
           ]),
         ),
         GestureDetector(
@@ -1150,9 +1775,6 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin {
     );
   }
 
-  // ─────────────────────────────────────────
-  //  STATS ROW
-  // ─────────────────────────────────────────
   Widget _buildStatsRow(int total, int activo, int mora, int inactivo) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -1165,9 +1787,6 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin {
     );
   }
 
-  // ─────────────────────────────────────────
-  //  SEARCH BAR
-  // ─────────────────────────────────────────
   Widget _buildSearchBar(BuildContext context, List<ClientesRecord> filteredClients) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -1221,9 +1840,6 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin {
     );
   }
 
-  // ─────────────────────────────────────────
-  //  EMPTY STATE
-  // ─────────────────────────────────────────
   Widget _buildEmptyState() {
     final isFiltered = _selectedStarlinkId != null;
     return Center(

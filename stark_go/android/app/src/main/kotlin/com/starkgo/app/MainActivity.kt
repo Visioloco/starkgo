@@ -1,4 +1,4 @@
-package com.mycompany.starkgo
+package com.starkgo.app
 
 import io.flutter.embedding.android.FlutterActivity
 

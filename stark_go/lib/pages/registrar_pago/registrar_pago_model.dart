@@ -9,8 +9,7 @@ class RegistrarPagoModel extends FlutterFlowModel<RegistrarPagoWidget> {
 
   final formKey = GlobalKey<FormState>();
   bool isDataUploading_uploadDataHj8 = false;
-  FFUploadedFile uploadedLocalFile_uploadDataHj8 =
-      FFUploadedFile(bytes: Uint8List.fromList([]), originalFilename: '');
+  FFUploadedFile uploadedLocalFile_uploadDataHj8 = FFUploadedFile(bytes: Uint8List.fromList([]), originalFilename: '');
   String uploadedFileUrl_uploadDataHj8 = '';
 
   // State field(s) for TextField widget.
@@ -28,6 +27,9 @@ class RegistrarPagoModel extends FlutterFlowModel<RegistrarPagoWidget> {
   // State field(s) for TextField widget.
   FocusNode? textFieldFocusNode2;
   TextEditingController? textController2;
+  // Agrega esto junto a los otros textController y focusNode
+  TextEditingController? textController5;
+  FocusNode? textFieldFocusNode5;
   String? Function(BuildContext, String?)? textController2Validator;
   String? _textController2Validator(BuildContext context, String? val) {
     if (val == null || val.isEmpty) {
@@ -78,5 +80,7 @@ class RegistrarPagoModel extends FlutterFlowModel<RegistrarPagoWidget> {
 
     textFieldFocusNode4?.dispose();
     textController4?.dispose();
+    textController5?.dispose();
+    textFieldFocusNode5?.dispose();
   }
 }

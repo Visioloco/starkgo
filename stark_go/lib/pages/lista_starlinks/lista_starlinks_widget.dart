@@ -77,7 +77,10 @@ class _ListaStarlinksWidgetState extends State<ListaStarlinksWidget> {
   Future<void> _editar(String docId, Map<String, dynamic> data) async {
     final nombreCtrl = TextEditingController(text: data['nombre'] ?? '');
     final ubicacionCtrl = TextEditingController(text: data['ubicacion'] ?? '');
-    final planCtrl = TextEditingController(text: data['plan_pago'] ?? '');
+    final planPago = data['plan_pago'];
+    final planCtrl = TextEditingController(
+      text: planPago is String ? planPago : planPago?.toString() ?? '',
+    );
     final notasCtrl = TextEditingController(text: data['notas'] ?? '');
 
     await showDialog(
@@ -312,7 +315,10 @@ class _ListaStarlinksWidgetState extends State<ListaStarlinksWidget> {
                           Divider(color: _C.border, height: 1),
                           const SizedBox(height: 10),
                           Wrap(spacing: 8, runSpacing: 6, children: [
-                            _chip(Icons.payments_rounded, data['plan_pago'] ?? '', _C.success),
+                            _chip(Icons.payments_rounded, () {
+                              final p = data['plan_pago'];
+                              return p is String ? p : p?.toString() ?? '';
+                            }(), _C.success),
                             _chip(Icons.people_rounded, '$clientes clientes', _C.purple),
                             _chip(activo ? Icons.check_circle_rounded : Icons.cancel_rounded, activo ? 'Activa' : 'Inactiva',
                                 activo ? _C.success : _C.danger),

@@ -7,12 +7,33 @@
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:806017860604:android:ce1e34afa169e34c52a879",
+        "mobilesdk_app_id": "1:806017860604:android:788b35b6e7a5a0a952a879",
         "android_client_info": {
-          "package_name": "com.mycompany.starkgo"
+          "package_name": "com.starkgo.net.cardenCode"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "806017860604-im088nnbv0bnp7bgrrmq93pcnc4vasvi.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.starkgo.net.cardenCode",
+            "certificate_hash": "cfa2872bf4ac9c6c369ef0ded866183ecdb540c9"
+          }
+        },
+        {
+          "client_id": "806017860604-vli38oi620qqvvmjuj5sjb2pbkdkkcll.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.starkgo.net.cardenCode",
+            "certificate_hash": "26bc0c7206a8608ac031e4a44b32e94eb2b8339a"
+          }
+        },
+        {
+          "client_id": "806017860604-3kj0hnkci1ak61jo8shdpdfpntcnac17.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyBfHY66gHlRiim3bQYWtvA9r1VAMVhLk-Q"
@@ -20,7 +41,19 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "806017860604-3kj0hnkci1ak61jo8shdpdfpntcnac17.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "806017860604-tpuqrl8i0dariqq6evk5lag4ol2agblg.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.mycompany.starkgo"
+              }
+            }
+          ]
         }
       }
     }

@@ -140,6 +140,11 @@ class ClientesRecord extends FirestoreRecord {
   String get planCliente => _planCliente ?? '';
   bool hasPlanCliente() => _planCliente != null;
 
+  // "planValor" field.  ← NUEVO
+  double? _planValor;
+  double get planValor => _planValor ?? 0.0;
+  bool hasPlanValor() => _planValor != null;
+
   // "tipoServicio" field.
   String? _tipoServicio;
   String get tipoServicio => _tipoServicio ?? '';
@@ -165,7 +170,6 @@ class ClientesRecord extends FirestoreRecord {
     _fecha = snapshotData['fecha'] as DateTime?;
     _status = snapshotData['status'] as String?;
     _cc = castToType<int>(snapshotData['cc']);
-    // ✅ camelCase — coincide exactamente con Firestore
     _starlinkId = snapshotData['starlinkId'] as String?;
     _starlinkNombre = snapshotData['starlinkNombre'] as String?;
     _antenaId = snapshotData['antenaId'] as String?;
@@ -177,6 +181,7 @@ class ClientesRecord extends FirestoreRecord {
     _routerModelo = snapshotData['routerModelo'] as String?;
     _routerIp = snapshotData['routerIp'] as String?;
     _planCliente = snapshotData['planCliente'] as String?;
+    _planValor = castToType<double>(snapshotData['planValor']); // ← NUEVO
     _tipoServicio = snapshotData['tipoServicio'] as String?;
     _velocidadPlan = snapshotData['velocidadPlan'] as String?;
   }
@@ -223,7 +228,6 @@ Map<String, dynamic> createClientesRecordData({
   DateTime? fecha,
   String? status,
   int? cc,
-  // ✅ camelCase
   String? starlinkId,
   String? starlinkNombre,
   String? antenaId,
@@ -235,6 +239,7 @@ Map<String, dynamic> createClientesRecordData({
   String? routerModelo,
   String? routerIp,
   String? planCliente,
+  double? planValor, // ← NUEVO
   String? tipoServicio,
   String? velocidadPlan,
 }) {
@@ -254,7 +259,6 @@ Map<String, dynamic> createClientesRecordData({
       'fecha': fecha,
       'status': status,
       'cc': cc,
-      // ✅ camelCase — coincide con Firestore
       'starlinkId': starlinkId,
       'starlinkNombre': starlinkNombre,
       'antenaId': antenaId,
@@ -266,6 +270,7 @@ Map<String, dynamic> createClientesRecordData({
       'routerModelo': routerModelo,
       'routerIp': routerIp,
       'planCliente': planCliente,
+      'planValor': planValor, // ← NUEVO
       'tipoServicio': tipoServicio,
       'velocidadPlan': velocidadPlan,
     }.withoutNulls,
@@ -304,6 +309,7 @@ class ClientesRecordDocumentEquality implements Equality<ClientesRecord> {
         e1?.routerModelo == e2?.routerModelo &&
         e1?.routerIp == e2?.routerIp &&
         e1?.planCliente == e2?.planCliente &&
+        e1?.planValor == e2?.planValor && // ← NUEVO
         e1?.tipoServicio == e2?.tipoServicio &&
         e1?.velocidadPlan == e2?.velocidadPlan;
   }
@@ -335,6 +341,7 @@ class ClientesRecordDocumentEquality implements Equality<ClientesRecord> {
         e?.routerModelo,
         e?.routerIp,
         e?.planCliente,
+        e?.planValor, // ← NUEVO
         e?.tipoServicio,
         e?.velocidadPlan,
       ]);

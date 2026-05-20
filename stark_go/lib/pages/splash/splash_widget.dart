@@ -1,9 +1,12 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 import '/flutter_flow/nav/nav.dart';
 import '/index.dart';
+import '/pages/renovar_membresia/renovar_membresia_widget.dart';
 
 class SplashWidget extends StatefulWidget {
   const SplashWidget({super.key});
@@ -18,15 +21,48 @@ class _SplashWidgetState extends State<SplashWidget> {
   @override
   void initState() {
     super.initState();
-    Future.delayed(const Duration(seconds: 3), () {
+    _iniciar();
+  }
+
+  Future<void> _iniciar() async {
+    // 1. Esperar que Firebase Auth restaure la sesión completamente
+    //    ANTES del delay visual — así el token está listo cuando naveguemos
+    final user = await FirebaseAuth.instance.authStateChanges().first;
+
+    // 2. Mostrar splash por 3 segundos
+    await Future.delayed(const Duration(seconds: 3));
+
+    if (!mounted) return;
+
+    // 3. Si no hay sesión → Login
+    if (!AppStateNotifier.instance.loggedIn || user == null) {
+      context.goNamed(LoginWidget.routeName);
+      return;
+    }
+
+    // 4. Refrescar token y esperar que se propague internamente en el SDK
+    try {
+      await user.getIdToken(true);
+      await Future.delayed(const Duration(milliseconds: 500));
+    } catch (_) {}
+
+    if (!mounted) return;
+
+    // 5. Verificar fecha de vencimiento en Firestore
+    try {
+      final doc = await FirebaseFirestore.instance.collection('user').doc(user.uid).get();
+      final ts = doc.data()?['fechaVencimiento'] as Timestamp?;
+
       if (!mounted) return;
-      // ✅ Si está logueado va al Home, si no al Login
-      if (AppStateNotifier.instance.loggedIn) {
-        context.goNamed(HomeWidget.routeName);
+
+      if (ts != null && DateTime.now().isAfter(ts.toDate())) {
+        context.goNamed(RenovarMembresiaWidget.routeName);
       } else {
-        context.goNamed(LoginWidget.routeName);
+        context.goNamed(HomeWidget.routeName);
       }
-    });
+    } catch (_) {
+      if (mounted) context.goNamed(HomeWidget.routeName);
+    }
   }
 
   @override
@@ -75,7 +111,12 @@ class _SplashWidgetState extends State<SplashWidget> {
                 fontWeight: FontWeight.w800,
                 letterSpacing: 1.5,
               ),
-            ).animate().fadeIn(duration: 600.ms, delay: 400.ms).slideY(begin: 0.3, end: 0, duration: 600.ms, delay: 400.ms),
+            ).animate().fadeIn(duration: 600.ms, delay: 400.ms).slideY(
+                  begin: 0.3,
+                  end: 0,
+                  duration: 600.ms,
+                  delay: 400.ms,
+                ),
 
             const SizedBox(height: 8),
 
