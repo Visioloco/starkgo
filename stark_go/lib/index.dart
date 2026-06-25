@@ -12,3 +12,4 @@ export '/pages/crear_starlink/crear_starlink_widget.dart' show CrearStarlinkWidg
 export '/pages/crear_equipo/crear_equipos_widget.dart' show CrearEquipoWidget;
 export '/pages/config_ultra_msg/config_ultra_msg_widget.dart' show ConfigUltraMsgWidget;
 export '/pages/planes/planes_widget.dart' show PlanesWidget;
+import 'package:stark_go/pages/reporte_consumo/reporte_consumo_widget.dart';

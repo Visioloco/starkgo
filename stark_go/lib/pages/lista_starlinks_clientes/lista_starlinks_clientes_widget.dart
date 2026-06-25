@@ -1,31 +1,7 @@
-// ══════════════════════════════════════════════════════════════════
-//  lista_starlinks_clientes_widget.dart
-//  Gestión de Starlinks de clientes · StarkGo
-//  Colección Firebase: starlink_clientes_pago
-//  Incluye: registro, WhatsApp (opción 1 profesional), notificaciones locales
-// ══════════════════════════════════════════════════════════════════
-//
-//  DEPENDENCIAS requeridas en pubspec.yaml:
-//  flutter_local_notifications: ^17.0.0
-//  http: ^1.2.0
-//  cloud_firestore: ^4.x
-//  firebase_auth: ^4.x
-//  google_fonts: ^6.x
-//  flutter_animate: ^4.x
-//  font_awesome_flutter: ^10.x
-//  timezone: ^0.9.0
-//
-//  PERMISOS Android (AndroidManifest.xml):
-//  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
-//  <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
-//  <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
-//
-//  PERMISOS iOS (Info.plist): No se requieren extras para notificaciones locales
-// ══════════════════════════════════════════════════════════════════
-
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
@@ -35,6 +11,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
+import 'package:url_launcher/url_launcher.dart'; // ← NUEVA IMPORTACIÓN
 
 // ─────────────────────────────────────────────
 //  COLECCIÓN FIREBASE
@@ -71,6 +48,7 @@ class StarlinkClientePago {
   final double montoQuePago; // lo que yo pago a Starlink
   final double montoQueCobro; // lo que cobro al cliente
   final String telefono;
+  final String correo; // ← NUEVO CAMPO
   final String estado; // 'al_dia' | 'pendiente' | 'vencido'
   final String propietarioUid;
   final DateTime creadoEn;
@@ -85,6 +63,7 @@ class StarlinkClientePago {
     required this.montoQuePago,
     required this.montoQueCobro,
     required this.telefono,
+    required this.correo, // ← NUEVO
     required this.estado,
     required this.propietarioUid,
     required this.creadoEn,
@@ -102,6 +81,7 @@ class StarlinkClientePago {
       montoQuePago: ((d['montoQuePago'] as num?) ?? 0).toDouble(),
       montoQueCobro: ((d['montoQueCobro'] as num?) ?? 0).toDouble(),
       telefono: d['telefono'] ?? '',
+      correo: d['correo'] ?? '', // ← NUEVO (compatibilidad con docs existentes)
       estado: d['estado'] ?? 'pendiente',
       propietarioUid: d['propietarioUid'] ?? '',
       creadoEn: (d['creadoEn'] as Timestamp?)?.toDate() ?? DateTime.now(),
@@ -117,6 +97,7 @@ class StarlinkClientePago {
         'montoQuePago': montoQuePago,
         'montoQueCobro': montoQueCobro,
         'telefono': telefono,
+        'correo': correo, // ← NUEVO
         'estado': estado,
         'propietarioUid': uid,
         'creadoEn': FieldValue.serverTimestamp(),
@@ -177,7 +158,7 @@ class _NotifService {
     // Inicializar timezone
     tz.initializeTimeZones();
 
-    const android = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const android = AndroidInitializationSettings('@mipmap/launcher_icon');
     const ios = DarwinInitializationSettings(
       requestAlertPermission: true,
       requestBadgePermission: true,
@@ -186,6 +167,17 @@ class _NotifService {
     const settings = InitializationSettings(android: android, iOS: ios);
 
     await _plugin.initialize(settings);
+
+    // ── Pedir permisos en runtime (Android 13+ y iOS) ──
+    // Sin esto, zonedSchedule "funciona" pero la notificación nunca se muestra.
+    final androidImpl = _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+    final notifGranted = await androidImpl?.requestNotificationsPermission();
+    final exactGranted = await androidImpl?.requestExactAlarmsPermission();
+    debugPrint('🔔 Permiso notificaciones: $notifGranted | Permiso alarmas exactas: $exactGranted');
+
+    final iosImpl = _plugin.resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>();
+    await iosImpl?.requestPermissions(alert: true, badge: true, sound: true);
+
     _initialized = true;
   }
 
@@ -197,6 +189,8 @@ class _NotifService {
     required int diaVencimiento,
     required int diasAvisoPrevio,
     required double montoQueCobro,
+    required String correo,
+    required String lugar,
   }) async {
     await init();
 
@@ -221,8 +215,9 @@ class _NotifService {
       channelDescription: 'Recordatorios de cobro a clientes Starlink',
       importance: Importance.high,
       priority: Priority.high,
-      icon: '@mipmap/ic_launcher',
+      icon: '@mipmap/launcher_icon',
       color: Color(0xFF1A73E8),
+      styleInformation: BigTextStyleInformation(''), // permite texto largo expandido
     );
     const iosDetails = DarwinNotificationDetails(
       presentAlert: true,
@@ -231,17 +226,21 @@ class _NotifService {
     );
     const details = NotificationDetails(android: androidDetails, iOS: iosDetails);
 
+    final correoTexto = correo.isNotEmpty ? correo : 'sin correo registrado';
+    final cuerpo = '$nombreCliente · $lugar\n📧 $correoTexto\n💰 $monto · vence el día $diaVencimiento';
+
     await _plugin.zonedSchedule(
       id,
-      '📡 Recordatorio de cobro · Starlink',
-      '$nombreCliente · $monto · vence el día $diaVencimiento',
+      '📡 Pagar Starlink HOY',
+      cuerpo,
       tzFecha,
       details,
-      // DESPUÉS
       androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
       uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
       matchDateTimeComponents: DateTimeComponents.dayOfMonthAndTime,
     );
+
+    debugPrint('🔔 Recordatorio programado → $nombreCliente | $correoTexto | próxima fecha: $tzFecha');
   }
 
   static Future<void> cancelar(int id) async {
@@ -282,6 +281,44 @@ String _normalizarTel(String raw) {
   if (num.isEmpty || num.length < 10) return '';
   if (num.length > 10) return num;
   return '57$num';
+}
+
+// ─────────────────────────────────────────────
+//  ABRIR STARLINK LOGIN + COPIAR CORREO
+// ─────────────────────────────────────────────
+Future<void> _abrirStarlinkLogin(BuildContext context, String correo) async {
+  // 1. Copiar el correo al portapapeles para que el usuario lo pegue en Starlink
+  if (correo.isNotEmpty) {
+    await Clipboard.setData(ClipboardData(text: correo));
+  }
+
+  // 2. Abrir la página de login de Starlink
+  final uri = Uri.parse('https://starlink.com/auth/login');
+  if (await canLaunchUrl(uri)) {
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+
+  // 3. Mostrar snack informativo ANTES de salir de la app
+  if (context.mounted && correo.isNotEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(children: [
+          const Icon(Icons.copy_rounded, color: Colors.white, size: 16),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              '📋 Correo copiado: $correo\nPégalo en el campo de Starlink',
+              style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 12),
+            ),
+          ),
+        ]),
+        backgroundColor: _C.accent,
+        duration: const Duration(seconds: 4),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -359,15 +396,52 @@ class _StarClientCard extends StatelessWidget {
                     ),
                   ]),
                   const SizedBox(height: 3),
+                  // ── Teléfono ──
                   Row(children: [
                     Icon(Icons.phone_rounded, size: 12, color: _C.primary),
                     const SizedBox(width: 3),
-                    Text(item.telefono, style: GoogleFonts.spaceGrotesk(color: _C.primary, fontSize: 11.5)),
-                    const SizedBox(width: 10),
+                    Flexible(
+                      child: Text(item.telefono,
+                          style: GoogleFonts.spaceGrotesk(color: _C.primary, fontSize: 11.5), overflow: TextOverflow.ellipsis),
+                    ),
+                  ]),
+                  const SizedBox(height: 2),
+                  // ── Fecha vencimiento ──
+                  Row(children: [
                     Icon(Icons.calendar_today_rounded, size: 11, color: _C.textSec),
                     const SizedBox(width: 3),
-                    Text('Vence día ${item.diaVencimiento}', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11)),
+                    Flexible(
+                      child: Text(
+                        'Vence el día ${item.diaVencimiento} de cada mes',
+                        style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
                   ]),
+                  const SizedBox(height: 3),
+                  // ── CORREO (tappeable) ─────────────
+                  if (item.correo.isNotEmpty)
+                    GestureDetector(
+                      onTap: () => _abrirStarlinkLogin(context, item.correo),
+                      child: Row(children: [
+                        Icon(Icons.email_rounded, size: 12, color: _C.accent),
+                        const SizedBox(width: 3),
+                        Flexible(
+                          child: Text(
+                            item.correo,
+                            style: GoogleFonts.spaceGrotesk(
+                              color: _C.accent,
+                              fontSize: 11.5,
+                              decoration: TextDecoration.underline,
+                              decorationColor: _C.accent,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Icon(Icons.open_in_new_rounded, size: 10, color: _C.accent),
+                      ]),
+                    ),
                 ]),
               ),
               // Badge estado (tappable para cambiar)
@@ -761,26 +835,26 @@ class _ListaStarlinksClientesWidgetState extends State<ListaStarlinksClientesWid
 
     // ── MENSAJE PROFESIONAL OPCIÓN 1 ─────────
     final mensaje = '''📡 *$_nombreEmpresa — Recordatorio de Pago*
-
+ 
 Hola *${item.nombreCliente}*, esperamos que estés muy bien. 😊
-
+ 
 Te informamos que el pago de tu servicio *Starlink* está próximo a vencer.
-
+ 
 📅 *Fecha límite:* Día ${item.diaVencimiento} de este mes
 💰 *Valor a cancelar:* $valorFmt
 $estadoLinea
-
+ 
 ━━━━━━━━━━━━━━━━━
 💳 *¿Cómo pagar?*
 ▸ *Nequi:* $_numeroNequi
 ▸ *Titular:* $_nombreTitular
 ━━━━━━━━━━━━━━━━━
-
+ 
 ✅ Si ya realizaste el pago, por favor *envíanos tu comprobante* o ignora este mensaje.
-
+ 
 📲 Soporte: $_whatsappSop
 🕐 Horario: $_horarioSop
-
+ 
 — *Equipo $_nombreEmpresa* 🌐''';
 
     try {
@@ -823,6 +897,8 @@ $estadoLinea
         diaVencimiento: item.diaVencimiento,
         diasAvisoPrevio: item.diasAvisoPrevio,
         montoQueCobro: item.montoQueCobro,
+        correo: item.correo,
+        lugar: item.lugar,
       );
       _snack('Starlink registrada y recordatorio programado 🔔', _C.success);
     } else {
@@ -834,6 +910,7 @@ $estadoLinea
         'montoQuePago': item.montoQuePago,
         'montoQueCobro': item.montoQueCobro,
         'telefono': item.telefono,
+        'correo': item.correo, // ← NUEVO en el update
         'estado': item.estado,
         'diasAvisoPrevio': item.diasAvisoPrevio,
         'notasExtra': item.notasExtra ?? '',
@@ -846,6 +923,8 @@ $estadoLinea
         diaVencimiento: item.diaVencimiento,
         diasAvisoPrevio: item.diasAvisoPrevio,
         montoQueCobro: item.montoQueCobro,
+        correo: item.correo,
+        lugar: item.lugar,
       );
       _snack('Registro actualizado ✓', _C.success);
     }
@@ -896,6 +975,7 @@ $estadoLinea
     final ctrlNombre = TextEditingController(text: editar?.nombreCliente ?? '');
     final ctrlLugar = TextEditingController(text: editar?.lugar ?? '');
     final ctrlTel = TextEditingController(text: editar?.telefono ?? '');
+    final ctrlCorreo = TextEditingController(text: editar?.correo ?? ''); // ← NUEVO
     final ctrlPago = TextEditingController(text: editar != null ? editar.montoQuePago.toStringAsFixed(0) : '');
     final ctrlCobro = TextEditingController(text: editar != null ? editar.montoQueCobro.toStringAsFixed(0) : '');
     final ctrlNotas = TextEditingController(text: editar?.notasExtra ?? '');
@@ -988,6 +1068,22 @@ $estadoLinea
                         keyboardType: TextInputType.phone,
                         inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                         validator: (v) => (v == null || v.length < 10) ? 'Mínimo 10 dígitos' : null),
+                    const SizedBox(height: 14),
+
+                    // ── CORREO STARLINK ─────────────────── ← NUEVO
+                    _ModalField(
+                        ctrl: ctrlCorreo,
+                        label: 'Correo Starlink del cliente',
+                        hint: 'Ej: cliente@gmail.com',
+                        icon: Icons.email_rounded,
+                        color: _C.accent,
+                        keyboardType: TextInputType.emailAddress,
+                        validator: (v) {
+                          if (v == null || v.trim().isEmpty) return null; // opcional
+                          final emailRegex = RegExp(r'^[^@]+@[^@]+\.[^@]+$');
+                          if (!emailRegex.hasMatch(v.trim())) return 'Correo no válido';
+                          return null;
+                        }),
                     const SizedBox(height: 14),
 
                     // Día vencimiento
@@ -1143,6 +1239,7 @@ $estadoLinea
                             montoQuePago: double.tryParse(ctrlPago.text) ?? 0,
                             montoQueCobro: double.tryParse(ctrlCobro.text) ?? 0,
                             telefono: ctrlTel.text.trim(),
+                            correo: ctrlCorreo.text.trim(), // ← NUEVO
                             estado: estado,
                             propietarioUid: _uid ?? '',
                             creadoEn: editar?.creadoEn ?? DateTime.now(),

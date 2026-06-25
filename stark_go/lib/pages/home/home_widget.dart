@@ -12,6 +12,8 @@ import 'package:stark_go/pages/tutorial/tutorial_widget.dart';
 import 'package:stark_go/pages/pppoe_clientes/pppoe_clientes_widget.dart';
 import '/pages/renovar_membresia/renovar_membresia_widget.dart';
 import 'package:stark_go/pages/lista_starlinks_clientes/lista_starlinks_clientes_widget.dart';
+import 'package:stark_go/widgets/consumo_widgets.dart';
+import 'package:stark_go/pages/reporte_consumo/reporte_consumo_widget.dart';
 
 import '/auth/firebase_auth/auth_util.dart';
 import '/backend/backend.dart';
@@ -414,6 +416,7 @@ class _ClientCard extends StatelessWidget {
                         ),
                       ]),
                     ],
+                    ConsumoBarCard(clienteId: cliente.reference.id),
                   ]),
                 ),
                 const SizedBox(width: 8),
@@ -1381,6 +1384,15 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                         onTap: () {
                           _toggleDrawer();
                           context.pushNamed(InformesWidget.routeName);
+                        },
+                      ),
+                      _DrawerItem(
+                        icon: Icons.data_usage_rounded,
+                        label: 'Reporte de Consumo',
+                        iconColor: _AppColors.accent,
+                        onTap: () {
+                          _toggleDrawer();
+                          context.pushNamed(ReporteConsumoWidget.routeName);
                         },
                       ),
                       _DrawerItem(

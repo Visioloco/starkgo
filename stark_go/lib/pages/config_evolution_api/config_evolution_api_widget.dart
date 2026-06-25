@@ -27,7 +27,7 @@ const String _kEvolutionApiKey = 'starkgo2024secretkey';
 const String _kFirebaseCollection = 'whatsapp_instances';
 
 // ─────────────────────────────────────────────────────────────
-//  Servicio de instancias (lógica multi-usuario aislada)
+//  Servicio de instancias
 // ─────────────────────────────────────────────────────────────
 class _EvolutionService {
   static Map<String, String> get _headers => {
@@ -35,11 +35,9 @@ class _EvolutionService {
         'apikey': _kEvolutionApiKey,
       };
 
-  /// Genera un nombre de instancia único y estable por usuario.
   static String instanceName(String uid) => 'user_${uid.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '').substring(0, 12).toLowerCase()}';
 
-  /// Devuelve el estado actual de la instancia en el servidor.
-  /// Retorna: 'open' | 'close' | 'connecting' | 'not_found'
+  /// Devuelve: 'open' | 'close' | 'connecting' | 'not_found'
   static Future<String> fetchState(String instName) async {
     try {
       final resp = await http
@@ -60,11 +58,20 @@ class _EvolutionService {
     }
   }
 
-  /// Crea la instancia en el servidor si no existe.
-  /// Si ya existe pero está cerrada, simplemente la reutiliza.
+  /// Siempre elimina y recrea la instancia salvo que esté 'open'.
+  /// Garantiza estado limpio antes de generar QR.
   static Future<void> ensureInstanceExists(String instName) async {
     final state = await fetchState(instName);
-    if (state != 'not_found') return; // ya existe, no recrear
+
+    // Si ya está abierta y funcionando, no tocar
+    if (state == 'open') return;
+
+    // En cualquier otro caso (close, connecting, zombie, not_found)
+    // eliminar para garantizar estado limpio
+    if (state != 'not_found') {
+      await deleteInstance(instName);
+      await Future.delayed(const Duration(seconds: 3));
+    }
 
     final resp = await http
         .post(
@@ -81,35 +88,45 @@ class _EvolutionService {
     if (resp.statusCode != 200 && resp.statusCode != 201) {
       throw Exception('Error creando instancia (${resp.statusCode}): ${resp.body}');
     }
+
+    // Esperar a que Baileys arranque completamente antes de pedir QR
+    await Future.delayed(const Duration(seconds: 4));
   }
 
   /// Obtiene el QR en base64 (sin prefijo data-uri).
   static Future<String> fetchQr(String instName) async {
-    for (int attempt = 0; attempt < 3; attempt++) {
-      if (attempt > 0) await Future.delayed(const Duration(seconds: 2));
+    for (int attempt = 0; attempt < 8; attempt++) {
+      if (attempt > 0) await Future.delayed(const Duration(seconds: 3));
 
-      final resp = await http
-          .get(
-            Uri.parse('$_kEvolutionBaseUrl/instance/connect/$instName'),
-            headers: _headers,
-          )
-          .timeout(const Duration(seconds: 10));
+      try {
+        final resp = await http
+            .get(
+              Uri.parse('$_kEvolutionBaseUrl/instance/connect/$instName'),
+              headers: _headers,
+            )
+            .timeout(const Duration(seconds: 12));
 
-      if (resp.statusCode != 200) continue;
+        if (resp.statusCode != 200) continue;
 
-      final data = jsonDecode(resp.body) as Map<String, dynamic>;
-      final raw = data['base64'] ?? data['qrcode']?['base64'] ?? (data['qrcode'] is String ? data['qrcode'] : null) ?? data['code'];
+        final data = jsonDecode(resp.body) as Map<String, dynamic>;
 
-      if (raw != null && raw.toString().isNotEmpty) {
-        return raw.toString().replaceAll('data:image/png;base64,', '');
+        final raw = data['base64'] ?? data['qrcode']?['base64'] ?? (data['qrcode'] is String ? data['qrcode'] : null) ?? data['code'];
+
+        if (raw == null || raw.toString().isEmpty) continue;
+        final str = raw.toString();
+        if (str == '0' || str.length < 100) continue;
+
+        // Limpiar prefijo data-uri si viene incluido
+        return str.startsWith('data:image') ? str.split(',').last : str;
+      } catch (_) {
+        continue;
       }
     }
-    throw Exception('QR no disponible después de 3 intentos');
+    throw Exception('QR no disponible después de 8 intentos');
   }
 
-  /// Cierra sesión de WhatsApp y elimina la instancia del servidor.
+  /// Cierra sesión y elimina la instancia del servidor.
   static Future<void> deleteInstance(String instName) async {
-    // Ignorar errores: si ya no existe, no importa
     await http
         .delete(
           Uri.parse('$_kEvolutionBaseUrl/instance/logout/$instName'),
@@ -118,7 +135,7 @@ class _EvolutionService {
         .timeout(const Duration(seconds: 8))
         .catchError((_) => http.Response('', 200));
 
-    await Future.delayed(const Duration(milliseconds: 500));
+    await Future.delayed(const Duration(milliseconds: 800));
 
     await http
         .delete(
@@ -194,7 +211,7 @@ class _ConfigEvolutionApiWidgetState extends State<ConfigEvolutionApiWidget> wit
     final data = doc.data();
     final saved = (data['instanceName'] ?? '') as String;
 
-    // Verificar estado real en el servidor (no confiar solo en Firestore)
+    // Verificar estado real en el servidor
     final realState = saved.isNotEmpty ? await _EvolutionService.fetchState(saved) : 'not_found';
 
     final isOpen = realState == 'open';
@@ -209,10 +226,10 @@ class _ConfigEvolutionApiWidgetState extends State<ConfigEvolutionApiWidget> wit
 
     // Sincronizar Firestore si el estado cambió
     if (!isOpen && (data['status'] == 'open' || data['status'] == 'connected')) {
-      await FirebaseFirestore.instance
-          .collection(_kFirebaseCollection)
-          .doc(doc.id)
-          .update({'status': realState, 'actualizadoEn': FieldValue.serverTimestamp()});
+      await FirebaseFirestore.instance.collection(_kFirebaseCollection).doc(doc.id).update({
+        'status': realState,
+        'actualizadoEn': FieldValue.serverTimestamp(),
+      });
     }
 
     if (_ctrlPhone.text.isEmpty && data['phone'] != null) {
@@ -236,10 +253,10 @@ class _ConfigEvolutionApiWidgetState extends State<ConfigEvolutionApiWidget> wit
     final instName = _EvolutionService.instanceName(_uid);
 
     try {
-      // 1. Asegurar que la instancia exista en el servidor
+      // 1. Eliminar si existe y recrear limpio (excepto si está open)
       await _EvolutionService.ensureInstanceExists(instName);
 
-      // 2. Si ya está abierta (otro dispositivo la conectó antes), ir directo
+      // 2. Verificar si ya quedó abierta
       final state = await _EvolutionService.fetchState(instName);
       if (state == 'open') {
         await _guardarEnFirebase(instName, phone, 'open');
@@ -669,7 +686,8 @@ class _ConfigEvolutionApiWidgetState extends State<ConfigEvolutionApiWidget> wit
         const SizedBox(height: 20),
         Text('Procesando...', style: GoogleFonts.dmSans(color: _C.textPri, fontSize: 15, fontWeight: FontWeight.w600)),
         const SizedBox(height: 6),
-        Text('Conectando con el servidor', style: GoogleFonts.dmSans(color: _C.textSec, fontSize: 12)),
+        Text('Eliminando instancia anterior y recreando...',
+            style: GoogleFonts.dmSans(color: _C.textSec, fontSize: 12), textAlign: TextAlign.center),
       ]),
     );
   }

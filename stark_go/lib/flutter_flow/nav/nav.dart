@@ -11,7 +11,7 @@ import 'package:stark_go/pages/planes/planes_widget.dart';
 import 'package:stark_go/pages/Crear_cuenta/crear_cuenta_widget.dart';
 import 'package:stark_go/pages/tutorial/tutorial_widget.dart';
 import 'package:stark_go/pages/registro/registro_widget.dart';
-
+import 'package:stark_go/pages/reporte_consumo/reporte_consumo_widget.dart';
 // ── NUEVA página Evolution API ✅ ─────────────────────────────────────────────
 import 'package:stark_go/pages/config_evolution_api/config_evolution_api_widget.dart';
 
@@ -271,6 +271,11 @@ GoRouter createRouter(AppStateNotifier appStateNotifier) => GoRouter(
               name: InformesWidget.routeName, // 'Informes'
               path: InformesWidget.routePath, // 'informes'
               builder: (context, params) => const InformesWidget(),
+            ),
+            FFRoute(
+              name: ReporteConsumoWidget.routeName,
+              path: ReporteConsumoWidget.routePath,
+              builder: (context, params) => const ReporteConsumoWidget(),
             ),
             FFRoute(
               name: RegistroWidget.routeName,

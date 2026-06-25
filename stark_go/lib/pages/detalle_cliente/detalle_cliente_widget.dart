@@ -1,6 +1,7 @@
 import 'package:stark_go/services/vps_service.dart';
 import 'package:stark_go/pages/config_evolution_api/config_evolution_api_widget.dart';
 import 'package:stark_go/pages/config_velocidades/config_velocidades_widget.dart';
+import 'package:stark_go/widgets/consumo_widgets.dart';
 
 import '/backend/backend.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
@@ -1013,6 +1014,10 @@ class _DetalleClienteWidgetState extends State<DetalleClienteWidget> {
                                       ))
                                 .animate()
                                 .fadeIn(duration: 300.ms, delay: 240.ms)
+                                .slideY(begin: 0.05, end: 0),
+                            ConsumoSection(clienteId: widget.rf!.id)
+                                .animate()
+                                .fadeIn(duration: 300.ms, delay: 280.ms)
                                 .slideY(begin: 0.05, end: 0),
                             _buildStatusSection(c, raw).animate().fadeIn(duration: 300.ms, delay: 300.ms).slideY(begin: 0.05, end: 0),
                             _buildEquiposSection(c, raw).animate().fadeIn(duration: 300.ms, delay: 360.ms).slideY(begin: 0.05, end: 0),
