@@ -3,7 +3,7 @@ import 'package:stark_go/pages/lista_equipos/lista_equipos_widget.dart';
 import 'package:stark_go/pages/lista_starlinks/lista_starlinks_widget.dart';
 import 'package:stark_go/pages/planes/planes_widget.dart';
 import 'package:stark_go/pages/config_evolution_api/config_evolution_api_widget.dart';
-import 'package:stark_go/pages/Crear_cuenta/crear_cuenta_widget.dart';
+import 'package:stark_go/pages/crear_cuenta/crear_cuenta_widget.dart';
 import 'package:stark_go/pages/config_facturacion/config_facturacion_widget.dart';
 import 'package:stark_go/pages/config_velocidades/config_velocidades_widget.dart';
 import 'package:stark_go/pages/informes/informes_widget.dart';
