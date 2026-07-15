@@ -1000,6 +1000,200 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
     return '\$ ${buffer.toString().split('').reversed.join('')}';
   }
 
+  // ──────────────────────────────────────────
+  //  MARCAR TODOS EN MORA (manual, un tap)
+  // ──────────────────────────────────────────
+  Future<void> _marcarTodosEnMora(List<ClientesRecord> allClients) async {
+    final base = _selectedStarlinkId != null ? allClients.where((c) => c.starlinkId == _selectedStarlinkId) : allClients;
+    final clientesActivos = base.where((c) => c.status == 'activo').toList();
+
+    if (clientesActivos.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No hay clientes activos para marcar en mora.')),
+      );
+      return;
+    }
+
+    final ok = await showDialog<bool>(
+          context: context,
+          builder: (_) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: Row(children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(color: _AppColors.danger.withOpacity(0.1), shape: BoxShape.circle),
+                child: Icon(Icons.warning_amber_rounded, color: _AppColors.danger, size: 22),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text('Marcar en mora', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w700, fontSize: 15)),
+              ),
+            ]),
+            content: Text(
+              '¿Marcar ${clientesActivos.length} cliente${clientesActivos.length != 1 ? 's' : ''} '
+              'activo${clientesActivos.length != 1 ? 's' : ''} como EN MORA?\n\n'
+              'Solo cambia su color a rojo. NO se corta el internet de nadie.',
+              style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 13, height: 1.5),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: Text('Cancelar', style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _AppColors.danger,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                onPressed: () => Navigator.pop(context, true),
+                child: Text('Sí, marcar todos', style: GoogleFonts.spaceGrotesk(color: Colors.white, fontWeight: FontWeight.w600)),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!ok || !mounted) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => Center(
+        child: Container(
+          padding: const EdgeInsets.all(28),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            CircularProgressIndicator(color: _AppColors.danger, strokeWidth: 2.5),
+            const SizedBox(height: 14),
+            Text('Actualizando estados…', style: GoogleFonts.spaceGrotesk(color: _AppColors.textPri, fontSize: 14)),
+          ]),
+        ),
+      ),
+    );
+
+    try {
+      const chunkSize = 450; // límite real de batch es 500
+      for (var i = 0; i < clientesActivos.length; i += chunkSize) {
+        final chunk = clientesActivos.skip(i).take(chunkSize);
+        final batch = FirebaseFirestore.instance.batch();
+        for (final c in chunk) {
+          batch.update(c.reference, {
+            'status': 'mora',
+            'moraDesde': DateTime.now(),
+          });
+        }
+        await batch.commit();
+      }
+
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${clientesActivos.length} clientes marcados en mora.')),
+        );
+      }
+    } catch (e) {
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+      _showErrorDialog('Error al actualizar', 'No se pudo marcar a los clientes en mora.\n\nDetalle: $e');
+    }
+  }
+
+  // ──────────────────────────────────────────
+  //  MARCAR TODOS EN ACTIVO (deshacer mora masiva)
+  // ──────────────────────────────────────────
+  Future<void> _marcarTodosActivos(List<ClientesRecord> allClients) async {
+    final base = _selectedStarlinkId != null ? allClients.where((c) => c.starlinkId == _selectedStarlinkId) : allClients;
+    final clientesEnMora = base.where((c) => c.status == 'mora').toList();
+
+    if (clientesEnMora.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No hay clientes en mora para reactivar.')),
+      );
+      return;
+    }
+
+    final ok = await showDialog<bool>(
+          context: context,
+          builder: (_) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: Row(children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(color: _AppColors.success.withOpacity(0.1), shape: BoxShape.circle),
+                child: Icon(Icons.check_circle_outline_rounded, color: _AppColors.success, size: 22),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text('Marcar en activo', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w700, fontSize: 15)),
+              ),
+            ]),
+            content: Text(
+              '¿Marcar ${clientesEnMora.length} cliente${clientesEnMora.length != 1 ? 's' : ''} '
+              'en mora como ACTIVO?\n\n'
+              'Úsalo solo si marcaste en mora por error. NO reconecta el internet de nadie.',
+              style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 13, height: 1.5),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: Text('Cancelar', style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _AppColors.success,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                onPressed: () => Navigator.pop(context, true),
+                child: Text('Sí, reactivar todos', style: GoogleFonts.spaceGrotesk(color: Colors.white, fontWeight: FontWeight.w600)),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!ok || !mounted) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => Center(
+        child: Container(
+          padding: const EdgeInsets.all(28),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            CircularProgressIndicator(color: _AppColors.success, strokeWidth: 2.5),
+            const SizedBox(height: 14),
+            Text('Actualizando estados…', style: GoogleFonts.spaceGrotesk(color: _AppColors.textPri, fontSize: 14)),
+          ]),
+        ),
+      ),
+    );
+
+    try {
+      const chunkSize = 450;
+      for (var i = 0; i < clientesEnMora.length; i += chunkSize) {
+        final chunk = clientesEnMora.skip(i).take(chunkSize);
+        final batch = FirebaseFirestore.instance.batch();
+        for (final c in chunk) {
+          batch.update(c.reference, {
+            'status': 'activo',
+            'moraDesde': FieldValue.delete(),
+          });
+        }
+        await batch.commit();
+      }
+
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${clientesEnMora.length} clientes reactivados.')),
+        );
+      }
+    } catch (e) {
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+      _showErrorDialog('Error al actualizar', 'No se pudo reactivar a los clientes.\n\nDetalle: $e');
+    }
+  }
+
   // ── Dialogs ──────────────────────────────────
   void _showFechaNoConfiguradaDialog() {
     showDialog(
@@ -1387,15 +1581,6 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                         },
                       ),
                       _DrawerItem(
-                        icon: Icons.data_usage_rounded,
-                        label: 'Reporte de Consumo',
-                        iconColor: _AppColors.accent,
-                        onTap: () {
-                          _toggleDrawer();
-                          context.pushNamed(ReporteConsumoWidget.routeName);
-                        },
-                      ),
-                      _DrawerItem(
                         icon: Icons.play_circle_rounded,
                         label: 'Tutorial',
                         iconColor: const Color(0xFFFF6B35),
@@ -1503,7 +1688,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
       color: _AppColors.surfaceDim,
       child: SafeArea(
         child: Column(children: [
-          _buildTopBar(context),
+          _buildTopBar(context, allClients),
           const SizedBox(height: 4),
           if (_facturacionCargada && _diaVencimiento == 0) _buildFechaAlertBanner(),
           _buildStatsRow(filteredClients.length, activoCount, moraCount, inactivoCount),
@@ -1712,7 +1897,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
     );
   }
 
-  Widget _buildTopBar(BuildContext context) {
+  Widget _buildTopBar(BuildContext context, List<ClientesRecord> allClients) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
       child: Row(children: [
@@ -1766,6 +1951,34 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
               },
             ),
           ]),
+        ),
+        // ── BOTÓN: Marcar todos en mora (manual) ──
+        GestureDetector(
+          onTap: () => _marcarTodosEnMora(allClients),
+          child: Container(
+            margin: const EdgeInsets.only(right: 8),
+            padding: const EdgeInsets.all(11),
+            decoration: BoxDecoration(
+              color: _AppColors.danger.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _AppColors.danger.withOpacity(0.3)),
+            ),
+            child: const Icon(Icons.warning_amber_rounded, color: _AppColors.danger, size: 20),
+          ),
+        ),
+        // ── BOTÓN: Marcar todos en activo (deshacer) ──
+        GestureDetector(
+          onTap: () => _marcarTodosActivos(allClients),
+          child: Container(
+            margin: const EdgeInsets.only(right: 8),
+            padding: const EdgeInsets.all(11),
+            decoration: BoxDecoration(
+              color: _AppColors.success.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _AppColors.success.withOpacity(0.3)),
+            ),
+            child: const Icon(Icons.check_circle_outline_rounded, color: _AppColors.success, size: 20),
+          ),
         ),
         GestureDetector(
           onTap: () => context.pushNamed(CrearUsuarioWidget.routeName),
