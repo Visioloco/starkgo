@@ -8,9 +8,9 @@ import 'package:stark_go/pages/ConfigMikroTik/config_mikro_tik_widget.dart';
 import 'package:stark_go/pages/lista_equipos/lista_equipos_widget.dart';
 import 'package:stark_go/pages/lista_starlinks/lista_starlinks_widget.dart';
 import 'package:stark_go/pages/planes/planes_widget.dart';
-import 'package:stark_go/pages/Crear_cuenta/crear_cuenta_widget.dart';
+import 'package:stark_go/pages/crear_cuenta/crear_cuenta_widget.dart';
 import 'package:stark_go/pages/tutorial/tutorial_widget.dart';
-import 'package:stark_go/pages/registro/registro_widget.dart';
+import 'package:stark_go/pages/Registro/registro_widget.dart';
 import 'package:stark_go/pages/reporte_consumo/reporte_consumo_widget.dart';
 // ── NUEVA página Evolution API ✅ ─────────────────────────────────────────────
 import 'package:stark_go/pages/config_evolution_api/config_evolution_api_widget.dart';
