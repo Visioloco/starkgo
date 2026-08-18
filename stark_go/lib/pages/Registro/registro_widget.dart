@@ -256,6 +256,128 @@ class _RegistroWidgetState extends State<RegistroWidget> with SingleTickerProvid
     }
   }
 
+  // ── Registrarse con Google ──
+  Future<void> _signInWithGoogle() async {
+    setState(() => _isLoading = true);
+    try {
+      GoRouter.of(context).prepareAuthEvent();
+      final user = await authManager.signInWithGoogle(context);
+      if (user == null) return;
+
+      if (!mounted) return;
+      SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.dark,
+        statusBarBrightness: Brightness.light,
+      ));
+
+      // Verificar si el usuario ya existe en Firestore
+      final uid = user.uid;
+      final email = user.email ?? '';
+      var doc = await FirebaseFirestore.instance.collection('user').doc(uid).get();
+
+      // ── Si no existe con el uid de Google, buscar por email ──
+      // Esto ocurre cuando la cuenta fue creada con email/contraseña
+      // y luego se intenta entrar con Google (que genera un uid distinto).
+      if (!doc.exists && email.isNotEmpty) {
+        final query = await FirebaseFirestore.instance.collection('user').where('email', isEqualTo: email).limit(1).get();
+
+        if (query.docs.isNotEmpty) {
+          final existingDoc = query.docs.first;
+          final existingUid = existingDoc.id;
+
+          // Vincular la cuenta existente al nuevo uid de Google
+          // (copiar el documento al nuevo uid y eliminar el antiguo)
+          final existingData = existingDoc.data();
+          await FirebaseFirestore.instance.collection('user').doc(uid).set({
+            ...existingData,
+            'uid': uid,
+            'email': email,
+          }, SetOptions(merge: true));
+
+          // Eliminar el documento antiguo para evitar duplicados
+          if (existingUid != uid) {
+            await FirebaseFirestore.instance.collection('user').doc(existingUid).delete();
+          }
+
+          // Recargar el documento con el nuevo uid
+          doc = await FirebaseFirestore.instance.collection('user').doc(uid).get();
+        }
+      }
+
+      if (!doc.exists) {
+        // Usuario nuevo → crear documento y enviar a elegir membresía
+        final partesNombre = (user.displayName ?? '').trim().split(' ');
+        final nombre = partesNombre.isNotEmpty ? partesNombre.first : '';
+        final apellido = partesNombre.length > 1 ? partesNombre.sublist(1).join(' ') : '';
+
+        await FirebaseFirestore.instance.collection('user').doc(uid).set({
+          'uid': uid,
+          'email': email,
+          'nombre': nombre,
+          'apellido': apellido,
+          'telefono': '',
+          'activo': false,
+          'rol': 'operador',
+          'planMembresia': '',
+          'mesesMembresia': 0,
+          'fechaVencimiento': Timestamp.fromDate(
+            DateTime.now().subtract(const Duration(days: 1)),
+          ),
+          'created_time': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+
+        if (mounted) {
+          context.pushNamed(ActivarMembresiaWidget.routeName);
+        }
+        return;
+      }
+
+      // Usuario existente → verificar membresía
+      final data = doc.data()!;
+
+      final ts = data['fechaVencimiento'] as Timestamp?;
+      final activo = data['activo'] ?? false;
+
+      if (ts != null && DateTime.now().isAfter(ts.toDate())) {
+        // Membresía vencida → renovar
+        if (mounted) {
+          context.goNamed('RenovarMembresia');
+        }
+      } else if (activo == true) {
+        // Membresía activa → Home
+        if (mounted) {
+          context.goNamedAuth(HomeWidget.routeName, context.mounted);
+        }
+      } else {
+        // Sin membresía activa → elegir membresía
+        if (mounted) {
+          context.pushNamed(ActivarMembresiaWidget.routeName);
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Row(children: [
+            const Icon(Icons.error_rounded, color: Colors.white, size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'No se pudo iniciar sesión con Google',
+                style: GoogleFonts.spaceGrotesk(color: Colors.white),
+              ),
+            ),
+          ]),
+          backgroundColor: const Color(0xFF0F172A),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ));
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
@@ -393,10 +515,27 @@ class _RegistroWidgetState extends State<RegistroWidget> with SingleTickerProvid
                         .fadeIn(duration: 400.ms, delay: 380.ms)
                         .slideY(begin: 0.05, end: 0, duration: 400.ms, delay: 380.ms),
 
+                    const SizedBox(height: 18),
+
+                    // ── Separador "o" ──
+                    Row(children: [
+                      Expanded(child: Divider(color: _C.border, thickness: 1)),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: Text('o', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 12)),
+                      ),
+                      Expanded(child: Divider(color: _C.border, thickness: 1)),
+                    ]).animate().fadeIn(duration: 400.ms, delay: 420.ms),
+
+                    const SizedBox(height: 18),
+
+                    // ── Botón Continuar con Google ──
+                    _buildGoogleButton().animate().fadeIn(duration: 400.ms, delay: 440.ms),
+
                     const SizedBox(height: 20),
 
                     // ── Ir a login ──
-                    _buildLoginLink().animate().fadeIn(duration: 400.ms, delay: 440.ms),
+                    _buildLoginLink().animate().fadeIn(duration: 400.ms, delay: 480.ms),
                   ]),
                 ),
               ),
@@ -594,6 +733,68 @@ class _RegistroWidgetState extends State<RegistroWidget> with SingleTickerProvid
     );
   }
 
+  // ── Botón Continuar con Google ──
+  Widget _buildGoogleButton() {
+    return SizedBox(
+      width: double.infinity,
+      height: 54,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: _isLoading ? null : _signInWithGoogle,
+          borderRadius: BorderRadius.circular(16),
+          splashColor: _C.primary.withOpacity(0.08),
+          child: Ink(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: _C.border, width: 1.2),
+              boxShadow: [
+                BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 12, offset: const Offset(0, 4)),
+              ],
+            ),
+            child: Center(
+              child: _isLoading
+                  ? SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2.2, valueColor: AlwaysStoppedAnimation(_C.primary)),
+                    )
+                  : Row(mainAxisSize: MainAxisSize.min, children: [
+                      // Logo real de Google (G multicolor)
+                      SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: Stack(alignment: Alignment.center, children: [
+                          // Fondo blanco
+                          Container(
+                            width: 22,
+                            height: 22,
+                            decoration: const BoxDecoration(
+                              color: Colors.white,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          // G multicolor (4 colores del logo de Google)
+                          CustomPaint(
+                            size: const Size(22, 22),
+                            painter: _GoogleLogoPainter(),
+                          ),
+                        ]),
+                      ),
+                      const SizedBox(width: 12),
+                      Text(
+                        'Continuar con Google',
+                        style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 15, fontWeight: FontWeight.w600),
+                      ),
+                    ]),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildLoginLink() {
     return Row(mainAxisAlignment: MainAxisAlignment.center, children: [
       Text('¿Ya tienes cuenta? ', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 13)),
@@ -610,4 +811,101 @@ class _RegistroWidgetState extends State<RegistroWidget> with SingleTickerProvid
       ),
     ]);
   }
+}
+
+// ─────────────────────────────────────────
+//  PAINTER: LOGO REAL DE GOOGLE (G multicolor)
+// ─────────────────────────────────────────
+class _GoogleLogoPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+    final center = Offset(w / 2, h / 2);
+    final r = w / 2;
+
+    // Colores oficiales de Google
+    const blue = Color(0xFF4285F4);
+    const red = Color(0xFFEA4335);
+    const yellow = Color(0xFFFBBC05);
+    const green = Color(0xFF34A853);
+
+    // ── G azul (parte superior izquierda) ──
+    final bluePaint = Paint()
+      ..color = blue
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = w * 0.16
+      ..strokeCap = StrokeCap.round;
+
+    // Arco superior (azul)
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: r * 0.62),
+      -0.35 * 3.14159, // ~ -63°
+      1.9 * 3.14159, // ~ 342°
+      false,
+      bluePaint,
+    );
+
+    // ── G rojo (parte inferior izquierda) ──
+    final redPaint = Paint()
+      ..color = red
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = w * 0.16
+      ..strokeCap = StrokeCap.round;
+
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: r * 0.62),
+      1.55 * 3.14159, // ~ 279°
+      0.9 * 3.14159, // ~ 162°
+      false,
+      redPaint,
+    );
+
+    // ── G amarillo (parte inferior derecha) ──
+    final yellowPaint = Paint()
+      ..color = yellow
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = w * 0.16
+      ..strokeCap = StrokeCap.round;
+
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: r * 0.62),
+      2.45 * 3.14159, // ~ 441°
+      0.9 * 3.14159, // ~ 162°
+      false,
+      yellowPaint,
+    );
+
+    // ── G verde (parte superior derecha) ──
+    final greenPaint = Paint()
+      ..color = green
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = w * 0.16
+      ..strokeCap = StrokeCap.round;
+
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: r * 0.62),
+      3.35 * 3.14159, // ~ 603°
+      0.9 * 3.14159, // ~ 162°
+      false,
+      greenPaint,
+    );
+
+    // ── Barra horizontal (verde) ──
+    canvas.drawLine(
+      Offset(center.dx + r * 0.15, center.dy),
+      Offset(center.dx + r * 0.62, center.dy),
+      greenPaint,
+    );
+
+    // ── Barra vertical (azul) ──
+    canvas.drawLine(
+      Offset(center.dx, center.dy - r * 0.15),
+      Offset(center.dx, center.dy - r * 0.62),
+      bluePaint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

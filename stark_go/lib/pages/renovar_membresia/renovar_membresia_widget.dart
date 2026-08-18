@@ -134,6 +134,8 @@ class _RenovarMembresiaWidgetState extends State<RenovarMembresiaWidget> with Ti
             body: jsonEncode({
               'planId': _planSel!.id,
               'nombre': _nombreUsuario,
+              'tipo': _planSel!.tipo.name, // 'completo' | 'vouchers'
+              'meses': _planSel!.meses,
             }),
           )
           .timeout(const Duration(seconds: 15));
@@ -477,6 +479,82 @@ class _RenovarMembresiaWidgetState extends State<RenovarMembresiaWidget> with Ti
         itemCount: kPlanes.length,
         itemBuilder: (_, i) {
           final planItem = kPlanes[i];
+          final sel = _planSel?.id == planItem.id;
+          return _PlanCard(
+            plan: planItem,
+            selected: sel,
+            onTap: () => _seleccionarPlan(planItem),
+          ).animate(target: sel ? 1 : 0).scaleXY(begin: 1.0, end: 1.02, duration: 200.ms, curve: Curves.easeOut);
+        },
+      ),
+
+      // ── Separador ──
+      const SizedBox(height: 22),
+
+      // ── Sección "Solo Vouchers" ──
+      _buildSeccionVouchers(),
+    ]);
+  }
+
+  // ── Sección "Solo Vouchers" ──
+  Widget _buildSeccionVouchers() {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      // Encabezado de la sección
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFF0EA5E9), Color(0xFF06B6D4)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(color: const Color(0xFF0EA5E9).withOpacity(0.3), blurRadius: 16, offset: const Offset(0, 6)),
+          ],
+        ),
+        child: Row(children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(Icons.vpn_key_rounded, color: Colors.white, size: 20),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Solo Vouchers', style: GoogleFonts.dmSans(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 2),
+              Text('Acceso solo al módulo MikroTik Local', style: GoogleFonts.dmSans(color: Colors.white70, fontSize: 11)),
+            ]),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text('Económico', style: GoogleFonts.dmSans(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700)),
+          ),
+        ]),
+      ),
+      const SizedBox(height: 12),
+      GridView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2,
+          crossAxisSpacing: 10,
+          mainAxisSpacing: 10,
+          childAspectRatio: 1.35,
+        ),
+        itemCount: kPlanesVouchers.length,
+        itemBuilder: (_, i) {
+          final planItem = kPlanesVouchers[i];
           final sel = _planSel?.id == planItem.id;
           return _PlanCard(
             plan: planItem,

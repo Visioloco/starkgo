@@ -11,9 +11,11 @@ import 'package:stark_go/pages/lista_operadores/lista_operadores_widget.dart';
 import 'package:stark_go/pages/tutorial/tutorial_widget.dart';
 import 'package:stark_go/pages/pppoe_clientes/pppoe_clientes_widget.dart';
 import '/pages/renovar_membresia/renovar_membresia_widget.dart';
+import 'package:stark_go/pages/activar_membresia/activar_membresia_widget.dart';
 import 'package:stark_go/pages/lista_starlinks_clientes/lista_starlinks_clientes_widget.dart';
 import 'package:stark_go/widgets/consumo_widgets.dart';
 import 'package:stark_go/pages/reporte_consumo/reporte_consumo_widget.dart';
+import 'package:stark_go/pages/completar_perfil/completar_perfil_widget.dart';
 
 // ✅ CONEXIÓN LOCAL MIKROTIK
 import 'package:stark_go/pages/config_mikrotik_local/conectar_mikrotik_local_widget.dart';
@@ -36,6 +38,7 @@ import 'package:provider/provider.dart';
 import 'package:text_search/text_search.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
 import 'dart:convert';
 import 'home_model.dart';
 export 'home_model.dart';
@@ -647,6 +650,9 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
 
   bool _esAdmin = false;
 
+  // ── Tipo de plan del usuario: 'completo' | 'vouchers' ──
+  String _tipoPlanUsuario = 'completo';
+
   // ── Facturación ──────────────────────────────
   int _diaVencimiento = 0;
   int _diasAviso = 1;
@@ -709,7 +715,68 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
     if (_uid.isEmpty) return;
     try {
       final doc = await FirebaseFirestore.instance.collection('user').doc(_uid).get();
-      final ts = doc.data()?['fechaVencimiento'] as Timestamp?;
+      final data = doc.data();
+      if (data == null) return;
+
+      // ── Cargar tipo de plan del usuario ──
+      // El VPS guarda el campo `plan` como { tipo: 'completo'|'vouchers', ... }.
+      // Lógica ESTRICTA: solo pueden navegar los que tengan una membresía válida.
+      //   1. Si `plan.tipo` existe y es 'vouchers' → vouchers.
+      //   2. Si `plan.tipo` existe y es 'completo' → completo.
+      //   3. Si `plan.tipo` NO existe pero `planMembresia` es uno de los planes
+      //      válidos (1m, 3m, 6m, 1a, v1m, v3m, v6m, v1a) → se infiere el tipo.
+      //   4. Cualquier otro caso (sin plan, planMembresia vacío o desconocido)
+      //      → NO se permite navegar, se redirige a Activar Membresía.
+      String tipo = '';
+      final planMap = data['plan'];
+      final planMembresia = (data['planMembresia'] ?? '').toString().toLowerCase();
+
+      // Planes válidos de acceso completo
+      const planesCompletos = {'1m', '3m', '6m', '1a'};
+      // Planes válidos de solo vouchers
+      const planesVouchers = {'v1m', 'v3m', 'v6m', 'v1a'};
+
+      if (planMap is Map) {
+        final tipoRaw = (planMap['tipo'] ?? '').toString().toLowerCase();
+        if (tipoRaw == 'vouchers') {
+          tipo = 'vouchers';
+        } else if (tipoRaw == 'completo') {
+          tipo = 'completo';
+        } else if (planesVouchers.contains(planMembresia)) {
+          // plan.tipo desconocido pero planMembresia es de vouchers
+          tipo = 'vouchers';
+        } else if (planesCompletos.contains(planMembresia)) {
+          // plan.tipo desconocido pero planMembresia es de acceso completo
+          tipo = 'completo';
+        } else {
+          // plan.tipo desconocido y planMembresia no coincide → SIN MEMBRESÍA
+          tipo = '';
+        }
+      } else if (planesVouchers.contains(planMembresia)) {
+        // Sin campo `plan` (usuarios existentes) pero planMembresia es vouchers
+        tipo = 'vouchers';
+      } else if (planesCompletos.contains(planMembresia)) {
+        // Sin campo `plan` (usuarios existentes) pero planMembresia es completo
+        tipo = 'completo';
+      } else {
+        // Sin campo `plan` y planMembresia vacío o desconocido → SIN MEMBRESÍA
+        tipo = '';
+      }
+
+      // ── Si NO tiene membresía válida → redirigir a Activar Membresía ──
+      if (tipo.isEmpty) {
+        if (mounted) {
+          context.goNamed(ActivarMembresiaWidget.routeName);
+        }
+        return;
+      }
+
+      if (mounted && tipo != _tipoPlanUsuario) {
+        setState(() => _tipoPlanUsuario = tipo);
+      }
+
+      // ── Verificar vencimiento ──
+      final ts = data['fechaVencimiento'] as Timestamp?;
       if (ts != null && DateTime.now().isAfter(ts.toDate())) {
         if (mounted) {
           context.goNamed(RenovarMembresiaWidget.routeName);
@@ -1009,6 +1076,33 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
       if (mounted) Navigator.of(context, rootNavigator: true).pop();
       if (!mounted) return;
       _showErrorDialog('Error de red', 'No se pudo conectar con Evolution API.\n\nDetalle: $e');
+    }
+  }
+
+  // ──────────────────────────────────────────
+  //  SOPORTE WHATSAPP (plan Solo Vouchers)
+  // ──────────────────────────────────────────
+  Future<void> _abrirSoporteWhatsApp() async {
+    const numero = '573137756497';
+    const mensaje = 'Hola Fabián, necesito soporte para crear vouchers en StarkGo. '
+        '¿Me puedes ayudar, por favor?';
+    final uri = Uri.parse('https://wa.me/$numero?text=${Uri.encodeComponent(mensaje)}');
+    try {
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No se pudo abrir WhatsApp.')),
+          );
+        }
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No se pudo abrir WhatsApp.')),
+        );
+      }
     }
   }
 
@@ -1488,6 +1582,21 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
           child: Scaffold(
             key: scaffoldKey,
             backgroundColor: _AppColors.surfaceDim,
+            // ── Botón flotante de soporte (solo plan Solo Vouchers) ──
+            floatingActionButton: _tipoPlanUsuario == 'vouchers'
+                ? FloatingActionButton.extended(
+                    onPressed: _abrirSoporteWhatsApp,
+                    backgroundColor: _AppColors.whatsapp,
+                    foregroundColor: Colors.white,
+                    elevation: 6,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                    icon: const Icon(FontAwesomeIcons.whatsapp, size: 20),
+                    label: Text(
+                      'Soporte',
+                      style: GoogleFonts.spaceGrotesk(fontSize: 14, fontWeight: FontWeight.w700),
+                    ),
+                  )
+                : null,
             body: Stack(children: [
               _buildDrawer(context, allClients),
               AnimatedBuilder(
@@ -1564,97 +1673,100 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const _DrawerSectionHeader(title: 'Principal'),
-                      _DrawerItem(icon: Icons.dashboard_rounded, label: 'Inicio', active: true, onTap: _toggleDrawer),
-                      _DrawerItem(
-                        icon: Icons.people_alt_rounded,
-                        label: 'Clientes',
-                        onTap: () {
-                          _toggleDrawer();
-                          context.pushNamed(ListaclientesWidget.routeName);
-                        },
-                      ),
-                      _DrawerItem(
-                        icon: Icons.add_card_rounded,
-                        label: 'Planes',
-                        onTap: () {
-                          _toggleDrawer();
-                          context.pushNamed(PlanesWidget.routeName);
-                        },
-                      ),
-                      _DrawerItem(
-                        icon: Icons.cable_rounded,
-                        label: 'Clientes PPPoE',
-                        iconColor: Color(0xFF0EA5E9),
-                        onTap: () {
-                          _toggleDrawer();
-                          context.pushNamed(PppoeClientesWidget.routeName);
-                        },
-                      ),
-                      _DrawerItem(
-                        icon: Icons.router_rounded,
-                        label: 'Equipos',
-                        onTap: () {
-                          _toggleDrawer();
-                          context.pushNamed(ListaEquiposWidget.routeName);
-                        },
-                      ),
-                      _DrawerItem(
-                        icon: Icons.satellite_alt_rounded,
-                        label: 'Starlinks',
-                        onTap: () {
-                          _toggleDrawer();
-                          context.pushNamed(ListaStarlinksWidget.routeName);
-                        },
-                      ),
-                      _DrawerItem(
-                        icon: Icons.satellite_alt_rounded,
-                        label: 'Mis Starlinks · Cobros',
-                        iconColor: _AppColors.success,
-                        onTap: () {
-                          _toggleDrawer();
-                          context.pushNamed(ListaStarlinksClientesWidget.routeName);
-                        },
-                      ),
-                      _DrawerItem(
-                        icon: Icons.bar_chart_rounded,
-                        label: 'Informes',
-                        onTap: () {
-                          _toggleDrawer();
-                          context.pushNamed(InformesWidget.routeName);
-                        },
-                      ),
-                      _DrawerItem(
-                        icon: Icons.play_circle_rounded,
-                        label: 'Tutorial',
-                        iconColor: const Color(0xFFFF6B35),
-                        onTap: () {
-                          _toggleDrawer();
-                          context.pushNamed(TutorialWidget.routeName);
-                        },
-                      ),
-                      if (_esAdmin) ...[
-                        const _DrawerSectionHeader(title: 'Administración'),
+                      // ── Plan "Solo Vouchers": solo se muestra el módulo MikroTik ──
+                      if (_tipoPlanUsuario != 'vouchers') ...[
+                        const _DrawerSectionHeader(title: 'Principal'),
+                        _DrawerItem(icon: Icons.dashboard_rounded, label: 'Inicio', active: true, onTap: _toggleDrawer),
                         _DrawerItem(
-                          icon: Icons.person_add_rounded,
-                          label: 'Crear operador',
-                          iconColor: _AppColors.purple,
-                          badge: 'Admin',
+                          icon: Icons.people_alt_rounded,
+                          label: 'Clientes',
                           onTap: () {
                             _toggleDrawer();
-                            context.pushNamed(CrearCuentaWidget.routeName);
+                            context.pushNamed(ListaclientesWidget.routeName);
                           },
                         ),
                         _DrawerItem(
-                          icon: Icons.people_rounded,
-                          label: 'Lista operadores',
-                          iconColor: _AppColors.purple,
-                          badge: 'Admin',
+                          icon: Icons.add_card_rounded,
+                          label: 'Planes',
                           onTap: () {
                             _toggleDrawer();
-                            context.pushNamed(ListaOperadoresWidget.routeName);
+                            context.pushNamed(PlanesWidget.routeName);
                           },
                         ),
+                        _DrawerItem(
+                          icon: Icons.cable_rounded,
+                          label: 'Clientes PPPoE',
+                          iconColor: Color(0xFF0EA5E9),
+                          onTap: () {
+                            _toggleDrawer();
+                            context.pushNamed(PppoeClientesWidget.routeName);
+                          },
+                        ),
+                        _DrawerItem(
+                          icon: Icons.router_rounded,
+                          label: 'Equipos',
+                          onTap: () {
+                            _toggleDrawer();
+                            context.pushNamed(ListaEquiposWidget.routeName);
+                          },
+                        ),
+                        _DrawerItem(
+                          icon: Icons.satellite_alt_rounded,
+                          label: 'Starlinks',
+                          onTap: () {
+                            _toggleDrawer();
+                            context.pushNamed(ListaStarlinksWidget.routeName);
+                          },
+                        ),
+                        _DrawerItem(
+                          icon: Icons.satellite_alt_rounded,
+                          label: 'Mis Starlinks · Cobros',
+                          iconColor: _AppColors.success,
+                          onTap: () {
+                            _toggleDrawer();
+                            context.pushNamed(ListaStarlinksClientesWidget.routeName);
+                          },
+                        ),
+                        _DrawerItem(
+                          icon: Icons.bar_chart_rounded,
+                          label: 'Informes',
+                          onTap: () {
+                            _toggleDrawer();
+                            context.pushNamed(InformesWidget.routeName);
+                          },
+                        ),
+                        _DrawerItem(
+                          icon: Icons.play_circle_rounded,
+                          label: 'Tutorial',
+                          iconColor: const Color(0xFFFF6B35),
+                          onTap: () {
+                            _toggleDrawer();
+                            context.pushNamed(TutorialWidget.routeName);
+                          },
+                        ),
+                        if (_esAdmin) ...[
+                          const _DrawerSectionHeader(title: 'Administración'),
+                          _DrawerItem(
+                            icon: Icons.person_add_rounded,
+                            label: 'Crear operador',
+                            iconColor: _AppColors.purple,
+                            badge: 'Admin',
+                            onTap: () {
+                              _toggleDrawer();
+                              context.pushNamed(CrearCuentaWidget.routeName);
+                            },
+                          ),
+                          _DrawerItem(
+                            icon: Icons.people_rounded,
+                            label: 'Lista operadores',
+                            iconColor: _AppColors.purple,
+                            badge: 'Admin',
+                            onTap: () {
+                              _toggleDrawer();
+                              context.pushNamed(ListaOperadoresWidget.routeName);
+                            },
+                          ),
+                        ],
                       ],
                       const _DrawerSectionHeader(title: 'MikroTik'),
                       // ✅ Conexión Local - CORRECTO (usa Navigator.push)
@@ -1687,45 +1799,62 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                           }
                         },
                       ),
-                      // ✅ Configuración VPS
+                      // ✅ Solo plan completo: Configuración VPS, Velocidades, WhatsApp, Facturación
+                      if (_tipoPlanUsuario != 'vouchers') ...[
+                        // ✅ Configuración VPS
+                        _DrawerItem(
+                          icon: Icons.router_outlined,
+                          label: 'Config. MikroTik VPS',
+                          iconColor: _AppColors.purple,
+                          onTap: () {
+                            _toggleDrawer();
+                            context.pushNamed(ConfigMikroTikWidget.routeName);
+                          },
+                        ),
+                        // ✅ Velocidades MikroTik
+                        _DrawerItem(
+                          icon: Icons.speed_rounded,
+                          label: 'Velocidades MikroTik',
+                          iconColor: _AppColors.accent,
+                          onTap: () {
+                            _toggleDrawer();
+                            context.pushNamed(ConfigVelocidadesWidget.routeName);
+                          },
+                        ),
+                        const _DrawerSectionHeader(title: 'Configuración'),
+                        _DrawerItem(
+                          icon: Icons.chat_rounded,
+                          label: 'WhatsApp · Evolution',
+                          iconColor: _AppColors.whatsapp,
+                          onTap: () {
+                            _toggleDrawer();
+                            context.pushNamed(ConfigEvolutionApiWidget.routeName);
+                          },
+                        ),
+                        _DrawerItem(
+                          icon: Icons.calendar_month_rounded,
+                          label: 'Facturación & Mensajes',
+                          iconColor: _AppColors.primary,
+                          badge: _facturacionCargada && _diaVencimiento == 0 ? '⚠️' : null,
+                          onTap: () async {
+                            _toggleDrawer();
+                            await context.pushNamed(ConfigFacturacionWidget.routeName);
+                            _cargarConfigFacturacion();
+                          },
+                        ),
+                      ],
+                      // ✅ Mi Perfil - disponible para todos los planes
+                      const _DrawerSectionHeader(title: 'Cuenta'),
                       _DrawerItem(
-                        icon: Icons.router_outlined,
-                        label: 'Config. MikroTik VPS',
-                        iconColor: _AppColors.purple,
-                        onTap: () {
-                          _toggleDrawer();
-                          context.pushNamed(ConfigMikroTikWidget.routeName);
-                        },
-                      ),
-                      // ✅ Velocidades MikroTik
-                      _DrawerItem(
-                        icon: Icons.speed_rounded,
-                        label: 'Velocidades MikroTik',
-                        iconColor: _AppColors.accent,
-                        onTap: () {
-                          _toggleDrawer();
-                          context.pushNamed(ConfigVelocidadesWidget.routeName);
-                        },
-                      ),
-                      const _DrawerSectionHeader(title: 'Configuración'),
-                      _DrawerItem(
-                        icon: Icons.chat_rounded,
-                        label: 'WhatsApp · Evolution',
-                        iconColor: _AppColors.whatsapp,
-                        onTap: () {
-                          _toggleDrawer();
-                          context.pushNamed(ConfigEvolutionApiWidget.routeName);
-                        },
-                      ),
-                      _DrawerItem(
-                        icon: Icons.calendar_month_rounded,
-                        label: 'Facturación & Mensajes',
+                        icon: Icons.person_rounded,
+                        label: 'Mi Perfil',
                         iconColor: _AppColors.primary,
-                        badge: _facturacionCargada && _diaVencimiento == 0 ? '⚠️' : null,
-                        onTap: () async {
+                        onTap: () {
                           _toggleDrawer();
-                          await context.pushNamed(ConfigFacturacionWidget.routeName);
-                          _cargarConfigFacturacion();
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (_) => const CompletarPerfilWidget()),
+                          );
                         },
                       ),
                     ],
@@ -1760,6 +1889,22 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
     int inactivoCount,
     List<ClientesRecord> displayList,
   ) {
+    // ── Plan "Solo Vouchers": solo se muestra el módulo MikroTik ──
+    if (_tipoPlanUsuario == 'vouchers') {
+      return Container(
+        color: _AppColors.surfaceDim,
+        child: SafeArea(
+          child: Column(children: [
+            _buildTopBar(context, allClients),
+            const SizedBox(height: 4),
+            Expanded(
+              child: _buildVouchersHome(),
+            ),
+          ]),
+        ),
+      );
+    }
+
     return Container(
       color: _AppColors.surfaceDim,
       child: SafeArea(
@@ -1822,6 +1967,164 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
           ),
         ]),
       ),
+    );
+  }
+
+  // ──────────────────────────────────────────
+  //  HOME PARA PLAN "SOLO VOUCHERS"
+  // ──────────────────────────────────────────
+  Widget _buildVouchersHome() {
+    return SingleChildScrollView(
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // ── Hero ──
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [Color(0xFF0EA5E9), Color(0xFF06B6D4)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(22),
+            boxShadow: [
+              BoxShadow(color: const Color(0xFF0EA5E9).withOpacity(0.3), blurRadius: 24, offset: const Offset(0, 10)),
+            ],
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: const Icon(Icons.vpn_key_rounded, color: Colors.white, size: 26),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('Plan Solo Vouchers',
+                      style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 3),
+                  Text('Módulo MikroTik Local activo', style: GoogleFonts.spaceGrotesk(color: Colors.white70, fontSize: 12)),
+                ]),
+              ),
+            ]),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.white.withOpacity(0.1)),
+              ),
+              child: Row(children: [
+                Icon(Icons.info_outline_rounded, color: Colors.white, size: 16),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Tu plan te da acceso al módulo de MikroTik Local para gestionar vouchers. '
+                    'Abre el menú y selecciona "Conexión Local".',
+                    style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 12, height: 1.4),
+                  ),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+        const SizedBox(height: 20),
+
+        // ── Accesos rápidos ──
+        Text('Accesos rápidos', style: GoogleFonts.spaceGrotesk(color: _AppColors.textPri, fontSize: 16, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 12),
+        Row(children: [
+          Expanded(
+            child: _VouchersQuickCard(
+              icon: Icons.wifi,
+              label: 'Conexión Local',
+              color: _AppColors.accent,
+              onTap: () {
+                if (FFAppState().isConnectedLocal && FFAppState().mikrotikLocalApi != null) {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => DashboardLocalWidget(
+                        api: FFAppState().mikrotikLocalApi!,
+                        nombreRouter: FFAppState().nombreRouterLocal,
+                      ),
+                    ),
+                  );
+                } else {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const ConectarMikrotikLocalWidget()),
+                  );
+                }
+              },
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: _VouchersQuickCard(
+              icon: Icons.vpn_key_rounded,
+              label: 'Vouchers',
+              color: const Color(0xFF0EA5E9),
+              onTap: () {
+                if (FFAppState().isConnectedLocal && FFAppState().mikrotikLocalApi != null) {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => DashboardLocalWidget(
+                        api: FFAppState().mikrotikLocalApi!,
+                        nombreRouter: FFAppState().nombreRouterLocal,
+                      ),
+                    ),
+                  );
+                } else {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const ConectarMikrotikLocalWidget()),
+                  );
+                }
+              },
+            ),
+          ),
+        ]),
+        const SizedBox(height: 12),
+        Row(children: [
+          Expanded(
+            child: _VouchersQuickCard(
+              icon: Icons.person_rounded,
+              label: 'Mi Perfil',
+              color: _AppColors.primary,
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const CompletarPerfilWidget()),
+                );
+              },
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: _VouchersQuickCard(
+              icon: Icons.workspace_premium_rounded,
+              label: 'Mejorar Plan',
+              color: _AppColors.success,
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const RenovarMembresiaWidget()),
+                );
+              },
+            ),
+          ),
+        ]),
+      ]),
     );
   }
 
@@ -2020,48 +2323,51 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
             ),
           ]),
         ),
-        GestureDetector(
-          onTap: () => _marcarTodosEnMora(allClients),
-          child: Container(
-            margin: const EdgeInsets.only(right: 8),
-            padding: const EdgeInsets.all(11),
-            decoration: BoxDecoration(
-              color: _AppColors.danger.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: _AppColors.danger.withOpacity(0.3)),
+        // ── Solo plan completo: botones de mora, activos y nuevo cliente ──
+        if (_tipoPlanUsuario != 'vouchers') ...[
+          GestureDetector(
+            onTap: () => _marcarTodosEnMora(allClients),
+            child: Container(
+              margin: const EdgeInsets.only(right: 8),
+              padding: const EdgeInsets.all(11),
+              decoration: BoxDecoration(
+                color: _AppColors.danger.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: _AppColors.danger.withOpacity(0.3)),
+              ),
+              child: const Icon(Icons.warning_amber_rounded, color: _AppColors.danger, size: 20),
             ),
-            child: const Icon(Icons.warning_amber_rounded, color: _AppColors.danger, size: 20),
           ),
-        ),
-        GestureDetector(
-          onTap: () => _marcarTodosActivos(allClients),
-          child: Container(
-            margin: const EdgeInsets.only(right: 8),
-            padding: const EdgeInsets.all(11),
-            decoration: BoxDecoration(
-              color: _AppColors.success.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: _AppColors.success.withOpacity(0.3)),
+          GestureDetector(
+            onTap: () => _marcarTodosActivos(allClients),
+            child: Container(
+              margin: const EdgeInsets.only(right: 8),
+              padding: const EdgeInsets.all(11),
+              decoration: BoxDecoration(
+                color: _AppColors.success.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: _AppColors.success.withOpacity(0.3)),
+              ),
+              child: const Icon(Icons.check_circle_outline_rounded, color: _AppColors.success, size: 20),
             ),
-            child: const Icon(Icons.check_circle_outline_rounded, color: _AppColors.success, size: 20),
           ),
-        ),
-        GestureDetector(
-          onTap: () => context.pushNamed(CrearUsuarioWidget.routeName),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(colors: [_AppColors.primary, _AppColors.accent]),
-              borderRadius: BorderRadius.circular(12),
-              boxShadow: [BoxShadow(color: _AppColors.primary.withOpacity(0.3), blurRadius: 10, offset: const Offset(0, 4))],
+          GestureDetector(
+            onTap: () => context.pushNamed(CrearUsuarioWidget.routeName),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(colors: [_AppColors.primary, _AppColors.accent]),
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: [BoxShadow(color: _AppColors.primary.withOpacity(0.3), blurRadius: 10, offset: const Offset(0, 4))],
+              ),
+              child: Row(children: [
+                const Icon(Icons.person_add_rounded, color: Colors.white, size: 16),
+                const SizedBox(width: 6),
+                Text('Nuevo', style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+              ]),
             ),
-            child: Row(children: [
-              const Icon(Icons.person_add_rounded, color: Colors.white, size: 16),
-              const SizedBox(width: 6),
-              Text('Nuevo', style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
-            ]),
           ),
-        ),
+        ],
       ]),
     );
   }
@@ -2167,6 +2473,65 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
           ),
         ],
       ]),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+//  QUICK CARD PARA PLAN "SOLO VOUCHERS"
+// ─────────────────────────────────────────────
+class _VouchersQuickCard extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _VouchersQuickCard({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: _AppColors.surface,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: color.withOpacity(0.25), width: 1.2),
+          boxShadow: [
+            BoxShadow(color: color.withOpacity(0.08), blurRadius: 12, offset: const Offset(0, 4)),
+          ],
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: color, size: 20),
+          ),
+          const SizedBox(height: 12),
+          Text(label,
+              style: GoogleFonts.spaceGrotesk(
+                color: _AppColors.textPri,
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+              )),
+          const SizedBox(height: 2),
+          Text('Toca para abrir',
+              style: GoogleFonts.spaceGrotesk(
+                color: _AppColors.textSec,
+                fontSize: 10,
+              )),
+        ]),
+      ),
     );
   }
 }

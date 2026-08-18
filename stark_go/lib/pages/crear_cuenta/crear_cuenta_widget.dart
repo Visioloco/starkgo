@@ -78,6 +78,8 @@ class _PlanMembresia {
   final Color color;
   final IconData icon;
   final String badge;
+  // 'completo' → acceso total · 'vouchers' → solo módulo MikroTik
+  final String tipo;
 
   const _PlanMembresia({
     required this.id,
@@ -87,10 +89,12 @@ class _PlanMembresia {
     required this.color,
     required this.icon,
     required this.badge,
+    this.tipo = 'completo',
   });
 }
 
 const _planes = [
+  // ── Planes completos (acceso total) ──
   _PlanMembresia(
     id: '1m',
     label: '1 Mes',
@@ -99,6 +103,7 @@ const _planes = [
     color: _C.textSec,
     icon: Icons.calendar_today_rounded,
     badge: 'Básico',
+    tipo: 'completo',
   ),
   _PlanMembresia(
     id: '3m',
@@ -108,6 +113,7 @@ const _planes = [
     color: _C.primary,
     icon: Icons.date_range_rounded,
     badge: 'Popular',
+    tipo: 'completo',
   ),
   _PlanMembresia(
     id: '6m',
@@ -117,6 +123,7 @@ const _planes = [
     color: _C.accent,
     icon: Icons.event_rounded,
     badge: 'Recomendado',
+    tipo: 'completo',
   ),
   _PlanMembresia(
     id: '1a',
@@ -126,6 +133,48 @@ const _planes = [
     color: _C.purple,
     icon: Icons.workspace_premium_rounded,
     badge: 'Premium',
+    tipo: 'completo',
+  ),
+  // ── Planes Solo Vouchers (solo módulo MikroTik) ──
+  _PlanMembresia(
+    id: 'v1m',
+    label: 'Vouchers 1 Mes',
+    sublabel: 'Solo MikroTik',
+    meses: 1,
+    color: const Color(0xFF0EA5E9),
+    icon: Icons.vpn_key_rounded,
+    badge: 'Vouchers',
+    tipo: 'vouchers',
+  ),
+  _PlanMembresia(
+    id: 'v3m',
+    label: 'Vouchers 3 Meses',
+    sublabel: 'Solo MikroTik',
+    meses: 3,
+    color: const Color(0xFF06B6D4),
+    icon: Icons.vpn_key_rounded,
+    badge: 'Vouchers',
+    tipo: 'vouchers',
+  ),
+  _PlanMembresia(
+    id: 'v6m',
+    label: 'Vouchers 6 Meses',
+    sublabel: 'Solo MikroTik',
+    meses: 6,
+    color: const Color(0xFF0891B2),
+    icon: Icons.vpn_key_rounded,
+    badge: 'Vouchers',
+    tipo: 'vouchers',
+  ),
+  _PlanMembresia(
+    id: 'v1a',
+    label: 'Vouchers 1 Año',
+    sublabel: 'Solo MikroTik',
+    meses: 12,
+    color: const Color(0xFF0E7490),
+    icon: Icons.vpn_key_rounded,
+    badge: 'Vouchers',
+    tipo: 'vouchers',
   ),
 ];
 
@@ -609,6 +658,8 @@ Estamos a su disposición para cualquier consulta o soporte técnico.
       await secondaryApp.delete();
 
       // 2. Guardar en Firestore → colección "user"
+      // Se guarda el campo `plan` con el tipo ('completo' | 'vouchers')
+      // para que el Home muestre solo el módulo MikroTik si es vouchers.
       await FirebaseFirestore.instance.collection('user').doc(nuevoUid).set({
         'uid': nuevoUid,
         'email': correo,
@@ -620,6 +671,11 @@ Estamos a su disposición para cualquier consulta o soporte técnico.
         'planMembresia': _planSel!.id,
         'mesesMembresia': _planSel!.meses,
         'fechaVencimiento': Timestamp.fromDate(_fechaVencimiento!),
+        'plan': {
+          'tipo': _planSel!.tipo,
+          'id': _planSel!.id,
+          'meses': _planSel!.meses,
+        },
         'activo': true,
         'rol': 'operador',
       });
@@ -1092,7 +1148,8 @@ Estamos a su disposición para cualquier consulta o soporte técnico.
           crossAxisCount: 2,
           crossAxisSpacing: 10,
           mainAxisSpacing: 10,
-          childAspectRatio: 1.55,
+          // Tarjetas más altas para que quepan los planes "Vouchers"
+          childAspectRatio: 1.15,
         ),
         itemCount: _planes.length,
         itemBuilder: (_, i) => _PlanCard(
@@ -1391,14 +1448,20 @@ class _PlanCard extends StatelessWidget {
             Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(
                 plan.label,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
                 style: GoogleFonts.spaceGrotesk(
                   color: selected ? Colors.white : _C.textPri,
-                  fontSize: 15,
+                  fontSize: 14,
                   fontWeight: FontWeight.w800,
+                  height: 1.1,
                 ),
               ),
+              const SizedBox(height: 3),
               Text(
                 plan.sublabel,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: GoogleFonts.spaceGrotesk(
                   color: selected ? Colors.white70 : _C.textSec,
                   fontSize: 10,

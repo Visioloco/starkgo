@@ -8,7 +8,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
+import '/auth/firebase_auth/auth_util.dart';
+import '/flutter_flow/flutter_flow_util.dart';
+import '/index.dart';
 import '../../plan_model.dart';
+
 import '../Pago/pago_webview_page.dart';
 
 class _C {
@@ -121,6 +125,8 @@ class _ActivarMembresiaWidgetState extends State<ActivarMembresiaWidget> with Ti
             body: jsonEncode({
               'planId': _planSel!.id,
               'nombre': _nombreUsuario,
+              'tipo': _planSel!.tipo.name, // 'completo' | 'vouchers'
+              'meses': _planSel!.meses,
             }),
           )
           .timeout(const Duration(seconds: 15));
@@ -163,6 +169,45 @@ class _ActivarMembresiaWidgetState extends State<ActivarMembresiaWidget> with Ti
       behavior: SnackBarBehavior.floating,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     ));
+  }
+
+  // ── Cerrar sesión y volver al login ──
+  Future<void> _cerrarSesion() async {
+    final ok = await showDialog<bool>(
+          context: context,
+          builder: (_) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: Text('Cerrar sesión', style: GoogleFonts.dmSans(fontWeight: FontWeight.w700)),
+            content: Text('¿Estás seguro que deseas cerrar sesión y volver al login?', style: GoogleFonts.dmSans()),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: Text('Cancelar', style: GoogleFonts.dmSans(color: _C.textSec)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _C.danger,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                onPressed: () => Navigator.pop(context, true),
+                child: Text('Cerrar sesión', style: GoogleFonts.dmSans(color: Colors.white)),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (ok && mounted) {
+      SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.light,
+        statusBarBrightness: Brightness.dark,
+      ));
+      await authManager.signOut();
+      if (mounted) {
+        context.goNamedAuth(LoginWidget.routeName, context.mounted);
+      }
+    }
   }
 
   // ═══════════════════════════════════════════
@@ -266,6 +311,21 @@ class _ActivarMembresiaWidgetState extends State<ActivarMembresiaWidget> with Ti
             const SizedBox(width: 6),
             Text('Nuevo', style: GoogleFonts.dmSans(color: _C.accent, fontSize: 11.5, fontWeight: FontWeight.w700)),
           ]),
+        ),
+        const SizedBox(width: 8),
+        // Botón cerrar sesión
+        GestureDetector(
+          onTap: _cerrarSesion,
+          child: Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: _C.danger.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _C.danger.withOpacity(0.35)),
+            ),
+            child: const Icon(Icons.logout_rounded, color: _C.danger, size: 20),
+          ),
         ),
       ]),
     );
@@ -446,6 +506,82 @@ class _ActivarMembresiaWidgetState extends State<ActivarMembresiaWidget> with Ti
         itemCount: kPlanes.length,
         itemBuilder: (_, i) {
           final p = kPlanes[i];
+          final sel = _planSel?.id == p.id;
+          return _PlanCard(
+            plan: p,
+            selected: sel,
+            onTap: () => _seleccionarPlan(p),
+          ).animate(target: sel ? 1 : 0).scaleXY(begin: 1.0, end: 1.02, duration: 200.ms, curve: Curves.easeOut);
+        },
+      ),
+
+      // ── Separador ──
+      const SizedBox(height: 22),
+
+      // ── Sección "Solo Vouchers" ──
+      _buildSeccionVouchers(),
+    ]);
+  }
+
+  // ── Sección "Solo Vouchers" ──
+  Widget _buildSeccionVouchers() {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      // Encabezado de la sección
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFF0EA5E9), Color(0xFF06B6D4)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(color: const Color(0xFF0EA5E9).withOpacity(0.3), blurRadius: 16, offset: const Offset(0, 6)),
+          ],
+        ),
+        child: Row(children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(Icons.vpn_key_rounded, color: Colors.white, size: 20),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Solo Vouchers', style: GoogleFonts.dmSans(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 2),
+              Text('Acceso solo al módulo MikroTik Local', style: GoogleFonts.dmSans(color: Colors.white70, fontSize: 11)),
+            ]),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text('Económico', style: GoogleFonts.dmSans(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700)),
+          ),
+        ]),
+      ),
+      const SizedBox(height: 12),
+      GridView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2,
+          crossAxisSpacing: 10,
+          mainAxisSpacing: 10,
+          childAspectRatio: 1.35,
+        ),
+        itemCount: kPlanesVouchers.length,
+        itemBuilder: (_, i) {
+          final p = kPlanesVouchers[i];
           final sel = _planSel?.id == p.id;
           return _PlanCard(
             plan: p,
