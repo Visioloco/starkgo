@@ -12,6 +12,7 @@ import 'package:http/http.dart' as http;
 import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 import 'package:url_launcher/url_launcher.dart'; // ← NUEVA IMPORTACIÓN
+import 'package:permission_handler/permission_handler.dart'; // ← NUEVO IMPORT
 
 // ─────────────────────────────────────────────
 //  COLECCIÓN FIREBASE
@@ -169,11 +170,22 @@ class _NotifService {
     await _plugin.initialize(settings);
 
     // ── Pedir permisos en runtime (Android 13+ y iOS) ──
-    // Sin esto, zonedSchedule "funciona" pero la notificación nunca se muestra.
     final androidImpl = _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
     final notifGranted = await androidImpl?.requestNotificationsPermission();
     final exactGranted = await androidImpl?.requestExactAlarmsPermission();
     debugPrint('🔔 Permiso notificaciones: $notifGranted | Permiso alarmas exactas: $exactGranted');
+
+    // ── NUEVO: pedir excepción de optimización de batería ──
+    // Necesario para que la alarma sobreviva con la app cerrada/Doze.
+    try {
+      final bateriaStatus = await Permission.ignoreBatteryOptimizations.status;
+      if (!bateriaStatus.isGranted) {
+        final resultado = await Permission.ignoreBatteryOptimizations.request();
+        debugPrint('🔋 Excepción de batería: $resultado');
+      }
+    } catch (e) {
+      debugPrint('⚠️ Error pidiendo excepción de batería: $e');
+    }
 
     final iosImpl = _plugin.resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>();
     await iosImpl?.requestPermissions(alert: true, badge: true, sound: true);
@@ -195,12 +207,10 @@ class _NotifService {
     await init();
 
     final now = DateTime.now();
-    // Calcular el día de aviso para este mes
     var diaAviso = diaVencimiento - diasAvisoPrevio;
     if (diaAviso < 1) diaAviso = 1;
 
     DateTime fechaNotif = DateTime(now.year, now.month, diaAviso, 8, 0);
-    // Si ya pasó este mes, programar para el mes siguiente
     if (fechaNotif.isBefore(now)) {
       final nextMonth = DateTime(now.year, now.month + 1, diaAviso, 8, 0);
       fechaNotif = nextMonth;
@@ -217,7 +227,7 @@ class _NotifService {
       priority: Priority.high,
       icon: '@mipmap/launcher_icon',
       color: Color(0xFF1A73E8),
-      styleInformation: BigTextStyleInformation(''), // permite texto largo expandido
+      styleInformation: BigTextStyleInformation(''),
     );
     const iosDetails = DarwinNotificationDetails(
       presentAlert: true,
@@ -235,7 +245,7 @@ class _NotifService {
       cuerpo,
       tzFecha,
       details,
-      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle, // ← CAMBIADO de inexactAllowWhileIdle
       uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
       matchDateTimeComponents: DateTimeComponents.dayOfMonthAndTime,
     );

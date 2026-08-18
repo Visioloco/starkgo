@@ -14,7 +14,9 @@ import 'package:stark_go/pages/Registro/registro_widget.dart';
 import 'package:stark_go/pages/reporte_consumo/reporte_consumo_widget.dart';
 // ── NUEVA página Evolution API ✅ ─────────────────────────────────────────────
 import 'package:stark_go/pages/config_evolution_api/config_evolution_api_widget.dart';
-
+// ── CONEXIÓN LOCAL MIKROTIK (NUEVO) ──────────────────────────────────────────
+import 'package:stark_go/pages/config_mikrotik_local/conectar_mikrotik_local_widget.dart';
+import 'package:stark_go/pages/config_mikrotik_local/dashboard_local_widget.dart';
 // ── NUEVA página Configuración de Facturación ✅ ──────────────────────────────
 import 'package:stark_go/pages/config_facturacion/config_facturacion_widget.dart';
 import 'package:stark_go/pages/informes/informes_widget.dart';

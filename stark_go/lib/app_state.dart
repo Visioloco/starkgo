@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:stark_go/services/mikrotik_local_api.dart';
 
 class FFAppState extends ChangeNotifier {
   static FFAppState _instance = FFAppState._internal();
@@ -20,6 +21,7 @@ class FFAppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ─── MENÚ ITEMS ───
   List<String> _menuItems = ['Home', 'Search', 'Directory', 'Book', 'Profile'];
   List<String> get menuItems => _menuItems;
   set menuItems(List<String> value) {
@@ -49,19 +51,15 @@ class FFAppState extends ChangeNotifier {
     menuItems.insert(index, value);
   }
 
+  // ─── MENÚ ACTIVO ───
   String _menuActiveItem = 'Home';
   String get menuActiveItem => _menuActiveItem;
   set menuActiveItem(String value) {
     _menuActiveItem = value;
   }
 
-  List<Color> _menuItemColors = [
-    Color(4283120111),
-    Color(4281979584),
-    Color(4293823328),
-    Color(4294924643),
-    Color(4287566292)
-  ];
+  // ─── COLORES DEL MENÚ ───
+  List<Color> _menuItemColors = [Color(4283120111), Color(4281979584), Color(4293823328), Color(4294924643), Color(4287566292)];
   List<Color> get menuItemColors => _menuItemColors;
   set menuItemColors(List<Color> value) {
     _menuItemColors = value;
@@ -90,6 +88,7 @@ class FFAppState extends ChangeNotifier {
     menuItemColors.insert(index, value);
   }
 
+  // ─── ESTADOS UI ───
   bool _drawer = false;
   bool get drawer => _drawer;
   set drawer(bool value) {
@@ -100,6 +99,64 @@ class FFAppState extends ChangeNotifier {
   bool get buscando => _buscando;
   set buscando(bool value) {
     _buscando = value;
+  }
+
+  // ════════════════════════════════════════════════════════════
+  // ✅ NUEVO: ESTADOS DE CONEXIÓN LOCAL
+  // ════════════════════════════════════════════════════════════
+
+  // ─── Estado de conexión local ───
+  bool _isConnectedLocal = false;
+  bool get isConnectedLocal => _isConnectedLocal;
+  set isConnectedLocal(bool value) {
+    _isConnectedLocal = value;
+    notifyListeners();
+  }
+
+  // ─── API de MikroTik local ───
+  MikrotikLocalApi? _mikrotikLocalApi;
+  MikrotikLocalApi? get mikrotikLocalApi => _mikrotikLocalApi;
+  set mikrotikLocalApi(MikrotikLocalApi? value) {
+    _mikrotikLocalApi = value;
+    notifyListeners();
+  }
+
+  // ─── Nombre del router local ───
+  String _nombreRouterLocal = '';
+  String get nombreRouterLocal => _nombreRouterLocal;
+  set nombreRouterLocal(String value) {
+    _nombreRouterLocal = value;
+    notifyListeners();
+  }
+
+  // ─── IP del router local ───
+  String _ipRouterLocal = '';
+  String get ipRouterLocal => _ipRouterLocal;
+  set ipRouterLocal(String value) {
+    _ipRouterLocal = value;
+    notifyListeners();
+  }
+
+  // ─── Método para desconectar ───
+  void desconectarLocal() {
+    _isConnectedLocal = false;
+    _mikrotikLocalApi = null;
+    _nombreRouterLocal = '';
+    _ipRouterLocal = '';
+    notifyListeners();
+  }
+
+  // ─── Método para conectar ───
+  void conectarLocal({
+    required MikrotikLocalApi api,
+    required String nombre,
+    required String ip,
+  }) {
+    _mikrotikLocalApi = api;
+    _nombreRouterLocal = nombre;
+    _ipRouterLocal = ip;
+    _isConnectedLocal = true;
+    notifyListeners();
   }
 }
 

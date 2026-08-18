@@ -4,6 +4,14 @@
 //  Widgets reutilizables de consumo para:
 //   • ConsumoBarCard  → barra de progreso en la card del Home
 //   • ConsumoSection  → sección completa en DetalleCliente
+//
+//  FIX (2026-07-19): la clave del ciclo de facturación ahora se
+//  calcula igual que en el VPS (obtenerMesKeyCiclo en index.js) y
+//  en InformesWidget (_cicloDe): el ciclo inicia el día 25, no el
+//  día 1 del mes calendario. Antes esto usaba el mes calendario
+//  puro, por lo que nunca encontraba el documento correcto en
+//  Firestore (ej: hoy 19-jul pertenece al ciclo "2026-06", pero el
+//  código viejo pedía "2026-07").
 // ════════════════════════════════════════════════════════════════
 
 import 'package:flutter/material.dart';
@@ -30,9 +38,19 @@ String _fmtGB(double gb) {
   return '${gb.toStringAsFixed(2)} GB';
 }
 
+// ── Ciclo de facturación: inicia el día 25 ────────────────────────
+// Debe coincidir EXACTAMENTE con obtenerMesKeyCiclo() del VPS
+// (index.js) y con _cicloDe() de InformesWidget. Si el día de
+// inicio del ciclo cambia en el futuro, ajusta el "25" acá también
+// en los otros dos lugares.
+DateTime _cicloDe(DateTime d) {
+  if (d.day >= 25) return DateTime(d.year, d.month, 1);
+  return DateTime(d.year, d.month - 1, 1);
+}
+
 String _mesKeyActual() {
-  final now = DateTime.now();
-  return '${now.year}-${now.month.toString().padLeft(2, '0')}';
+  final ciclo = _cicloDe(DateTime.now());
+  return '${ciclo.year}-${ciclo.month.toString().padLeft(2, '0')}';
 }
 
 Future<Map<String, double>?> fetchConsumoMes(String clienteId, {String? mesKey}) async {
@@ -201,8 +219,9 @@ class _ConsumoSectionState extends State<ConsumoSection> {
   Future<void> _cargarDias() async {
     setState(() => _cargandoDias = true);
     try {
-      final now = DateTime.now();
-      final mesKey = '${now.year}-${now.month.toString().padLeft(2, '0')}';
+      // FIX: usa el mismo ciclo (día 25) que fetchConsumoMes,
+      // en vez del mes calendario puro.
+      final mesKey = _mesKeyActual();
       final snap = await FirebaseFirestore.instance
           .collection('consumo_diario')
           .where('clienteId', isEqualTo: widget.clienteId)
@@ -234,6 +253,9 @@ class _ConsumoSectionState extends State<ConsumoSection> {
     }
   }
 
+  // Nombre del mes del CICLO actual (no del mes calendario), para
+  // que el encabezado no diga "Julio" cuando en realidad se están
+  // mostrando datos del ciclo de Junio.
   String get _mesNombre {
     const meses = [
       '',
@@ -250,8 +272,11 @@ class _ConsumoSectionState extends State<ConsumoSection> {
       'Noviembre',
       'Diciembre'
     ];
-    return meses[DateTime.now().month];
+    final ciclo = _cicloDe(DateTime.now());
+    return meses[ciclo.month];
   }
+
+  String get _anioNombre => _cicloDe(DateTime.now()).year.toString();
 
   @override
   Widget build(BuildContext context) {
@@ -281,7 +306,7 @@ class _ConsumoSectionState extends State<ConsumoSection> {
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text('Consumo de Datos', style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 15, fontWeight: FontWeight.w700)),
-                Text('$_mesNombre ${DateTime.now().year} · Actualiza cada 30 min',
+                Text('Ciclo $_mesNombre $_anioNombre · Actualiza cada 30 min',
                     style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10)),
               ]),
             ),
@@ -335,7 +360,7 @@ class _ConsumoSectionState extends State<ConsumoSection> {
         const SizedBox(width: 12),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Sin datos este mes', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 13, fontWeight: FontWeight.w600)),
+            Text('Sin datos este ciclo', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 13, fontWeight: FontWeight.w600)),
             Text('El tracking comienza cuando el VPS conecta al MikroTik por primera vez.',
                 style: GoogleFonts.spaceGrotesk(color: _C.textSec.withOpacity(0.7), fontSize: 11)),
           ]),
@@ -379,7 +404,7 @@ class _ConsumoSectionState extends State<ConsumoSection> {
         const SizedBox(width: 14),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Total consumido este mes', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11)),
+            Text('Total consumido este ciclo', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11)),
             Text(_fmtGB(total), style: GoogleFonts.spaceGrotesk(color: color, fontSize: 26, fontWeight: FontWeight.w800)),
             const SizedBox(height: 6),
             ClipRRect(

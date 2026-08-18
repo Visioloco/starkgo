@@ -15,6 +15,10 @@ import 'package:stark_go/pages/lista_starlinks_clientes/lista_starlinks_clientes
 import 'package:stark_go/widgets/consumo_widgets.dart';
 import 'package:stark_go/pages/reporte_consumo/reporte_consumo_widget.dart';
 
+// ✅ CONEXIÓN LOCAL MIKROTIK
+import 'package:stark_go/pages/config_mikrotik_local/conectar_mikrotik_local_widget.dart';
+import 'package:stark_go/pages/config_mikrotik_local/dashboard_local_widget.dart';
+
 import '/auth/firebase_auth/auth_util.dart';
 import '/backend/backend.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
@@ -716,8 +720,6 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
 
   // ──────────────────────────────────────────
   //  STREAM STARLINKS — tiempo real
-  //  Al borrar/crear/editar una Starlink en
-  //  Firestore, el chip se actualiza solo.
   // ──────────────────────────────────────────
   void _initStarlinksStream() {
     if (_uid.isEmpty) return;
@@ -829,6 +831,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
     String nombre,
     dynamic numeroRaw,
     double planCliente,
+    DocumentReference clienteRef,
   ) async {
     if (_diaVencimiento == 0) {
       _showFechaNoConfiguradaDialog();
@@ -886,18 +889,31 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
       return;
     }
 
-    if (mounted) Navigator.of(context, rootNavigator: true).pop();
-
     if (instancia == null) {
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
       _showNoInstanceDialog();
       return;
     }
     if (!instancia.isConnected) {
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
       _showErrorDialog('WhatsApp desconectado', 'Tu instancia (${instancia.instanceName}) no está conectada.\nEstado: ${instancia.status}');
       return;
     }
 
-    final String numeroDestino = _normalizarNumero(numeroRaw);
+    String codigoPais = '57';
+    try {
+      final clienteSnap = await clienteRef.get();
+      final clienteData = clienteSnap.data() as Map<String, dynamic>?;
+      final raw = (clienteData?['codigoPais'] ?? '+57').toString();
+      codigoPais = raw.replaceAll('+', '').trim();
+      if (codigoPais.isEmpty) codigoPais = '57';
+    } catch (e) {
+      debugPrint('[StarkGo] Error leyendo codigoPais del cliente: $e');
+    }
+
+    if (mounted) Navigator.of(context, rootNavigator: true).pop();
+
+    final String numeroDestino = _normalizarNumero(numeroRaw, codigoPais);
     if (numeroDestino.isEmpty) {
       _showErrorDialog('Número inválido', 'El cliente no tiene un número válido registrado.');
       return;
@@ -943,6 +959,24 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
           .replaceAll('{horario}', _horarioSoporte);
     }
 
+    if (mounted) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => Center(
+          child: Container(
+            padding: const EdgeInsets.all(28),
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              CircularProgressIndicator(color: _AppColors.whatsapp, strokeWidth: 2.5),
+              const SizedBox(height: 14),
+              Text('Enviando mensaje…', style: GoogleFonts.spaceGrotesk(color: _AppColors.textPri, fontSize: 14)),
+            ]),
+          ),
+        ),
+      );
+    }
+
     try {
       final url = Uri.parse('${instancia.serverUrl}/message/sendText/${instancia.instanceName}');
       final response = await http
@@ -956,6 +990,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
           )
           .timeout(const Duration(seconds: 20));
 
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
       if (!mounted) return;
 
       if (response.statusCode == 200 || response.statusCode == 201) {
@@ -971,6 +1006,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
         _showErrorDialog('Error al enviar (${response.statusCode})', 'No se pudo enviar el mensaje.\n\nDetalle: $detalle');
       }
     } on Exception catch (e) {
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
       if (!mounted) return;
       _showErrorDialog('Error de red', 'No se pudo conectar con Evolution API.\n\nDetalle: $e');
     }
@@ -979,13 +1015,21 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
   // ──────────────────────────────────────────
   //  HELPERS
   // ──────────────────────────────────────────
-  String _normalizarNumero(dynamic raw) {
+  String _normalizarNumero(dynamic raw, String codigoPais) {
     if (raw == null) return '';
     String num = raw.toString().replaceAll(RegExp(r'[^0-9]'), '');
     if (num.isEmpty) return '';
-    if (num.length < 10) return '';
-    if (num.length > 10) return num;
-    return '57$num';
+
+    final prefijo = codigoPais.replaceAll(RegExp(r'[^0-9]'), '');
+    if (prefijo.isEmpty) return '';
+
+    if (num.length < 7) return '';
+
+    if (num.startsWith(prefijo)) return num;
+
+    if (num.length >= 11) return num;
+
+    return '$prefijo$num';
   }
 
   String _formatearPesos(double valor) {
@@ -1001,7 +1045,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
   }
 
   // ──────────────────────────────────────────
-  //  MARCAR TODOS EN MORA (manual, un tap)
+  //  MARCAR TODOS EN MORA
   // ──────────────────────────────────────────
   Future<void> _marcarTodosEnMora(List<ClientesRecord> allClients) async {
     final base = _selectedStarlinkId != null ? allClients.where((c) => c.starlinkId == _selectedStarlinkId) : allClients;
@@ -1072,7 +1116,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
     );
 
     try {
-      const chunkSize = 450; // límite real de batch es 500
+      const chunkSize = 450;
       for (var i = 0; i < clientesActivos.length; i += chunkSize) {
         final chunk = clientesActivos.skip(i).take(chunkSize);
         final batch = FirebaseFirestore.instance.batch();
@@ -1098,7 +1142,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
   }
 
   // ──────────────────────────────────────────
-  //  MARCAR TODOS EN ACTIVO (deshacer mora masiva)
+  //  MARCAR TODOS EN ACTIVO
   // ──────────────────────────────────────────
   Future<void> _marcarTodosActivos(List<ClientesRecord> allClients) async {
     final base = _selectedStarlinkId != null ? allClients.where((c) => c.starlinkId == _selectedStarlinkId) : allClients;
@@ -1612,6 +1656,57 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                           },
                         ),
                       ],
+                      const _DrawerSectionHeader(title: 'MikroTik'),
+                      // ✅ Conexión Local - CORRECTO (usa Navigator.push)
+                      _DrawerItem(
+                        icon: Icons.wifi,
+                        label: 'Conexión Local',
+                        iconColor: FFAppState().isConnectedLocal ? _AppColors.success : _AppColors.accent,
+                        badge: FFAppState().isConnectedLocal ? '✅' : null,
+                        onTap: () {
+                          _toggleDrawer();
+                          if (FFAppState().isConnectedLocal && FFAppState().mikrotikLocalApi != null) {
+                            // ✅ USAR Navigator.push
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => DashboardLocalWidget(
+                                  api: FFAppState().mikrotikLocalApi!,
+                                  nombreRouter: FFAppState().nombreRouterLocal,
+                                ),
+                              ),
+                            );
+                          } else {
+                            // ✅ USAR Navigator.push
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const ConectarMikrotikLocalWidget(),
+                              ),
+                            );
+                          }
+                        },
+                      ),
+                      // ✅ Configuración VPS
+                      _DrawerItem(
+                        icon: Icons.router_outlined,
+                        label: 'Config. MikroTik VPS',
+                        iconColor: _AppColors.purple,
+                        onTap: () {
+                          _toggleDrawer();
+                          context.pushNamed(ConfigMikroTikWidget.routeName);
+                        },
+                      ),
+                      // ✅ Velocidades MikroTik
+                      _DrawerItem(
+                        icon: Icons.speed_rounded,
+                        label: 'Velocidades MikroTik',
+                        iconColor: _AppColors.accent,
+                        onTap: () {
+                          _toggleDrawer();
+                          context.pushNamed(ConfigVelocidadesWidget.routeName);
+                        },
+                      ),
                       const _DrawerSectionHeader(title: 'Configuración'),
                       _DrawerItem(
                         icon: Icons.chat_rounded,
@@ -1620,25 +1715,6 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                         onTap: () {
                           _toggleDrawer();
                           context.pushNamed(ConfigEvolutionApiWidget.routeName);
-                        },
-                      ),
-                      _DrawerItem(
-                        icon: Icons.router_outlined,
-                        label: 'Config. MikroTik',
-                        iconColor: _AppColors.accent,
-                        badge: 'Auto',
-                        onTap: () {
-                          _toggleDrawer();
-                          context.pushNamed(ConfigMikroTikWidget.routeName);
-                        },
-                      ),
-                      _DrawerItem(
-                        icon: Icons.speed_rounded,
-                        label: 'Velocidades MikroTik',
-                        iconColor: _AppColors.accent,
-                        onTap: () {
-                          _toggleDrawer();
-                          context.pushNamed(ConfigVelocidadesWidget.routeName);
                         },
                       ),
                       _DrawerItem(
@@ -1693,15 +1769,10 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
           if (_facturacionCargada && _diaVencimiento == 0) _buildFechaAlertBanner(),
           _buildStatsRow(filteredClients.length, activoCount, moraCount, inactivoCount),
           const SizedBox(height: 10),
-
-          // ── CHIPS STARLINKS — Stream en tiempo real ──
           StreamBuilder<List<_StarlinkInfo>>(
             stream: _starlinksStream,
             builder: (context, slSnap) {
               final starlinks = slSnap.data ?? [];
-
-              // Si la Starlink seleccionada fue borrada,
-              // limpia el filtro automáticamente
               if (_selectedStarlinkId != null && !starlinks.any((s) => s.id == _selectedStarlinkId)) {
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   if (mounted) {
@@ -1714,15 +1785,12 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                   }
                 });
               }
-
               if (starlinks.isEmpty) {
                 return const SizedBox.shrink();
               }
-
               return _buildStarlinkChipsFromList(allClients, starlinks);
             },
           ),
-
           const SizedBox(height: 8),
           _buildSearchBar(context, filteredClients),
           const SizedBox(height: 6),
@@ -1746,6 +1814,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                           c.nombre,
                           c.numero,
                           c.planValor,
+                          c.reference,
                         ),
                       ).animate().fadeIn(duration: 280.ms, delay: (i * 35).ms);
                     },
@@ -1757,7 +1826,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
   }
 
   // ──────────────────────────────────────────
-  //  CHIPS desde lista viva del stream
+  //  CHIPS
   // ──────────────────────────────────────────
   Widget _buildStarlinkChipsFromList(List<ClientesRecord> allClients, List<_StarlinkInfo> starlinks) {
     return SizedBox(
@@ -1836,7 +1905,6 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
 
   Widget _buildFilterBanner(List<ClientesRecord> allClients) {
     final count = allClients.where((c) => c.starlinkId == _selectedStarlinkId).length;
-
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
       child: StreamBuilder<List<_StarlinkInfo>>(
@@ -1952,7 +2020,6 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
             ),
           ]),
         ),
-        // ── BOTÓN: Marcar todos en mora (manual) ──
         GestureDetector(
           onTap: () => _marcarTodosEnMora(allClients),
           child: Container(
@@ -1966,7 +2033,6 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
             child: const Icon(Icons.warning_amber_rounded, color: _AppColors.danger, size: 20),
           ),
         ),
-        // ── BOTÓN: Marcar todos en activo (deshacer) ──
         GestureDetector(
           onTap: () => _marcarTodosActivos(allClients),
           child: Container(

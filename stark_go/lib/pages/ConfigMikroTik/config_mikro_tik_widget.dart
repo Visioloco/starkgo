@@ -6,6 +6,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'config_mikro_tik_model.dart';
 import '/flutter_flow/flutter_flow_util.dart';
+import '../config_perfiles/config_perfiles_widget.dart';
+import '../generar_fichas/generar_fichas_widget.dart';
+
+// ✅ NUEVO: CONEXIÓN LOCAL MIKROTIK
+import '../config_mikrotik_local/conectar_mikrotik_local_widget.dart';
 
 class _VPS {
   static const String url = 'http://5.161.88.42:3000';
@@ -142,6 +147,62 @@ class _Section extends StatelessWidget {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tarjeta de navegación reutilizable (usada dentro de "Herramientas de
+// Hotspot" para ir a Perfiles, Fichas y Modo Local)
+// ─────────────────────────────────────────────────────────────────────────
+class _NavCard extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String title, subtitle;
+  final VoidCallback onTap;
+
+  const _NavCard({
+    required this.icon,
+    required this.color,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.05),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: color.withOpacity(0.25), width: 1.2),
+          ),
+          child: Row(children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration:
+                  BoxDecoration(gradient: LinearGradient(colors: [color, color.withOpacity(0.6)]), borderRadius: BorderRadius.circular(12)),
+              child: Icon(icon, color: Colors.white, size: 20),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(title, style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 14, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 2),
+                Text(subtitle, style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11)),
+              ]),
+            ),
+            Icon(Icons.arrow_forward_ios_rounded, color: color, size: 14),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
 class _SchedulerDropdown extends StatelessWidget {
   final int? value;
   final ValueChanged<int?> onChanged;
@@ -221,6 +282,9 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
   String? get _uid => FirebaseAuth.instance.currentUser?.uid;
   static const String _col = 'config_mikrotik';
 
+  // ── Controla si la tarjeta de Device-Mode aparece expandida ──
+  bool _deviceModeExpandida = true;
+
   String _generarApiKey(String uid) {
     final parte = uid.substring(0, 8);
     final ts = DateTime.now().millisecondsSinceEpoch.toString().substring(7);
@@ -228,8 +292,15 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
+  // Comandos para verificar y cambiar el Device-Mode
+  // ─────────────────────────────────────────────────────────────────────────
+  static const String _cmdVerificarDeviceMode = '/system/device-mode/print';
+  static const String _cmdCambiarDeviceModeV7Nuevo = '/system/device-mode/update mode=advanced';
+  static const String _cmdCambiarDeviceModeV7Antiguo = '/system/device-mode/update mode=enterprise';
+  static const String _cmdCambiarDeviceModeV6 = '/system/device-mode/update mode=enterprise';
+
+  // ─────────────────────────────────────────────────────────────────────────
   // Source del script starkgo-sync
-  // El usuario lo pega en System → Scripts → starkgo-sync → Source
   // ─────────────────────────────────────────────────────────────────────────
   String _buildScriptSource() {
     final key = _model.vpsApiKeyController?.text.trim() ?? '';
@@ -240,8 +311,6 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
 
   // ─────────────────────────────────────────────────────────────────────────
   // Comando del scheduler
-  // El on-event tiene el fetch+import+remove inline (igual que el script).
-  // Asi funciona aunque el script no exista o no se haya creado aun.
   // ─────────────────────────────────────────────────────────────────────────
   String _buildComandoScheduler() {
     final key = _model.vpsApiKeyController?.text.trim() ?? '';
@@ -250,6 +319,56 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
         'on-event="/tool fetch url=\\"http://5.161.88.42:3000/cola?apikey=$key\\" '
         'mode=http dst-path=cola.rsc; /import cola.rsc; /file remove cola.rsc" '
         'start-time=startup comment="StarkGo"';
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // PASO 3 — Reporte del Dashboard
+  // ─────────────────────────────────────────────────────────────────────────
+  String _buildScriptSourceDashboard() {
+    final key = _model.vpsApiKeyController?.text.trim() ?? '';
+    return ':local apikey "$key"\n'
+        ':local url "http://5.161.88.42:3000/dashboard/reportar"\n'
+        '\n'
+        ':local perfilesJson "["\n'
+        ':local first true\n'
+        ':foreach i in=[/ip hotspot user profile find] do={\n'
+        '  :local n [/ip hotspot user profile get \$i name]\n'
+        '  :if (\$n != "default") do={\n'
+        '    :local rl [/ip hotspot user profile get \$i rate-limit]\n'
+        '    :local st [/ip hotspot user profile get \$i session-timeout]\n'
+        '    :local su [/ip hotspot user profile get \$i shared-users]\n'
+        '    :if (\$first = false) do={ :set perfilesJson (\$perfilesJson . ",") }\n'
+        '    :set perfilesJson (\$perfilesJson . "{\\"name\\":\\"" . \$n . "\\",\\"rateLimit\\":\\"" . \$rl . "\\",\\"sessionTimeout\\":\\"" . \$st . "\\",\\"sharedUsers\\":\\"" . \$su . "\\"}")\n'
+        '    :set first false\n'
+        '  }\n'
+        '}\n'
+        ':set perfilesJson (\$perfilesJson . "]")\n'
+        '\n'
+        ':local usuariosJson "["\n'
+        ':set first true\n'
+        ':foreach i in=[/ip hotspot user find] do={\n'
+        '  :local n [/ip hotspot user get \$i name]\n'
+        '  :local up [/ip hotspot user get \$i uptime]\n'
+        '  :local pf [/ip hotspot user get \$i profile]\n'
+        '  :if (\$first = false) do={ :set usuariosJson (\$usuariosJson . ",") }\n'
+        '  :set usuariosJson (\$usuariosJson . "{\\"name\\":\\"" . \$n . "\\",\\"uptime\\":\\"" . \$up . "\\",\\"profile\\":\\"" . \$pf . "\\"}")\n'
+        '  :set first false\n'
+        '}\n'
+        ':set usuariosJson (\$usuariosJson . "]")\n'
+        '\n'
+        ':local activos [:len [/ip hotspot active find]]\n'
+        ':local bindings [:len [/ip hotspot ip-binding find]]\n'
+        ':local servers [:len [/ip hotspot find]]\n'
+        '\n'
+        ':local body ("{\\"apikey\\":\\"" . \$apikey . "\\",\\"perfiles\\":" . \$perfilesJson . ",\\"usuarios\\":" . \$usuariosJson . ",\\"activos\\":" . \$activos . ",\\"ipBindings\\":" . \$bindings . ",\\"servers\\":" . \$servers . "}")\n'
+        '\n'
+        '/tool fetch url=\$url http-method=post http-header-field="Content-Type: application/json" http-data=\$body output=none';
+  }
+
+  String _buildComandoSchedulerDashboard() {
+    return '/system scheduler add name=starkgo-dashboard-scheduler interval=10m '
+        'on-event="/system script run starkgo-dashboard-report" '
+        'start-time=startup comment="StarkGo Dashboard"';
   }
 
   @override
@@ -357,6 +476,10 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
                           _buildBanner().animate().fadeIn(duration: 350.ms).slideY(begin: 0.04, end: 0),
                           const SizedBox(height: 16),
 
+                          // ── PASO 0 — Device-Mode ──
+                          _buildDeviceModeCard().animate().fadeIn(duration: 350.ms, delay: 40.ms).slideY(begin: 0.05, end: 0),
+                          const SizedBox(height: 14),
+
                           // API Key
                           _Section(
                             icon: Icons.vpn_key_rounded,
@@ -404,6 +527,10 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
                           ).animate().fadeIn(duration: 350.ms, delay: 200.ms).slideY(begin: 0.05, end: 0),
                           const SizedBox(height: 14),
 
+                          // ── Herramientas de Hotspot ──
+                          _buildHerramientasHotspot().animate().fadeIn(duration: 350.ms, delay: 240.ms).slideY(begin: 0.05, end: 0),
+                          const SizedBox(height: 14),
+
                           // Scheduler interval selector
                           _Section(
                             icon: Icons.schedule_rounded,
@@ -418,14 +545,13 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
                           ).animate().fadeIn(duration: 350.ms, delay: 280.ms).slideY(begin: 0.05, end: 0),
                           const SizedBox(height: 14),
 
-                          // Instrucciones en dos pasos (se muestran tras guardar)
+                          // Instrucciones en tres pasos
                           if (_model.scriptVisible) ...[
-                            // PASO 1 — Script source
                             _buildScriptCard().animate().fadeIn(duration: 400.ms).slideY(begin: 0.05, end: 0),
                             const SizedBox(height: 14),
-
-                            // PASO 2 — Comando scheduler
                             _buildSchedulerCard().animate().fadeIn(duration: 400.ms, delay: 80.ms).slideY(begin: 0.05, end: 0),
+                            const SizedBox(height: 14),
+                            _buildDashboardReportCard().animate().fadeIn(duration: 400.ms, delay: 160.ms).slideY(begin: 0.05, end: 0),
                             const SizedBox(height: 14),
                           ],
 
@@ -440,7 +566,214 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
     );
   }
 
-  // ── PASO 1: Script source (System → Scripts → starkgo-sync → Source) ─────
+  // ── Herramientas de Hotspot: Perfiles, Fichas y Modo Local ────────────────
+  Widget _buildHerramientasHotspot() {
+    return _Section(
+      icon: Icons.build_circle_rounded,
+      color: _C.pppoe,
+      title: 'Herramientas de Hotspot',
+      subtitle: 'Perfiles, fichas y conexión directa',
+      children: [
+        // ✅ NUEVO: Modo Local
+        _NavCard(
+          icon: Icons.wifi,
+          color: Colors.green,
+          title: 'Modo Local (Directo)',
+          subtitle: 'Conectar al MikroTik en la misma red',
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const ConectarMikrotikLocalWidget()),
+          ),
+        ),
+        _NavCard(
+          icon: Icons.people_alt_rounded,
+          color: _C.purple,
+          title: 'Perfiles / Planes',
+          subtitle: 'Crear, listar y borrar planes de hotspot',
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const ConfigPerfilesWidget()),
+          ),
+        ),
+        _NavCard(
+          icon: Icons.confirmation_number_rounded,
+          color: _C.accent,
+          title: 'Fichas / Vouchers',
+          subtitle: 'Generar cupones y exportarlos en PDF',
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const GenerarFichasWidget()),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ── PASO 0: Device-Mode ──────────────────────────────────────────────────────
+  Widget _buildDeviceModeCard() {
+    return Container(
+      decoration: BoxDecoration(
+        color: _C.dark,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: _C.danger.withOpacity(0.4), width: 1.4),
+        boxShadow: [BoxShadow(color: _C.dark.withOpacity(0.25), blurRadius: 16, offset: const Offset(0, 6))],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // Header
+          GestureDetector(
+            onTap: () => setState(() => _deviceModeExpandida = !_deviceModeExpandida),
+            child: Row(children: [
+              Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                      gradient: const LinearGradient(colors: [_C.danger, Color(0xFFB91C1C)]), borderRadius: BorderRadius.circular(10)),
+                  child: const Icon(Icons.security_rounded, color: Colors.white, size: 18)),
+              const SizedBox(width: 10),
+              Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Text('Paso 0 — Revisa el Device-Mode',
+                      style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(color: _C.danger.withOpacity(0.25), borderRadius: BorderRadius.circular(6)),
+                    child:
+                        Text('IMPORTANTE', style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w800)),
+                  ),
+                ]),
+                Text('Sin esto, el scheduler NUNCA va a bloquear a nadie',
+                    style: GoogleFonts.spaceGrotesk(color: Colors.white60, fontSize: 10)),
+              ])),
+              Icon(_deviceModeExpandida ? Icons.expand_less_rounded : Icons.expand_more_rounded, color: Colors.white54),
+            ]),
+          ),
+
+          if (_deviceModeExpandida) ...[
+            const SizedBox(height: 14),
+
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                  color: _C.warning.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: _C.warning.withOpacity(0.35))),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Icon(Icons.info_outline_rounded, color: _C.warning, size: 16),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Muchos MikroTik (sobre todo nuevos) vienen de fabrica en modo '
+                    '"home". En ese modo, RouterOS bloquea el scheduler, el fetch y '
+                    'otras funciones aunque todo tu script este bien escrito. '
+                    'Por eso el bloqueo automatico "no sale" hasta que apagas y '
+                    'prendes el router.',
+                    style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 11.5, height: 1.4),
+                  ),
+                ),
+              ]),
+            ),
+            const SizedBox(height: 14),
+
+            _buildPaso(1, Icons.terminal_rounded, _C.accent, 'Abre New Terminal en WinBox, WebFig o por SSH'),
+            _buildPaso(2, Icons.visibility_rounded, _C.primary, 'Ejecuta el comando de verificacion (abajo) y revisa el campo "mode"'),
+            _buildPaso(3, Icons.swap_horiz_rounded, _C.warning, 'Si dice "mode: home", ejecuta el comando de tu version de RouterOS'),
+            _buildPaso(
+                4, Icons.power_settings_new_rounded, _C.danger, 'Desconecta el cable de energia y vuelve a conectarlo (NO botón de reset)'),
+            _buildPaso(5, Icons.check_circle_rounded, _C.success,
+                'Reconéctate y confirma con el mismo comando: debe decir "mode: enterprise" o "advanced"'),
+            const SizedBox(height: 10),
+
+            // Comando 1 — Verificar
+            _buildComandoConCopia(
+              titulo: '1. Verificar el modo actual',
+              comando: _cmdVerificarDeviceMode,
+              color: _C.primary,
+            ),
+            const SizedBox(height: 10),
+
+            // Comando 2 — Cambiar
+            Text('2. Cambiar a Enterprise/Advanced (según tu versión de RouterOS):',
+                style: GoogleFonts.spaceGrotesk(color: Colors.white70, fontSize: 11.5, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            _buildComandoConCopia(
+              titulo: 'RouterOS v7.17+ (versiones recientes)',
+              comando: _cmdCambiarDeviceModeV7Nuevo,
+              color: _C.accent,
+            ),
+            const SizedBox(height: 8),
+            _buildComandoConCopia(
+              titulo: 'RouterOS v7.0 a v7.16',
+              comando: _cmdCambiarDeviceModeV7Antiguo,
+              color: _C.warning,
+            ),
+            const SizedBox(height: 8),
+            _buildComandoConCopia(
+              titulo: 'RouterOS v6 (v6.49.8+ con módulo de seguridad)',
+              comando: _cmdCambiarDeviceModeV6,
+              color: _C.purple,
+            ),
+            const SizedBox(height: 12),
+
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                  color: _C.danger.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: _C.danger.withOpacity(0.35))),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Icon(Icons.warning_amber_rounded, color: _C.danger, size: 16),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Después de correr el comando de cambio, el terminal te dará ~100 '
+                    'segundos para confirmar. Confirmas apagando y prendiendo el router '
+                    '(o presionando el botón mode/reset si tu equipo lo tiene). '
+                    'Si no confirmas a tiempo, el cambio se cancela y toca repetirlo. '
+                    'No necesitas resetear la configuración, solo cortar la energía.',
+                    style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 11.5, height: 1.4),
+                  ),
+                ),
+              ]),
+            ),
+          ],
+        ]),
+      ),
+    );
+  }
+
+  Widget _buildComandoConCopia({required String titulo, required String comando, required Color color}) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration:
+          BoxDecoration(color: const Color(0xFF0D1117), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.white12)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(
+            child: Text(titulo, style: GoogleFonts.spaceGrotesk(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.w600)),
+          ),
+          GestureDetector(
+            onTap: () {
+              Clipboard.setData(ClipboardData(text: comando));
+              _snack('Comando copiado', _C.success);
+            },
+            child: Icon(Icons.copy_rounded, color: color, size: 14),
+          ),
+        ]),
+        const SizedBox(height: 6),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Text(comando, style: GoogleFonts.sourceCodePro(color: color, fontSize: 12, height: 1.5)),
+        ),
+      ]),
+    );
+  }
+
+  // ── PASO 1: Script source ───────────────────────────────────────────────────
   Widget _buildScriptCard() {
     final src = _buildScriptSource();
     return Container(
@@ -510,7 +843,7 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
     );
   }
 
-  // ── PASO 2: Comando scheduler (New Terminal) ──────────────────────────────
+  // ── PASO 2: Comando scheduler ──────────────────────────────────────────────
   Widget _buildSchedulerCard() {
     final cmd = _buildComandoScheduler();
     return Container(
@@ -580,9 +913,147 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
           Expanded(
               child: Text(
                   'El scheduler ejecuta el fetch directamente cada ${_model.schedulerMinutos ?? 2} minuto(s) '
-                  'desde el arranque del router, sin depender del script.',
+                  'desde el arranque del router, sin depender del script. '
+                  'Recuerda: esto solo funciona si ya completaste el Paso 0 (Device-Mode en Enterprise/Advanced).',
                   style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11))),
         ]),
+      ]),
+    );
+  }
+
+  // ── PASO 3: Reporte del Dashboard ──────────────────────────────────────────
+  Widget _buildDashboardReportCard() {
+    final src = _buildScriptSourceDashboard();
+    final cmd = _buildComandoSchedulerDashboard();
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _C.purple.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: _C.purple.withOpacity(0.3)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Header
+        Row(children: [
+          Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                  gradient: const LinearGradient(colors: [_C.purple, Color(0xFF5B21B6)]), borderRadius: BorderRadius.circular(10)),
+              child: const Icon(Icons.dashboard_rounded, color: Colors.white, size: 18)),
+          const SizedBox(width: 10),
+          Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Paso 3 — Reporte del Dashboard',
+                style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 14, fontWeight: FontWeight.w700)),
+            Text('Perfiles, fichas y estadisticas en vivo', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10)),
+          ])),
+        ]),
+        const SizedBox(height: 14),
+
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+              color: _C.purple.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _C.purple.withOpacity(0.3))),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Icon(Icons.info_outline_rounded, color: _C.purple, size: 16),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Este paso es opcional pero necesario si usas Planes, Fichas o el '
+                'Dashboard. El router envia su inventario cada 10 minutos, en un '
+                'scheduler separado del de bloqueos para no afectarlo si algo falla.',
+                style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11.5, height: 1.4),
+              ),
+            ),
+          ]),
+        ),
+        const SizedBox(height: 14),
+
+        // 3a — Script
+        _buildPaso(1, Icons.folder_rounded, _C.warning, 'System → Scripts → + → Name: starkgo-dashboard-report'),
+        _buildPaso(2, Icons.policy_rounded, _C.pppoe, 'Marca: read, write, policy, test'),
+        _buildPaso(3, Icons.code_rounded, _C.purple, 'En Source pega el codigo de abajo'),
+        const SizedBox(height: 4),
+        Row(children: [
+          Expanded(
+            child: Text('Source del script', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10, fontWeight: FontWeight.w600)),
+          ),
+          GestureDetector(
+            onTap: () {
+              Clipboard.setData(ClipboardData(text: src));
+              _snack('Source copiado', _C.success);
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                  color: _C.purple.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: _C.purple.withOpacity(0.35))),
+              child: Row(children: [
+                Icon(Icons.copy_rounded, color: _C.purple, size: 13),
+                const SizedBox(width: 4),
+                Text('Copiar', style: GoogleFonts.spaceGrotesk(color: _C.purple, fontSize: 11, fontWeight: FontWeight.w600)),
+              ]),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 8),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+              color: const Color(0xFF0D1117), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.white12)),
+          child: SelectableText(
+            src,
+            style: GoogleFonts.sourceCodePro(color: const Color(0xFFA78BFA), fontSize: 11.5, height: 1.6),
+          ),
+        ),
+        const SizedBox(height: 14),
+
+        Divider(color: _C.purple.withOpacity(0.2), height: 1),
+        const SizedBox(height: 14),
+
+        // 3b — Scheduler
+        _buildPaso(4, Icons.terminal_rounded, _C.accent, 'Abre New Terminal y pega el comando de abajo'),
+        const SizedBox(height: 4),
+        Row(children: [
+          Expanded(
+            child: Text('Comando del scheduler',
+                style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10, fontWeight: FontWeight.w600)),
+          ),
+          GestureDetector(
+            onTap: () {
+              Clipboard.setData(ClipboardData(text: cmd));
+              _snack('Comando copiado', _C.success);
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                  color: _C.purple.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: _C.purple.withOpacity(0.35))),
+              child: Row(children: [
+                Icon(Icons.copy_rounded, color: _C.purple, size: 13),
+                const SizedBox(width: 4),
+                Text('Copiar', style: GoogleFonts.spaceGrotesk(color: _C.purple, fontSize: 11, fontWeight: FontWeight.w600)),
+              ]),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 8),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+              color: const Color(0xFF0D1117), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.white12)),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Text(cmd, style: GoogleFonts.sourceCodePro(color: const Color(0xFFA78BFA), fontSize: 12, height: 1.5)),
+          ),
+        ),
       ]),
     );
   }
