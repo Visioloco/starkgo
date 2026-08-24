@@ -14,6 +14,7 @@
 #include <permission_handler_windows/permission_handler_windows_plugin.h>
 #include <printing/printing_plugin.h>
 #include <url_launcher_windows/url_launcher_windows.h>
+#include <wireguard_flutter/wireguard_flutter_plugin_c_api.h>
 
 void RegisterPlugins(flutter::PluginRegistry* registry) {
   CloudFirestorePluginCApiRegisterWithRegistrar(
@@ -32,4 +33,6 @@ void RegisterPlugins(flutter::PluginRegistry* registry) {
       registry->GetRegistrarForPlugin("PrintingPlugin"));
   UrlLauncherWindowsRegisterWithRegistrar(
       registry->GetRegistrarForPlugin("UrlLauncherWindows"));
+  WireguardFlutterPluginCApiRegisterWithRegistrar(
+      registry->GetRegistrarForPlugin("WireguardFlutterPluginCApi"));
 }

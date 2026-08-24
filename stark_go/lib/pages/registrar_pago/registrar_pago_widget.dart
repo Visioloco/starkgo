@@ -325,8 +325,8 @@ class _RegistrarPagoWidgetState extends State<RegistrarPagoWidget> {
       await ref.set(data);
       _model.pago = ReportepagoRecord.getDocumentFromData(data, ref);
 
-      // 2. Actualizar estado → activo
-      await widget.refcliente!.update(createClientesRecordData(status: 'activo'));
+      // 2. Actualizar estado → activo y guardar fecha del último pago
+      await widget.refcliente!.update(createClientesRecordData(status: 'activo', ultimoPago: DateTime.now()));
 
       // 3. Desbloquear en MikroTik (apikey dinámico desde config_mikrotik/{uid})
       await _desbloquearVPS();

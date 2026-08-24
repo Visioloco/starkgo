@@ -3,6 +3,10 @@
     package="com.starkgo.net.cardenCode">
 
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- VPN WireGuard: el consentimiento lo pide el sistema al conectar.
+         Se mantiene el tráfico cleartext habilitado para airOS (http://10.10.15.x)
+         y para la comunicación con el VPS/MikroTik existente. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.CAMERA"/>
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" tools:replace="android:maxSdkVersion"/>
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="32" tools:replace="android:maxSdkVersion"/>
@@ -29,7 +33,8 @@
         android:label="StarkGo"
         tools:replace="android:label"
         android:icon="@mipmap/launcher_icon"
-        android:requestLegacyExternalStorage="true">
+        android:requestLegacyExternalStorage="true"
+        android:usesCleartextTraffic="true">
 
         <!-- Receptor para reiniciar alarmas al arrancar el dispositivo -->
         <receiver

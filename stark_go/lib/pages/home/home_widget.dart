@@ -16,10 +16,15 @@ import 'package:stark_go/pages/lista_starlinks_clientes/lista_starlinks_clientes
 import 'package:stark_go/widgets/consumo_widgets.dart';
 import 'package:stark_go/pages/reporte_consumo/reporte_consumo_widget.dart';
 import 'package:stark_go/pages/completar_perfil/completar_perfil_widget.dart';
+import 'package:stark_go/services/bienvenida_service.dart';
+import 'package:stark_go/services/mora_automatica_service.dart';
 
 // ✅ CONEXIÓN LOCAL MIKROTIK
 import 'package:stark_go/pages/config_mikrotik_local/conectar_mikrotik_local_widget.dart';
 import 'package:stark_go/pages/config_mikrotik_local/dashboard_local_widget.dart';
+
+// ✅ VPN WIREGUARD · ANTENAS
+import 'package:stark_go/pages/vpn/vpn_widget.dart';
 
 import '/auth/firebase_auth/auth_util.dart';
 import '/backend/backend.dart';
@@ -682,6 +687,8 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
     _cargarRolAdmin();
     _cargarConfigFacturacion();
     _verificarMembresia();
+    _verificarBienvenida();
+    _ejecutarMoraAutomatica();
 
     WidgetsBinding.instance.addObserver(this);
 
@@ -786,6 +793,200 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
   }
 
   // ──────────────────────────────────────────
+  //  BIENVENIDA — se muestra UNA sola vez tras pagar
+  // ──────────────────────────────────────────
+  Future<void> _verificarBienvenida() async {
+    if (_uid.isEmpty) return;
+    try {
+      // Consume la bienvenida pendiente (la borra de inmediato para que
+      // solo se muestre una vez).
+      final bienvenida = await BienvenidaService.consumirBienvenida();
+      if (bienvenida == null || !mounted) return;
+
+      final tipo = (bienvenida['tipo'] ?? 'completo').toString();
+      final duracion = (bienvenida['duracion'] ?? '').toString();
+      final precio = (bienvenida['precio'] ?? 0);
+      final sublabel = (bienvenida['sublabel'] ?? '').toString();
+
+      // Pequeña espera para que el Home termine de cargar antes del diálogo.
+      await Future.delayed(const Duration(milliseconds: 600));
+      if (!mounted) return;
+
+      _showBienvenidaDialog(tipo: tipo, duracion: duracion, precio: precio, sublabel: sublabel);
+    } catch (_) {
+      // Si falla, simplemente no mostramos la bienvenida.
+    }
+  }
+
+  void _showBienvenidaDialog({
+    required String tipo,
+    required String duracion,
+    required dynamic precio,
+    required String sublabel,
+  }) {
+    final esCompleto = tipo == 'completo';
+    final color = esCompleto ? _AppColors.success : const Color(0xFF0EA5E9);
+    final icono = esCompleto ? Icons.workspace_premium_rounded : Icons.vpn_key_rounded;
+    final titulo = esCompleto ? '¡Bienvenido a StarkGo!' : '¡Bienvenido a StarkGo!';
+    final precioFmt = precio is num ? '\$${precio.toStringAsFixed(0)} USD' : '\$$precio USD';
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: _AppColors.surface,
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // ── Ícono ──
+                Container(
+                  width: 72,
+                  height: 72,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [color, color.withOpacity(0.6)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    shape: BoxShape.circle,
+                    boxShadow: [BoxShadow(color: color.withOpacity(0.4), blurRadius: 20, offset: const Offset(0, 8))],
+                  ),
+                  child: Icon(icono, color: Colors.white, size: 34),
+                ),
+                const SizedBox(height: 18),
+                Text(titulo,
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.spaceGrotesk(color: _AppColors.textPri, fontSize: 22, fontWeight: FontWeight.w800)),
+                const SizedBox(height: 6),
+                Text(
+                  esCompleto
+                      ? 'Tu membresía de acceso completo está activa. Ya puedes gestionar tus clientes, planes, informes y mucho más.'
+                      : 'Tu membresía de solo vouchers está activa. Ya puedes gestionar tus vouchers y el módulo MikroTik Local.',
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 13, height: 1.5),
+                ),
+                const SizedBox(height: 18),
+
+                // ── Card de lo que compró ──
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: color.withOpacity(0.06),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: color.withOpacity(0.25)),
+                  ),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('Lo que compraste',
+                        style: GoogleFonts.spaceGrotesk(color: color, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
+                    const SizedBox(height: 10),
+                    _bienvenidaFila(Icons.workspace_premium_rounded, 'Plan', duracion, color),
+                    _bienvenidaFila(Icons.attach_money_rounded, 'Monto', precioFmt, color),
+                    _bienvenidaFila(Icons.category_rounded, 'Tipo', esCompleto ? 'Acceso completo' : 'Solo vouchers', color),
+                    if (sublabel.isNotEmpty) _bienvenidaFila(Icons.info_outline_rounded, 'Detalle', sublabel, color),
+                  ]),
+                ),
+                const SizedBox(height: 18),
+
+                // ── Introducción a las funciones ──
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: _AppColors.surfaceDim,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('¿Qué puedes hacer ahora?',
+                        style: GoogleFonts.spaceGrotesk(color: _AppColors.textPri, fontSize: 12, fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 10),
+                    if (esCompleto) ...[
+                      _bienvenidaFuncion(Icons.people_alt_rounded, 'Gestiona tus clientes y su estado de pago'),
+                      _bienvenidaFuncion(Icons.satellite_alt_rounded, 'Administra tus Starlinks y cobros'),
+                      _bienvenidaFuncion(Icons.chat_rounded, 'Envía recordatorios de pago por WhatsApp'),
+                      _bienvenidaFuncion(Icons.wifi, 'Conecta tu MikroTik y crea vouchers'),
+                      _bienvenidaFuncion(Icons.bar_chart_rounded, 'Genera informes y reportes de consumo'),
+                    ] else ...[
+                      _bienvenidaFuncion(Icons.wifi, 'Conecta tu MikroTik Local'),
+                      _bienvenidaFuncion(Icons.vpn_key_rounded, 'Crea fichas y vouchers de acceso'),
+                      _bienvenidaFuncion(Icons.design_services_rounded, 'Personaliza el portal WiFi'),
+                    ],
+                  ]),
+                ),
+                const SizedBox(height: 20),
+
+                // ── Botón ──
+                SizedBox(
+                  width: double.infinity,
+                  height: 52,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient:
+                          LinearGradient(colors: [color, color.withOpacity(0.7)], begin: Alignment.topLeft, end: Alignment.bottomRight),
+                      borderRadius: BorderRadius.circular(14),
+                      boxShadow: [BoxShadow(color: color.withOpacity(0.35), blurRadius: 16, offset: const Offset(0, 6))],
+                    ),
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(14),
+                        onTap: () => Navigator.pop(dialogContext),
+                        child: Center(
+                          child: Text('¡Empezar!',
+                              style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _bienvenidaFila(IconData icon, String label, String value, Color color) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(children: [
+        Icon(icon, color: color, size: 15),
+        const SizedBox(width: 8),
+        Text('$label:', style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 12)),
+        const Spacer(),
+        Text(value, style: GoogleFonts.spaceGrotesk(color: _AppColors.textPri, fontSize: 12, fontWeight: FontWeight.w600)),
+      ]),
+    );
+  }
+
+  Widget _bienvenidaFuncion(IconData icon, String texto) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(
+          width: 24,
+          height: 24,
+          decoration: BoxDecoration(color: _AppColors.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(7)),
+          child: Icon(icon, color: _AppColors.primary, size: 13),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(texto, style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 12, height: 1.3)),
+        ),
+      ]),
+    );
+  }
+
+  // ──────────────────────────────────────────
   //  STREAM STARLINKS — tiempo real
   // ──────────────────────────────────────────
   void _initStarlinksStream() {
@@ -839,6 +1040,18 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
     } catch (e) {
       debugPrint('[StarkGo] Error leyendo config_empresa: $e');
       if (mounted) setState(() => _facturacionCargada = true);
+    }
+  }
+
+  // ──────────────────────────────────────────
+  //  MORA AUTOMÁTICA — marca en rojo según día de vencimiento
+  // ──────────────────────────────────────────
+  Future<void> _ejecutarMoraAutomatica() async {
+    if (_uid.isEmpty) return;
+    try {
+      await MoraAutomaticaService.ejecutarMoraAutomatica();
+    } catch (e) {
+      debugPrint('[StarkGo] Error ejecutando mora automática: $e');
     }
   }
 
@@ -1801,6 +2014,16 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                       ),
                       // ✅ Solo plan completo: Configuración VPS, Velocidades, WhatsApp, Facturación
                       if (_tipoPlanUsuario != 'vouchers') ...[
+                        // ✅ VPN WireGuard · Antenas
+                        _DrawerItem(
+                          icon: Icons.vpn_lock_rounded,
+                          label: 'VPN · Antenas',
+                          iconColor: const Color(0xFF1A73E8),
+                          onTap: () {
+                            _toggleDrawer();
+                            context.pushNamed(VpnWidget.routeName);
+                          },
+                        ),
                         // ✅ Configuración VPS
                         _DrawerItem(
                           icon: Icons.router_outlined,

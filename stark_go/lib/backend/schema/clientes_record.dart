@@ -155,6 +155,11 @@ class ClientesRecord extends FirestoreRecord {
   String get velocidadPlan => _velocidadPlan ?? '';
   bool hasVelocidadPlan() => _velocidadPlan != null;
 
+  // "ultimoPago" field.  ← NUEVO: fecha del último pago registrado
+  DateTime? _ultimoPago;
+  DateTime? get ultimoPago => _ultimoPago;
+  bool hasUltimoPago() => _ultimoPago != null;
+
   void _initializeFields() {
     _nombre = snapshotData['nombre'] as String?;
     _apellido = snapshotData['apellido'] as String?;
@@ -184,6 +189,7 @@ class ClientesRecord extends FirestoreRecord {
     _planValor = castToType<double>(snapshotData['planValor']); // ← NUEVO
     _tipoServicio = snapshotData['tipoServicio'] as String?;
     _velocidadPlan = snapshotData['velocidadPlan'] as String?;
+    _ultimoPago = snapshotData['ultimoPago'] as DateTime?;
   }
 
   static CollectionReference get collection => FirebaseFirestore.instance.collection('clientes');
@@ -242,6 +248,7 @@ Map<String, dynamic> createClientesRecordData({
   double? planValor, // ← NUEVO
   String? tipoServicio,
   String? velocidadPlan,
+  DateTime? ultimoPago, // ← NUEVO
 }) {
   final firestoreData = mapToFirestore(
     <String, dynamic>{
@@ -273,6 +280,7 @@ Map<String, dynamic> createClientesRecordData({
       'planValor': planValor, // ← NUEVO
       'tipoServicio': tipoServicio,
       'velocidadPlan': velocidadPlan,
+      'ultimoPago': ultimoPago,
     }.withoutNulls,
   );
 

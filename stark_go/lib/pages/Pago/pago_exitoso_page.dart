@@ -7,6 +7,7 @@ import '/flutter_flow/flutter_flow_util.dart';
 import '/index.dart';
 
 import '../../plan_model.dart';
+import '../../services/bienvenida_service.dart';
 
 class PagoExitosoPage extends StatefulWidget {
   final Plan plan;
@@ -23,7 +24,11 @@ class _PagoExitosoPageState extends State<PagoExitosoPage> with TickerProviderSt
   @override
   void initState() {
     super.initState();
+    // Marcar que el usuario tiene una bienvenida pendiente por ver.
+    // Se mostrará UNA sola vez cuando navegue al Home.
+    BienvenidaService.marcarBienvenidaPendiente(widget.plan);
     HapticFeedback.heavyImpact();
+
     _particleController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 3),

@@ -5,14 +5,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
-import 'package:timezone/data/latest_all.dart' as tz;
-import 'package:timezone/timezone.dart' as tz;
 import 'package:url_launcher/url_launcher.dart'; // ← NUEVA IMPORTACIÓN
-import 'package:permission_handler/permission_handler.dart'; // ← NUEVO IMPORT
+import '../../services/notificaciones_service.dart'; // ← Servicio global de notificaciones
 
 // ─────────────────────────────────────────────
 //  COLECCIÓN FIREBASE
@@ -143,131 +140,6 @@ class StarlinkClientePago {
       default:
         return Icons.help_outline;
     }
-  }
-}
-
-// ─────────────────────────────────────────────
-//  SERVICIO DE NOTIFICACIONES LOCALES
-// ─────────────────────────────────────────────
-class _NotifService {
-  static final FlutterLocalNotificationsPlugin _plugin = FlutterLocalNotificationsPlugin();
-  static bool _initialized = false;
-
-  static Future<void> init() async {
-    if (_initialized) return;
-
-    // Inicializar timezone
-    tz.initializeTimeZones();
-
-    const android = AndroidInitializationSettings('@mipmap/launcher_icon');
-    const ios = DarwinInitializationSettings(
-      requestAlertPermission: true,
-      requestBadgePermission: true,
-      requestSoundPermission: true,
-    );
-    const settings = InitializationSettings(android: android, iOS: ios);
-
-    await _plugin.initialize(settings);
-
-    // ── Pedir permisos en runtime (Android 13+ y iOS) ──
-    final androidImpl = _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
-    final notifGranted = await androidImpl?.requestNotificationsPermission();
-    final exactGranted = await androidImpl?.requestExactAlarmsPermission();
-    debugPrint('🔔 Permiso notificaciones: $notifGranted | Permiso alarmas exactas: $exactGranted');
-
-    // ── NUEVO: pedir excepción de optimización de batería ──
-    // Necesario para que la alarma sobreviva con la app cerrada/Doze.
-    try {
-      final bateriaStatus = await Permission.ignoreBatteryOptimizations.status;
-      if (!bateriaStatus.isGranted) {
-        final resultado = await Permission.ignoreBatteryOptimizations.request();
-        debugPrint('🔋 Excepción de batería: $resultado');
-      }
-    } catch (e) {
-      debugPrint('⚠️ Error pidiendo excepción de batería: $e');
-    }
-
-    final iosImpl = _plugin.resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>();
-    await iosImpl?.requestPermissions(alert: true, badge: true, sound: true);
-
-    _initialized = true;
-  }
-
-  /// Programa una notificación diaria a las 8am
-  /// para recordar cobrar al cliente en la fecha indicada.
-  static Future<void> programarRecordatorio({
-    required int id,
-    required String nombreCliente,
-    required int diaVencimiento,
-    required int diasAvisoPrevio,
-    required double montoQueCobro,
-    required String correo,
-    required String lugar,
-  }) async {
-    await init();
-
-    final now = DateTime.now();
-    var diaAviso = diaVencimiento - diasAvisoPrevio;
-    if (diaAviso < 1) diaAviso = 1;
-
-    DateTime fechaNotif = DateTime(now.year, now.month, diaAviso, 8, 0);
-    if (fechaNotif.isBefore(now)) {
-      final nextMonth = DateTime(now.year, now.month + 1, diaAviso, 8, 0);
-      fechaNotif = nextMonth;
-    }
-
-    final tzFecha = tz.TZDateTime.from(fechaNotif, tz.local);
-    final monto = _formatPesos(montoQueCobro);
-
-    const androidDetails = AndroidNotificationDetails(
-      'starlink_cobros',
-      'Cobros Starlink',
-      channelDescription: 'Recordatorios de cobro a clientes Starlink',
-      importance: Importance.high,
-      priority: Priority.high,
-      icon: '@mipmap/launcher_icon',
-      color: Color(0xFF1A73E8),
-      styleInformation: BigTextStyleInformation(''),
-    );
-    const iosDetails = DarwinNotificationDetails(
-      presentAlert: true,
-      presentBadge: true,
-      presentSound: true,
-    );
-    const details = NotificationDetails(android: androidDetails, iOS: iosDetails);
-
-    final correoTexto = correo.isNotEmpty ? correo : 'sin correo registrado';
-    final cuerpo = '$nombreCliente · $lugar\n📧 $correoTexto\n💰 $monto · vence el día $diaVencimiento';
-
-    await _plugin.zonedSchedule(
-      id,
-      '📡 Pagar Starlink HOY',
-      cuerpo,
-      tzFecha,
-      details,
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle, // ← CAMBIADO de inexactAllowWhileIdle
-      uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
-      matchDateTimeComponents: DateTimeComponents.dayOfMonthAndTime,
-    );
-
-    debugPrint('🔔 Recordatorio programado → $nombreCliente | $correoTexto | próxima fecha: $tzFecha');
-  }
-
-  static Future<void> cancelar(int id) async {
-    await init();
-    await _plugin.cancel(id);
-  }
-
-  static String _formatPesos(double v) {
-    final s = v.toStringAsFixed(0);
-    final buf = StringBuffer();
-    int c = 0;
-    for (int i = s.length - 1; i >= 0; i--) {
-      if (c > 0 && c % 3 == 0) buf.write('.');
-      buf.write(s[i]);
-      c++;
-    }
-    return '\$ ${buf.toString().split('').reversed.join('')}';
   }
 }
 
@@ -745,10 +617,17 @@ class _ListaStarlinksClientesWidgetState extends State<ListaStarlinksClientesWid
   String _whatsappSop = '';
   String _horarioSop = 'Lunes a viernes · 8am – 5pm';
 
+  // ── Cobros automáticos Starlinks ─────────
+  bool _cobroAutoActivo = false;
+  int _cobroAutoDia = 25;
+  int _cobroAutoDelaySeg = 30;
+
   @override
   void initState() {
     super.initState();
-    _NotifService.init();
+    // El servicio global ya se inicializó en main(), pero lo llamamos
+    // de nuevo por si acaso (es idempotente).
+    NotificacionesService.instance.init();
     _cargarConfigs();
   }
 
@@ -770,8 +649,13 @@ class _ListaStarlinksClientesWidgetState extends State<ListaStarlinksClientesWid
         _numeroNequi = d['numeroNequi'] ?? '3145336101';
         _whatsappSop = d['whatsappSoporte'] ?? '';
         _horarioSop = d['horarioSoporte'] ?? 'Lunes a viernes · 8am – 5pm';
+        // Cobros automáticos Starlinks
+        _cobroAutoActivo = d['cobroAutoStarlinks'] ?? false;
+        _cobroAutoDia = (d['cobroAutoDia'] as int?) ?? 25;
+        _cobroAutoDelaySeg = (d['cobroAutoDelaySeg'] as int?) ?? 30;
       });
     }
+
     if (wa.docs.isNotEmpty && mounted) {
       final d = wa.docs.first.data() as Map<String, dynamic>;
       setState(() {
@@ -881,12 +765,30 @@ $estadoLinea
 
       if (res.statusCode == 200 || res.statusCode == 201) {
         _snack('✓ Mensaje enviado a ${item.nombreCliente}', _C.success);
+        // 🔔 Notificación local al dueño: mensaje enviado correctamente
+        await NotificacionesService.instance.mostrarNotificacion(
+          id: item.id.hashCode.abs() % 100000 + 500000,
+          titulo: '✅ Recordatorio enviado',
+          cuerpo: 'Se envió el recordatorio de pago a ${item.nombreCliente} por WhatsApp.',
+        );
       } else {
         _snack('Error al enviar (${res.statusCode})', _C.danger);
+        // 🔔 Notificación local al dueño: falló el envío
+        await NotificacionesService.instance.mostrarNotificacion(
+          id: item.id.hashCode.abs() % 100000 + 500000,
+          titulo: '❌ No se envió el recordatorio',
+          cuerpo: 'Falló el envío a ${item.nombreCliente} (código ${res.statusCode}). Revisa la conexión de Evolution API.',
+        );
       }
     } catch (e) {
       if (mounted) Navigator.of(context, rootNavigator: true).pop();
       _snack('Error de red: $e', _C.danger);
+      // 🔔 Notificación local al dueño: error de red
+      await NotificacionesService.instance.mostrarNotificacion(
+        id: item.id.hashCode.abs() % 100000 + 500000,
+        titulo: '❌ No se envió el recordatorio',
+        cuerpo: 'Error de red al enviar a ${item.nombreCliente}: $e',
+      );
     }
   }
 
@@ -901,15 +803,7 @@ $estadoLinea
       // Crear nuevo
       final ref = await col.add(item.toMap(_uid!));
       // Programar notificación local
-      await _NotifService.programarRecordatorio(
-        id: ref.id.hashCode.abs() % 100000,
-        nombreCliente: item.nombreCliente,
-        diaVencimiento: item.diaVencimiento,
-        diasAvisoPrevio: item.diasAvisoPrevio,
-        montoQueCobro: item.montoQueCobro,
-        correo: item.correo,
-        lugar: item.lugar,
-      );
+      await _programarNotif(item, ref.id);
       _snack('Starlink registrada y recordatorio programado 🔔', _C.success);
     } else {
       // Actualizar
@@ -926,18 +820,31 @@ $estadoLinea
         'notasExtra': item.notasExtra ?? '',
       });
       // Re-programar notificación
-      await _NotifService.cancelar(docId.hashCode.abs() % 100000);
-      await _NotifService.programarRecordatorio(
-        id: docId.hashCode.abs() % 100000,
-        nombreCliente: item.nombreCliente,
-        diaVencimiento: item.diaVencimiento,
-        diasAvisoPrevio: item.diasAvisoPrevio,
-        montoQueCobro: item.montoQueCobro,
-        correo: item.correo,
-        lugar: item.lugar,
-      );
+      await NotificacionesService.instance.cancelar(docId.hashCode.abs() % 100000);
+      await _programarNotif(item, docId);
       _snack('Registro actualizado ✓', _C.success);
     }
+  }
+
+  /// Programa el recordatorio local usando el servicio global.
+  Future<void> _programarNotif(StarlinkClientePago item, String docId) async {
+    final id = docId.hashCode.abs() % 100000;
+    final monto = _fmtPesos(item.montoQueCobro);
+    final correoTexto = item.correo.isNotEmpty ? item.correo : 'sin correo registrado';
+    final cuerpo = '${item.nombreCliente} · ${item.lugar}\n📧 $correoTexto\n💰 $monto · vence el día ${item.diaVencimiento}';
+
+    // El día de aviso = día de vencimiento - días de aviso previo
+    var diaAviso = item.diaVencimiento - item.diasAvisoPrevio;
+    if (diaAviso < 1) diaAviso = 1;
+
+    await NotificacionesService.instance.programarRecordatorio(
+      id: id,
+      titulo: '📡 Pagar Starlink HOY',
+      cuerpo: cuerpo,
+      diaDelMes: diaAviso,
+      hora: 8,
+      minuto: 0,
+    );
   }
 
   Future<void> _eliminar(StarlinkClientePago item) async {
@@ -967,7 +874,7 @@ $estadoLinea
 
     if (!ok) return;
     await FirebaseFirestore.instance.collection(_kColeccion).doc(item.id).delete();
-    await _NotifService.cancelar(item.id.hashCode.abs() % 100000);
+    await NotificacionesService.instance.cancelar(item.id.hashCode.abs() % 100000);
     _snack('Registro eliminado', _C.danger);
   }
 
@@ -1351,6 +1258,188 @@ $estadoLinea
     );
   }
 
+  // ─────────────────────────────────────────
+  //  CONFIGURACIÓN COBROS AUTOMÁTICOS
+  // ─────────────────────────────────────────
+  Future<void> _abrirConfigCobros() async {
+    if (_uid == null) return;
+    bool activo = _cobroAutoActivo;
+    int delaySeg = _cobroAutoDelaySeg;
+    bool guardando = false;
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModal) => Container(
+          padding: EdgeInsets.fromLTRB(20, 16, 20, MediaQuery.of(context).viewInsets.bottom + 24),
+          decoration: const BoxDecoration(
+            color: _C.surface,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          child: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              // Handle
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(color: _C.border, borderRadius: BorderRadius.circular(2)),
+                ),
+              ),
+              const SizedBox(height: 16),
+              // Título
+              Row(children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(colors: [_C.primary, _C.accent]),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(Icons.settings_rounded, color: Colors.white, size: 20),
+                ),
+                const SizedBox(width: 12),
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('Cobros automáticos', style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 16, fontWeight: FontWeight.w700)),
+                  Text('Envía recordatorios por WhatsApp', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11)),
+                ]),
+              ]),
+              const SizedBox(height: 16),
+              Divider(color: _C.border, height: 1),
+              const SizedBox(height: 16),
+
+              // ── Switch activar/desactivar ──
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: (activo ? _C.accent : _C.textSec).withOpacity(0.06),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: (activo ? _C.accent : _C.textSec).withOpacity(0.25)),
+                ),
+                child: Row(children: [
+                  Icon(Icons.bolt_rounded, color: activo ? _C.accent : _C.textSec, size: 22),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text('Envío automático',
+                          style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 14, fontWeight: FontWeight.w700)),
+                      Text(
+                        activo ? 'Se enviará el cobro a cada cliente según su día de vencimiento' : 'Desactivado — no se enviarán cobros',
+                        style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11),
+                      ),
+                    ]),
+                  ),
+                  Switch(
+                    value: activo,
+                    activeColor: _C.accent,
+                    onChanged: (v) => setModal(() => activo = v),
+                  ),
+                ]),
+              ),
+              const SizedBox(height: 14),
+
+              // ── Delay entre mensajes ──
+
+              _LabelAbove(label: 'ESPERA ENTRE MENSAJES (EVITA BANEOS)'),
+              const SizedBox(height: 6),
+              Container(
+                decoration: BoxDecoration(
+                  color: _C.surface,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: _C.warning.withOpacity(0.5), width: 1.4),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<int>(
+                    value: delaySeg,
+                    isExpanded: true,
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    borderRadius: BorderRadius.circular(14),
+                    dropdownColor: _C.surface,
+                    icon: const Icon(Icons.keyboard_arrow_down_rounded),
+                    items: [15, 20, 30, 45, 60]
+                        .map((s) => DropdownMenuItem(
+                              value: s,
+                              child: Row(children: [
+                                Icon(Icons.timer_rounded, size: 14, color: _C.warning),
+                                const SizedBox(width: 6),
+                                Text('$s segundos entre mensajes', style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 13)),
+                              ]),
+                            ))
+                        .toList(),
+                    onChanged: (v) => setModal(() => delaySeg = v ?? 30),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+
+              // ── Info ──
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: _C.primary.withOpacity(0.06),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: _C.primary.withOpacity(0.2)),
+                ),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Icon(Icons.info_outline_rounded, color: _C.primary, size: 16),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Cada cliente Starlink tiene su propio día de vencimiento. El sistema revisa cada día qué clientes tienen su recordatorio programado (día de vencimiento − días de aviso) y les envía el cobro automáticamente por WhatsApp, con la espera configurada entre mensajes para evitar baneos.',
+                      style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11),
+                    ),
+                  ),
+                ]),
+              ),
+              const SizedBox(height: 20),
+
+              // ── Botón guardar ──
+              SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _C.primary,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    elevation: 0,
+                  ),
+                  onPressed: guardando
+                      ? null
+                      : () async {
+                          setModal(() => guardando = true);
+                          await FirebaseFirestore.instance.collection('config_empresa').doc(_uid).set({
+                            'cobroAutoStarlinks': activo,
+                            'cobroAutoDelaySeg': delaySeg,
+                          }, SetOptions(merge: true));
+                          if (mounted) {
+                            setState(() {
+                              _cobroAutoActivo = activo;
+                              _cobroAutoDelaySeg = delaySeg;
+                            });
+                          }
+
+                          Navigator.pop(ctx);
+                          _snack(activo ? '✓ Cobros automáticos activados' : 'Cobros automáticos desactivados', _C.success);
+                        },
+                  child: guardando
+                      ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                      : Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                          const Icon(Icons.save_rounded, color: Colors.white, size: 18),
+                          const SizedBox(width: 8),
+                          Text('Guardar configuración',
+                              style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
+                        ]),
+                ),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildTopBar() => Padding(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
         child: Row(children: [
@@ -1392,6 +1481,40 @@ $estadoLinea
                     fontWeight: FontWeight.w600,
                   )),
             ]),
+          ),
+          const SizedBox(width: 8),
+          // Botón configuración cobros automáticos
+          GestureDetector(
+            onTap: _abrirConfigCobros,
+            child: Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: _cobroAutoActivo ? _C.accent.withOpacity(0.15) : _C.surface,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: _cobroAutoActivo ? _C.accent.withOpacity(0.4) : _C.border),
+                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 8, offset: const Offset(0, 2))],
+              ),
+              child: Stack(children: [
+                Center(
+                  child: Icon(
+                    Icons.settings_rounded,
+                    color: _cobroAutoActivo ? _C.accent : _C.textSec,
+                    size: 20,
+                  ),
+                ),
+                if (_cobroAutoActivo)
+                  Positioned(
+                    top: 6,
+                    right: 6,
+                    child: Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(color: _C.success, shape: BoxShape.circle),
+                    ),
+                  ),
+              ]),
+            ),
           ),
         ]),
       );

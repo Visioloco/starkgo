@@ -169,6 +169,90 @@ class VpsService {
   }
 
   // ══════════════════════════════════════════════════════════
+  //  WIREGUARD DINÁMICO — registro de peers en el VPS (hub)
+  // ══════════════════════════════════════════════════════════
+
+  /// Devuelve la apikey del usuario desde `config_mikrotik/{uid}`.
+  static Future<String?> obtenerApikey() async {
+    final config = await obtenerConfig();
+    if (config == null) return null;
+    final key = (config['vpsApiKey'] ?? '').toString().trim();
+    return key.isEmpty ? null : key;
+  }
+
+  /// GET /wg/info — datos del servidor WireGuard (public key, puerto, host).
+  static Future<WgInfoVps?> obtenerInfoVps() async {
+    final key = await obtenerApikey();
+    if (key == null) return null;
+    try {
+      final resp = await http
+          .get(Uri.parse('$_baseUrl/wg/info?apikey=$key'))
+          .timeout(const Duration(seconds: 10));
+      if (resp.statusCode != 200) return null;
+      final j = jsonDecode(resp.body) as Map<String, dynamic>;
+      if (j['ok'] != true) return null;
+      return WgInfoVps(
+        serverPublicKey: (j['serverPublicKey'] ?? '').toString(),
+        listenPort: (j['listenPort'] as num?)?.toInt() ?? 0,
+        endpoint: (j['endpoint'] ?? '').toString(),
+        pool: (j['pool'] ?? '').toString(),
+      );
+    } catch (e) {
+      debugPrint('[VpsService] /wg/info no disponible: $e');
+      return null;
+    }
+  }
+
+  /// POST /wg/register — da de alta el peer del usuario y devuelve su IP.
+  static Future<WgRegistroVps?> registrarPeerVps({
+    required String publicKey,
+    required String nombre,
+  }) async {
+    final key = await obtenerApikey();
+    if (key == null) return null;
+    try {
+      final resp = await http
+          .post(
+            Uri.parse('$_baseUrl/wg/register'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'apikey': key, 'publicKey': publicKey, 'nombre': nombre}),
+          )
+          .timeout(const Duration(seconds: 15));
+      if (resp.statusCode != 200) {
+        debugPrint('[VpsService] /wg/register error ${resp.statusCode}: ${resp.body}');
+        return null;
+      }
+      final j = jsonDecode(resp.body) as Map<String, dynamic>;
+      if (j['ok'] != true) return null;
+      return WgRegistroVps(
+        ip: (j['ip'] ?? '').toString(),
+        address: (j['address'] ?? '').toString(),
+        redAntenas: (j['redAntenas'] ?? '').toString().isEmpty
+            ? null
+            : j['redAntenas'].toString(),
+      );
+    } catch (e) {
+      debugPrint('[VpsService] /wg/register no disponible: $e');
+      return null;
+    }
+  }
+
+  /// DELETE /wg/peers/:publicKey — da de baja el peer del usuario.
+  static Future<bool> eliminarPeerVps(String publicKey) async {
+    final key = await obtenerApikey();
+    if (key == null) return false;
+    try {
+      final resp = await http
+          .delete(Uri.parse('$_baseUrl/wg/peers/$publicKey?apikey=$key'))
+          .timeout(const Duration(seconds: 10));
+      return resp.statusCode == 200;
+    } catch (e) {
+      debugPrint('[VpsService] /wg/peers no disponible: $e');
+      return false;
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════
   //  HELPER HTTP POST
   //  Retorna true si statusCode 200/201, false en cualquier error.
   // ══════════════════════════════════════════════════════════
@@ -194,4 +278,38 @@ class VpsService {
       return false;
     }
   }
+}
+
+// ══════════════════════════════════════════════════════════
+//  Modelos WireGuard dinámico (VPS hub)
+// ══════════════════════════════════════════════════════════
+
+/// Respuesta de GET /wg/info.
+class WgInfoVps {
+  const WgInfoVps({
+    required this.serverPublicKey,
+    required this.listenPort,
+    required this.endpoint,
+    required this.pool,
+  });
+
+  final String serverPublicKey;
+  final int listenPort;
+  final String endpoint; // host:puerto (ej: 5.161.88.42:1234)
+  final String pool; // ej: 10.50.50
+}
+
+/// Respuesta de POST /wg/register.
+class WgRegistroVps {
+  const WgRegistroVps({
+    required this.ip,
+    required this.address,
+    this.redAntenas,
+  });
+
+  final String ip; // ej: 10.50.50.6
+  final String address; // ej: 10.50.50.6/32
+
+  /// Subred de antenas asignada al usuario (10.10.x.0/24, no editable).
+  final String? redAntenas;
 }

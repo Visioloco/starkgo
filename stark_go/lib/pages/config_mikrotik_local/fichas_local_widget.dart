@@ -1,10 +1,14 @@
+import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:printing/printing.dart';
+
 import '../../services/mikrotik_local_api.dart';
 import '../../services/pdf_fichas_service.dart';
 
@@ -533,6 +537,37 @@ class _FichasLocalWidgetState extends State<FichasLocalWidget> {
       await Printing.sharePdf(bytes: bytes, filename: registro.fileName);
     } catch (e) {
       _snack(_mensajeError(e), _C.danger);
+    } finally {
+      if (mounted) setState(() => _pdfOcupado = null);
+    }
+  }
+
+  /// Descarga el PDF a la carpeta de Descargas del dispositivo.
+  Future<void> _descargarPdf(PdfBatchRecord registro) async {
+    setState(() => _pdfOcupado = registro.id);
+    try {
+      final bytes = await _pdfStore.leerBytes(registro);
+
+      // Intentamos guardar en la carpeta de Descargas del dispositivo.
+      Directory? destino;
+      try {
+        destino = await getDownloadsDirectory();
+      } catch (_) {
+        destino = null;
+      }
+
+      if (destino == null) {
+        // Si no hay carpeta de descargas (p. ej. iOS), usamos documentos.
+        destino = await getApplicationDocumentsDirectory();
+      }
+
+      final archivo = File('${destino.path}/${registro.fileName}');
+
+      await archivo.writeAsBytes(bytes, flush: true);
+
+      _snack('PDF descargado en ${archivo.path}', _C.success);
+    } catch (e) {
+      _snack('No se pudo descargar el PDF: ${_mensajeError(e)}', _C.danger);
     } finally {
       if (mounted) setState(() => _pdfOcupado = null);
     }
@@ -1150,7 +1185,12 @@ class _FichasLocalWidgetState extends State<FichasLocalWidget> {
                 IconButton(
                   onPressed: () => _verPdf(r),
                   icon: const Icon(Icons.visibility_rounded, color: _C.primary, size: 19),
-                  tooltip: 'Ver / descargar',
+                  tooltip: 'Ver',
+                ),
+                IconButton(
+                  onPressed: () => _descargarPdf(r),
+                  icon: const Icon(Icons.download_rounded, color: _C.success, size: 19),
+                  tooltip: 'Descargar PDF',
                 ),
                 IconButton(
                   onPressed: () => _compartirPdf(r),

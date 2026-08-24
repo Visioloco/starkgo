@@ -12,6 +12,7 @@ import 'package:flutter/foundation.dart';
 import 'backend/firebase/firebase_config.dart';
 import 'flutter_flow/flutter_flow_util.dart';
 import 'flutter_flow/internationalization.dart';
+import 'services/notificaciones_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -25,6 +26,11 @@ void main() async {
   await FirebaseAppCheck.instance.activate(
     androidProvider: AndroidProvider.debug,
   );
+
+  // ✅ Inicializar notificaciones locales al arrancar la app.
+  //    Sin esto, las notificaciones programadas (zonedSchedule)
+  //    pueden no dispararse o programarse en la hora equivocada.
+  await NotificacionesService.instance.init();
 
   final appState = FFAppState();
   await appState.initializePersistedState();

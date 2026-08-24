@@ -26,6 +26,9 @@ import 'package:stark_go/pages/pppoe_clientes/pppoe_clientes_widget.dart';
 import 'package:stark_go/pages/renovar_membresia/renovar_membresia_widget.dart';
 import 'package:stark_go/pages/activar_membresia/activar_membresia_widget.dart';
 import 'package:stark_go/pages/lista_starlinks_clientes/lista_starlinks_clientes_widget.dart';
+// ── VPN WireGuard · Antenas (NUEVO) ───────────────────────────────
+import 'package:stark_go/pages/vpn/vpn_widget.dart';
+import 'package:stark_go/pages/vpn/config_vpn_widget.dart';
 
 import '/auth/base_auth_user_provider.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
@@ -300,6 +303,17 @@ GoRouter createRouter(AppStateNotifier appStateNotifier) => GoRouter(
               name: TutorialWidget.routeName,
               path: TutorialWidget.routePath,
               builder: (context, params) => const TutorialWidget(),
+            ),
+            // ── VPN WIREGUARD · ANTENAS ✅ NUEVO ─────────────────────────────
+            FFRoute(
+              name: VpnWidget.routeName,
+              path: VpnWidget.routePath,
+              builder: (context, params) => const VpnWidget(),
+            ),
+            FFRoute(
+              name: ConfigVpnWidget.routeName,
+              path: ConfigVpnWidget.routePath,
+              builder: (context, params) => const ConfigVpnWidget(),
             ),
           ].map((r) => r.toRoute(appStateNotifier)).toList(),
         ),

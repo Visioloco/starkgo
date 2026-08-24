@@ -84,6 +84,10 @@ class _FlutterFlowDropDownState<T> extends State<FlutterFlowDropDown<T>> {
   FormFieldController<T?> get controller => widget.controller!;
   FormFieldController<List<T>?> get multiSelectController => widget.multiSelectController!;
 
+  /// Adapter para multiselect: dropdown_button2 v3 espera
+  /// ValueListenable<Iterable<T>> (multiValueListenable).
+  _MultiValueListenable<T>? _multiAdapter;
+
   T? get currentValue {
     final value = isMultiSelect ? multiSelectController.value?.firstOrNull : controller.value;
     return widget.options.contains(value) ? value : null;
@@ -119,6 +123,7 @@ class _FlutterFlowDropDownState<T> extends State<FlutterFlowDropDown<T>> {
   void initState() {
     super.initState();
     if (isMultiSelect) {
+      _multiAdapter = _MultiValueListenable<T>(multiSelectController);
       _listener = () => widget.onMultiSelectChanged!(multiSelectController.value);
       multiSelectController.addListener(_listener);
     } else {
@@ -129,6 +134,7 @@ class _FlutterFlowDropDownState<T> extends State<FlutterFlowDropDown<T>> {
 
   @override
   void dispose() {
+    _multiAdapter?.dispose();
     if (isMultiSelect) {
       multiSelectController.removeListener(_listener);
     } else {
@@ -258,7 +264,9 @@ class _FlutterFlowDropDownState<T> extends State<FlutterFlowDropDown<T>> {
         WidgetStateProperty.resolveWith<Color?>((states) => states.contains(WidgetState.focused) ? Colors.transparent : null);
     final iconStyleData = widget.icon != null ? IconStyleData(icon: widget.icon!) : const IconStyleData();
     return DropdownButton2<T>(
-      value: currentValue,
+      // FIX v3: `value` fue reemplazado por valueListenable / multiValueListenable
+      valueListenable: isMultiSelect ? null : controller,
+      multiValueListenable: isMultiSelect ? _multiAdapter : null,
       hint: _createHintText(),
       // FIX v3: usar DropdownItem en lugar de DropdownMenuItem
       items: isMultiSelect ? _createMultiselectDropdownItems() : _createDropdownItems(),
@@ -346,3 +354,25 @@ class _FlutterFlowDropDownState<T> extends State<FlutterFlowDropDown<T>> {
     );
   }
 }
+
+/// Adapta `ValueNotifier<List<T>?>` → `ValueListenable<Iterable<T>>`
+/// (API de dropdown_button2 v3 para multiselect).
+class _MultiValueListenable<T> extends ValueNotifier<Iterable<T>> {
+  _MultiValueListenable(this._source) : super(_source.value ?? const []) {
+    _source.addListener(_sync);
+    _sync();
+  }
+
+  final ValueNotifier<List<T>?> _source;
+
+  void _sync() {
+    value = _source.value ?? const [];
+  }
+
+  @override
+  void dispose() {
+    _source.removeListener(_sync);
+    super.dispose();
+  }
+}
+

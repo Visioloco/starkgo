@@ -57,6 +57,7 @@ class HotspotDesignStore {
   static const _archivoHistorial = 'hotspot_design_historial.json';
   static const _archivoBorrador = 'hotspot_design_borrador.json';
   static const _archivoLogoBorrador = 'hotspot_design_borrador_logo.bin';
+  static const _archivoBorradorPaginas = 'hotspot_design_borrador_paginas.json';
 
   Future<Directory> _dir() async => getApplicationDocumentsDirectory();
 
@@ -184,5 +185,48 @@ class HotspotDesignStore {
     if (await file.exists()) await file.delete();
     final logoFile = await _logoBorradorFile();
     if (await logoFile.exists()) await logoFile.delete();
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Borrador por página (login, status, logout, errors)
+  // ─────────────────────────────────────────────────────────────
+
+  Future<File> _borradorPaginasFile() async {
+    final base = await _dir();
+    return File('${base.path}/$_archivoBorradorPaginas');
+  }
+
+  /// Guarda el HTML de una página específica en el borrador local.
+  Future<void> guardarBorradorPagina(String archivo, String html) async {
+    final file = await _borradorPaginasFile();
+    Map<String, dynamic> paginas = {};
+    if (await file.exists()) {
+      try {
+        final contenido = await file.readAsString();
+        if (contenido.trim().isNotEmpty) {
+          paginas = jsonDecode(contenido) as Map<String, dynamic>;
+        }
+      } catch (_) {
+        paginas = {};
+      }
+    }
+    paginas[archivo] = html;
+    await file.writeAsString(jsonEncode(paginas));
+  }
+
+  /// Carga el HTML de una página específica del borrador local.
+  /// Devuelve null si no hay nada guardado para esa página.
+  Future<String?> cargarBorradorPagina(String archivo) async {
+    final file = await _borradorPaginasFile();
+    if (!await file.exists()) return null;
+    try {
+      final contenido = await file.readAsString();
+      if (contenido.trim().isEmpty) return null;
+      final paginas = jsonDecode(contenido) as Map<String, dynamic>;
+      final html = paginas[archivo];
+      return html is String && html.isNotEmpty ? html : null;
+    } catch (_) {
+      return null;
+    }
   }
 }
