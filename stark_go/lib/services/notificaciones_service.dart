@@ -16,8 +16,16 @@ class NotificacionesService {
 
   static final NotificacionesService instance = NotificacionesService._();
 
-  final FlutterLocalNotificationsPlugin _plugin = FlutterLocalNotificationsPlugin();
+  final FlutterLocalNotificationsPlugin _plugin =
+      FlutterLocalNotificationsPlugin();
   bool _initialized = false;
+
+  /// Callback global para las acciones del túnel VPN ("open_vpn"/"stop_vpn").
+  /// Se asigna en main() una vez creado el router.
+  void Function(String action)? onTunelAction;
+
+  /// id fijo de la notificación persistente del túnel WireGuard.
+  static const int _idTunelActivo = 3001;
 
   FlutterLocalNotificationsPlugin get plugin => _plugin;
 
@@ -50,13 +58,24 @@ class NotificacionesService {
     );
     const settings = InitializationSettings(android: android, iOS: ios);
 
-    await _plugin.initialize(settings);
+    await _plugin.initialize(
+      settings,
+      onDidReceiveNotificationResponse: (resp) {
+        final payload = resp.payload;
+        if (payload == null) return;
+        if (payload == 'open_vpn' || payload == 'stop_vpn') {
+          onTunelAction?.call(payload);
+        }
+      },
+    );
 
     // ── Permisos en runtime ────────────────────────────
-    final androidImpl = _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+    final androidImpl = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
     final notifGranted = await androidImpl?.requestNotificationsPermission();
     final exactGranted = await androidImpl?.requestExactAlarmsPermission();
-    debugPrint('🔔 Permiso notificaciones: $notifGranted | Alarmas exactas: $exactGranted');
+    debugPrint(
+        '🔔 Permiso notificaciones: $notifGranted | Alarmas exactas: $exactGranted');
 
     // ── Excepción de optimización de batería ───────────
     // Necesario para que la alarma sobreviva con la app cerrada/Doze.
@@ -70,7 +89,8 @@ class NotificacionesService {
       debugPrint('⚠️ Error pidiendo excepción de batería: $e');
     }
 
-    final iosImpl = _plugin.resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>();
+    final iosImpl = _plugin.resolvePlatformSpecificImplementation<
+        IOSFlutterLocalNotificationsPlugin>();
     await iosImpl?.requestPermissions(alert: true, badge: true, sound: true);
 
     _initialized = true;
@@ -111,7 +131,8 @@ class NotificacionesService {
       presentBadge: true,
       presentSound: true,
     );
-    const details = NotificationDetails(android: androidDetails, iOS: iosDetails);
+    const details =
+        NotificationDetails(android: androidDetails, iOS: iosDetails);
 
     await _plugin.zonedSchedule(
       id,
@@ -120,7 +141,8 @@ class NotificacionesService {
       tzFecha,
       details,
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-      uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
+      uiLocalNotificationDateInterpretation:
+          UILocalNotificationDateInterpretation.absoluteTime,
       matchDateTimeComponents: DateTimeComponents.dayOfMonthAndTime,
     );
 
@@ -131,6 +153,23 @@ class NotificacionesService {
   Future<void> cancelar(int id) async {
     await init();
     await _plugin.cancel(id);
+  }
+
+  /// Pide (o re-pide) el permiso POST_NOTIFICATIONS en Android 13+.
+  /// Devuelve true si las notificaciones están habilitadas o si el permiso
+  /// no aplica en la plataforma.
+  Future<bool> asegurarPermisoNotificaciones() async {
+    await init();
+    final androidImpl = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    if (androidImpl == null) return true;
+    try {
+      final concedido = await androidImpl.requestNotificationsPermission();
+      return concedido ?? true;
+    } catch (e) {
+      debugPrint('⚠️ No se pudo pedir permiso de notificaciones: $e');
+      return true;
+    }
   }
 
   /// Muestra una notificación local INMEDIATA (no programada).
@@ -158,10 +197,64 @@ class NotificacionesService {
       presentBadge: true,
       presentSound: true,
     );
-    const details = NotificationDetails(android: androidDetails, iOS: iosDetails);
+    const details =
+        NotificationDetails(android: androidDetails, iOS: iosDetails);
 
     await _plugin.show(id, titulo, cuerpo, details);
     debugPrint('🔔 Notificación inmediata mostrada → id=$id | $titulo');
+  }
+
+  /// Notificación persistente (no se puede deslizar) mientras el túnel
+  /// WireGuard está activo. Incluye acción "Apagar túnel".
+  Future<void> mostrarTunelActivo() async {
+    await init();
+    const androidDetails = AndroidNotificationDetails(
+      'tunel_vpn',
+      'Túnel VPN',
+      channelDescription: 'Estado del túnel WireGuard de StarkGo',
+      importance: Importance.max,
+      priority: Priority.high,
+      ongoing: true,
+      autoCancel: false,
+      onlyAlertOnce: true,
+      icon: '@mipmap/launcher_icon',
+      color: Color(0xFF00C6AE),
+      category: AndroidNotificationCategory.service,
+      visibility: NotificationVisibility.public,
+      actions: [
+        AndroidNotificationAction(
+          'stop_vpn',
+          'Apagar túnel',
+          showsUserInterface: false,
+        ),
+      ],
+      styleInformation: const BigTextStyleInformation(
+          'El túnel WireGuard está ENCENDIDO.\n'
+          'Tocá esta notificación para abrir la VPN y apagarla cuando termines.'),
+    );
+    const iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: false,
+      presentSound: false,
+    );
+    const details =
+        NotificationDetails(android: androidDetails, iOS: iosDetails);
+
+    await _plugin.show(
+      _idTunelActivo,
+      'StarkGo · Túnel activo',
+      'WireGuard encendido — tocá para abrir y apagar.',
+      details,
+      payload: 'open_vpn',
+    );
+    debugPrint('🔔 Notificación del túnel VPN mostrada (id=$_idTunelActivo)');
+  }
+
+  /// Oculta la notificación persistente del túnel.
+  Future<void> ocultarTunelActivo() async {
+    await init();
+    await _plugin.cancel(_idTunelActivo);
+    debugPrint('🔔 Notificación del túnel VPN ocultada (id=$_idTunelActivo)');
   }
 
   /// Convierte el nombre de zona horaria del dispositivo (ej. "COT", "GMT-5")
@@ -191,7 +284,8 @@ class NotificacionesService {
       'MDT': 'America/Denver',
     };
     if (map.containsKey(t)) return map[t]!;
-    final offsetMatch = RegExp(r'^(?:GMT|UTC)([+-]\d{1,2})(?::\d{2})?$').firstMatch(t);
+    final offsetMatch =
+        RegExp(r'^(?:GMT|UTC)([+-]\d{1,2})(?::\d{2})?$').firstMatch(t);
     if (offsetMatch != null) {
       final h = int.parse(offsetMatch.group(1)!);
       if (h == -5) return 'America/Bogota';

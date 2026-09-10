@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-import 'package:stark_go/services/antenas_service.dart';
 import 'package:stark_go/services/vps_service.dart';
 import 'package:stark_go/services/wireguard_keygen.dart';
 
@@ -32,8 +31,9 @@ class _C {
   static const Color border = Color(0xFFE2E8F0);
 
   /// Enmascara una clave para mostrarla (nunca en texto plano).
-  static String mask(String s) =>
-      s.length < 8 ? '***' : '${s.substring(0, 4)}…${s.substring(s.length - 4)}';
+  static String mask(String s) => s.length < 8
+      ? '***'
+      : '${s.substring(0, 4)}…${s.substring(s.length - 4)}';
 }
 
 class ConfigVpnWidget extends StatefulWidget {
@@ -51,14 +51,20 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
 
   late final TextEditingController _endpointCtrl =
       TextEditingController(text: '5.161.88.42:1234');
+  late final TextEditingController _dnsCtrl = TextEditingController();
+  late final TextEditingController _keepaliveCtrl =
+      TextEditingController(text: '25');
+
+  /// Clave pública del servidor (real, para guardar). Nunca se muestra completa.
   late final TextEditingController _peerPubCtrl = TextEditingController();
+
+  /// Copia enmascarada (primeros 8 + ***) que se muestra en el formulario.
+  late final TextEditingController _peerPubDisplayCtrl =
+      TextEditingController();
   late final TextEditingController _privCtrl = TextEditingController();
   late final TextEditingController _addressCtrl = TextEditingController();
   late final TextEditingController _allowedCtrl =
       TextEditingController(text: '10.50.50.0/24, 10.10.15.0/24');
-  late final TextEditingController _dnsCtrl = TextEditingController();
-  late final TextEditingController _keepaliveCtrl =
-      TextEditingController(text: '25');
 
   bool _cargando = true;
   bool _guardando = false;
@@ -76,6 +82,20 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
 
   String? get _uid => FirebaseAuth.instance.currentUser?.uid;
 
+  /// Enmascara una clave: muestra los primeros 8 caracteres y el resto como ***.
+  String _enmascarar(String clave) {
+    final c = clave.trim();
+    if (c.isEmpty) return '';
+    if (c.length <= 8) return '***';
+    return '${c.substring(0, 8)}***';
+  }
+
+  /// Actualiza la clave real y su copia enmascarada para el formulario.
+  void _setPeerPub(String valor) {
+    _peerPubCtrl.text = valor.trim();
+    _peerPubDisplayCtrl.text = _enmascarar(valor);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -86,6 +106,7 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
   void dispose() {
     _endpointCtrl.dispose();
     _peerPubCtrl.dispose();
+    _peerPubDisplayCtrl.dispose();
     _privCtrl.dispose();
     _addressCtrl.dispose();
     _allowedCtrl.dispose();
@@ -93,6 +114,7 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
     _keepaliveCtrl.dispose();
     super.dispose();
   }
+
   // ── Cargar config existente / sugerir IP libre ─────────────────
   Future<void> _cargar() async {
     final uid = _uid;
@@ -108,7 +130,7 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
       if (doc.exists && mounted) {
         final d = doc.data() as Map<String, dynamic>;
         _endpointCtrl.text = (d['endpoint'] ?? '').toString();
-        _peerPubCtrl.text = (d['peerPublicKey'] ?? '').toString();
+        _setPeerPub((d['peerPublicKey'] ?? '').toString());
         _privCtrl.text = (d['privateKey'] ?? '').toString();
         _addressCtrl.text = (d['address'] ?? '').toString();
         _dnsCtrl.text = (d['dns'] ?? '').toString();
@@ -134,7 +156,8 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
       // Si no hay config, dejamos la IP vacía: el botón
       // "Registrar en el VPS" la asigna dinámicamente desde el pool.
     } catch (e) {
-      if (mounted) _error = 'No se pudo leer la configuración: ${e.runtimeType}';
+      if (mounted)
+        _error = 'No se pudo leer la configuración: ${e.runtimeType}';
     }
     if (mounted) setState(() => _cargando = false);
   }
@@ -182,7 +205,7 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
   // ── Registrar el peer en el VPS (IP dinámica del pool) ─────────
   // 1) Obtiene los datos del servidor (public key + endpoint) y los autocompleta.
   // 2) Da de alta el peer del cliente y asigna la próxima IP libre (10.50.50.x).
-  Future<void> _registrarEnVps() async {
+  Future<bool> _registrarEnVps() async {
     var publica = _clientPublicKey;
     if ((publica ?? '').isEmpty) {
       publica = await WireGuardKeygen.derivarPublica(_privCtrl.text);
@@ -191,7 +214,7 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Primero generá o pegá tu clave privada')),
       );
-      return;
+      return false;
     }
     setState(() => _guardando = true);
     try {
@@ -203,10 +226,10 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
                 'Config. MikroTik VPS y que el servidor tenga /wg/info.'),
           ),
         );
-        return;
+        return false;
       }
       // Autocompletar datos del servidor si faltan.
-      if (info.serverPublicKey.isNotEmpty) _peerPubCtrl.text = info.serverPublicKey;
+      if (info.serverPublicKey.isNotEmpty) _setPeerPub(info.serverPublicKey);
       if (info.endpoint.isNotEmpty) _endpointCtrl.text = info.endpoint;
 
       final registro = await VpsService.registrarPeerVps(
@@ -215,10 +238,11 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
       );
       if (registro == null || registro.ip.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('El VPS no pudo asignar una IP. '
-              'Revisá que /wg/register esté activo.')),
+          const SnackBar(
+              content: Text('El VPS no pudo asignar una IP. '
+                  'Revisá que /wg/register esté activo.')),
         );
-        return;
+        return false;
       }
       setState(() {
         _addressCtrl.text = registro.address;
@@ -231,27 +255,33 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('✅ Peer registrado en el VPS · IP asignada: ${registro.ip}'),
+          content:
+              Text('✅ Peer registrado en el VPS · IP asignada: ${registro.ip}'),
           behavior: SnackBarBehavior.floating,
         ),
       );
+      return true;
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error registrando en el VPS: ${e.runtimeType}')),
+          SnackBar(
+              content: Text('Error registrando en el VPS: ${e.runtimeType}')),
         );
       }
+      return false;
     } finally {
       if (mounted) setState(() => _guardando = false);
     }
   }
+
   // ── Guardar en Firestore ──────────────────────────────────────
   Future<void> _guardar() async {
     if (!_formKey.currentState!.validate()) return;
     final uid = _uid;
     if (uid == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Inicia sesión para guardar la configuración')),
+        const SnackBar(
+            content: Text('Inicia sesión para guardar la configuración')),
       );
       return;
     }
@@ -264,6 +294,16 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
       var publica = _clientPublicKey;
       if ((publica ?? '').isEmpty) {
         publica = await WireGuardKeygen.derivarPublica(_privCtrl.text);
+      }
+
+      // Alta automática en el VPS: si aún no hay IP asignada o la clave cambió,
+      // el servidor elige una IP libre del pool (10.50.50.x) y la guardamos.
+      final necesitaRegistro = _addressCtrl.text.trim().isEmpty ||
+          _claveNoCoincide ||
+          (publica ?? '').isEmpty;
+      if (necesitaRegistro) {
+        final ok = await _registrarEnVps();
+        if (!ok || !mounted) return;
       }
 
       await FirebaseFirestore.instance.collection('vpn_config').doc(uid).set({
@@ -303,9 +343,12 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('¿Borrar configuración VPN?'),
-        content: const Text('Se eliminará vpn_config. Tendrás que volver a configurar el túnel.'),
+        content: const Text(
+            'Se eliminará vpn_config. Tendrás que volver a configurar el túnel.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancelar')),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('Borrar', style: TextStyle(color: _C.danger)),
@@ -315,7 +358,10 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
     );
     if (ok != true || !mounted) return;
     try {
-      await FirebaseFirestore.instance.collection('vpn_config').doc(uid).delete();
+      await FirebaseFirestore.instance
+          .collection('vpn_config')
+          .doc(uid)
+          .delete();
       if (mounted) {
         Navigator.of(context).maybePop(true);
       }
@@ -325,36 +371,33 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
       }
     }
   }
+
   // ── Vista previa del wg-quick (privada enmascarada) ────────────
   String _wgQuickPreview() {
     final buf = StringBuffer()
       ..writeln('[Interface]')
-      ..writeln('PrivateKey = ${_privCtrl.text.isEmpty ? '…' : _C.mask(_privCtrl.text)}')
-      ..writeln('Address = ${_addressCtrl.text.isEmpty ? '…' : _addressCtrl.text}');
+      ..writeln(
+          'PrivateKey = ${_privCtrl.text.isEmpty ? '…' : _C.mask(_privCtrl.text)}')
+      ..writeln(
+          'Address = ${_addressCtrl.text.isEmpty ? '…' : _addressCtrl.text}');
     if (_dnsCtrl.text.trim().isNotEmpty) {
       buf.writeln('DNS = ${_dnsCtrl.text.trim()}');
     }
     buf
       ..writeln()
       ..writeln('[Peer]')
-      ..writeln('PublicKey = ${_peerPubCtrl.text.isEmpty ? '…' : _C.mask(_peerPubCtrl.text)}')
-      ..writeln('AllowedIPs = ${_allowedCtrl.text.isEmpty ? '…' : _allowedCtrl.text}')
-      ..writeln('Endpoint = ${_endpointCtrl.text.isEmpty ? '…' : _endpointCtrl.text}')
-      ..writeln('PersistentKeepalive = ${_keepaliveCtrl.text.isEmpty ? '…' : _keepaliveCtrl.text}');
+      ..writeln(
+          'PublicKey = ${_peerPubCtrl.text.isEmpty ? '…' : _C.mask(_peerPubCtrl.text)}')
+      ..writeln(
+          'AllowedIPs = ${_allowedCtrl.text.isEmpty ? '…' : _allowedCtrl.text}')
+      ..writeln(
+          'Endpoint = ${_endpointCtrl.text.isEmpty ? '…' : _endpointCtrl.text}')
+      ..writeln(
+          'PersistentKeepalive = ${_keepaliveCtrl.text.isEmpty ? '…' : _keepaliveCtrl.text}');
     return buf.toString();
   }
 
   // ── Validadores ───────────────────────────────────────────────
-  String? _validarEndpoint(String? v) {
-    final valor = (v ?? '').trim();
-    if (valor.isEmpty) return 'Ingresá el endpoint';
-    final parts = valor.split(':');
-    if (parts.length != 2 || parts[0].isEmpty || int.tryParse(parts[1]) == null) {
-      return 'Formato: host:puerto (ej: 10.50.50.2:13231)';
-    }
-    return null;
-  }
-
   String? _validarClave(String? v, String campo) {
     final valor = (v ?? '').trim();
     if (valor.isEmpty) return 'Ingresá la $campo';
@@ -362,24 +405,6 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
       return 'Clave inválida (base64 de 32 bytes)';
     }
     return null;
-  }
-
-  String? _validarAddress(String? v) {
-    final valor = (v ?? '').trim();
-    if (valor.isEmpty) return 'Ingresá la IP (o usá "Registrar en el VPS")';
-    final ip = valor.split('/').first.trim();
-    if (!AntenasService.ipEnSubred10_10_15(ip) && !_ipEn10_50_50(ip)) {
-      return 'La IP debe estar en el pool del VPS (10.50.50.0/24)';
-    }
-    return null;
-  }
-
-  bool _ipEn10_50_50(String ip) {
-    final parts = ip.split('.');
-    if (parts.length != 4) return false;
-    if (parts[0] != '10' || parts[1] != '50' || parts[2] != '50') return false;
-    final ultimo = int.tryParse(parts[3]);
-    return ultimo != null && ultimo >= 2 && ultimo <= 250;
   }
 
   String? _validarKeepalive(String? v) {
@@ -401,7 +426,8 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
             _buildHeader(),
             Expanded(
               child: _cargando
-                  ? const Center(child: CircularProgressIndicator(color: _C.primary))
+                  ? const Center(
+                      child: CircularProgressIndicator(color: _C.primary))
                   : SingleChildScrollView(
                       padding: const EdgeInsets.all(16),
                       child: _buildForm(),
@@ -434,7 +460,8 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
               gradient: const LinearGradient(colors: [_C.primary, _C.accent]),
               borderRadius: BorderRadius.circular(12),
             ),
-            child: const Icon(Icons.tune_rounded, color: Colors.white, size: 20),
+            child:
+                const Icon(Icons.tune_rounded, color: Colors.white, size: 20),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -443,9 +470,12 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
               children: [
                 Text('Configurar VPN',
                     style: GoogleFonts.spaceGrotesk(
-                        color: _C.textPri, fontSize: 17, fontWeight: FontWeight.w800)),
+                        color: _C.textPri,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w800)),
                 Text('vpn_config/<tu usuario>',
-                    style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11)),
+                    style: GoogleFonts.spaceGrotesk(
+                        color: _C.textSec, fontSize: 11)),
               ],
             ),
           ),
@@ -453,6 +483,7 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
       ),
     );
   }
+
   // ── Formulario ───────────────────────────────────────────────
   Widget _buildForm() {
     return Form(
@@ -464,31 +495,44 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
             icon: Icons.hub_rounded,
             color: _C.primary,
             title: 'Hub WireGuard en el VPS · alta dinámica',
-            subtitle: 'Cada empresa/técnico es un peer del VPS (10.50.50.x) con su '
-                'propia IP del pool. Usá "Registrar en el VPS" para asignar la IP, '
-                'autocompletar la clave pública del servidor y el endpoint. '
+            subtitle:
+                'Cada empresa/técnico es un peer del VPS (10.50.50.x) con su '
+                'propia IP del pool. Al tocar Guardar se registra solo en el VPS (asigna una IP libre, '
+                'autocompleta la clave pública del servidor y el endpoint). '
                 'Los datos se guardan en vpn_config/<tu usuario>.',
           ),
-          if (_error != null) _bannerInfo(icon: Icons.error_outline_rounded, color: _C.danger, title: 'Error', subtitle: _error!),
+          if (_error != null)
+            _bannerInfo(
+                icon: Icons.error_outline_rounded,
+                color: _C.danger,
+                title: 'Error',
+                subtitle: _error!),
           const SizedBox(height: 16),
 
           // ── Servidor ──
-          _seccionTitulo('Servidor WireGuard (MikroTik)'),
+          _seccionTitulo('Servidor WireGuard (VPS)'),
+          _bannerInfo(
+            icon: Icons.lock_rounded,
+            color: _C.textSec,
+            title: 'Datos del servidor bloqueados',
+            subtitle:
+                'Endpoint y clave pública del servidor los asigna el VPS. '
+                'Solo se ven, no se pueden editar ni copiar.',
+          ),
+          const SizedBox(height: 10),
           _campo(
             controller: _endpointCtrl,
             label: 'Endpoint del servidor',
-            hint: '10.50.50.2:13231',
+            hint: '5.161.88.42:1234',
             icon: Icons.dns_rounded,
-            keyboard: TextInputType.url,
-            validator: _validarEndpoint,
+            readOnly: true,
           ),
           const SizedBox(height: 8),
           _campo(
-            controller: _peerPubCtrl,
-            label: 'Clave pública del servidor (Peer)',
-            hint: 'Pegá la PublicKey del MikroTik',
+            controller: _peerPubDisplayCtrl,
+            label: 'Clave pública del servidor',
             icon: Icons.vpn_key_rounded,
-            validator: (v) => _validarClave(v, 'clave pública del servidor'),
+            readOnly: true,
           ),
 
           const SizedBox(height: 18),
@@ -499,7 +543,8 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
               Expanded(
                 child: Text(
                   'Generá el par de claves o pegá una privada existente.',
-                  style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11, height: 1.35),
+                  style: GoogleFonts.spaceGrotesk(
+                      color: _C.textSec, fontSize: 11, height: 1.35),
                 ),
               ),
               const SizedBox(width: 8),
@@ -519,8 +564,13 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
             obscure: !_mostrarPrivada,
             validator: (v) => _validarClave(v, 'clave privada'),
             suffix: IconButton(
-              icon: Icon(_mostrarPrivada ? Icons.visibility_off_rounded : Icons.visibility_rounded, size: 18),
-              onPressed: () => setState(() => _mostrarPrivada = !_mostrarPrivada),
+              icon: Icon(
+                  _mostrarPrivada
+                      ? Icons.visibility_off_rounded
+                      : Icons.visibility_rounded,
+                  size: 18),
+              onPressed: () =>
+                  setState(() => _mostrarPrivada = !_mostrarPrivada),
             ),
           ),
           const SizedBox(height: 8),
@@ -529,9 +579,10 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
             _bannerInfo(
               icon: Icons.warning_amber_rounded,
               color: _C.warning,
-              title: 'La clave privada cambió respecto a la registrada en el VPS',
+              title:
+                  'La clave privada cambió respecto a la registrada en el VPS',
               subtitle: 'El servidor no te va a reconocer con esta clave. '
-                  'Tocá "Registrar en el VPS" para actualizar tu peer.',
+                  'Al tocar Guardar se actualiza tu peer automáticamente.',
             ),
           const SizedBox(height: 10),
           // Alta automática en el VPS (hub): autocompleta servidor + IP dinámica.
@@ -549,7 +600,8 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
             title: _redAntenas != null
                 ? 'Subred de antenas asignada: $_redAntenas'
                 : 'Subred de antenas: se asigna al registrar en el VPS',
-            subtitle: 'Cada empresa/técnico tiene su propia subred 10.10.x.0/24 '
+            subtitle:
+                'Cada empresa/técnico tiene su propia subred 10.10.x.0/24 '
                 '(asignada por el VPS, no editable) para que las antenas nunca choquen.',
           ),
           const SizedBox(height: 10),
@@ -558,17 +610,15 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
             label: 'IP del dispositivo en el túnel',
             hint: '10.50.50.6/32',
             icon: Icons.network_ping_rounded,
-            keyboard: TextInputType.url,
-            validator: _validarAddress,
+            readOnly: true,
           ),
           const SizedBox(height: 8),
           _campo(
             controller: _allowedCtrl,
-            label: 'AllowedIPs',
-            hint: '10.10.15.0/24',
+            label: 'AllowedIPs (redes del túnel)',
+            hint: '10.50.50.0/24, 10.10.15.0/24',
             icon: Icons.route_rounded,
-            keyboard: TextInputType.text,
-            validator: (v) => (v == null || v.trim().isEmpty) ? 'Ingresá AllowedIPs' : null,
+            readOnly: true,
           ),
           const SizedBox(height: 8),
           _campo(
@@ -603,12 +653,16 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
           const SizedBox(height: 8),
           OutlinedButton.icon(
             onPressed: _borrar,
-            icon: const Icon(Icons.delete_outline_rounded, size: 18, color: _C.danger),
-            label: Text('Borrar configuración', style: GoogleFonts.spaceGrotesk(color: _C.danger, fontSize: 13)),
+            icon: const Icon(Icons.delete_outline_rounded,
+                size: 18, color: _C.danger),
+            label: Text('Borrar configuración',
+                style:
+                    GoogleFonts.spaceGrotesk(color: _C.danger, fontSize: 13)),
             style: OutlinedButton.styleFrom(
               padding: const EdgeInsets.symmetric(vertical: 14),
               side: BorderSide(color: _C.danger.withOpacity(0.4)),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14)),
             ),
           ),
           const SizedBox(height: 24),
@@ -642,6 +696,8 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
     String? Function(String?)? validator,
     Widget? suffix,
     bool obscure = false,
+    bool readOnly = false,
+    bool enabled = true,
   }) {
     final outline = OutlineInputBorder(
       borderRadius: BorderRadius.circular(14),
@@ -660,18 +716,30 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
       obscureText: obscure,
       keyboardType: keyboard,
       validator: validator,
-      style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 13.5),
+      readOnly: readOnly,
+      enabled: enabled,
+      style: GoogleFonts.spaceGrotesk(
+              color: readOnly ? _C.textSec : _C.textPri, fontSize: 13.5)
+          .copyWith(fontFamily: readOnly ? 'monospace' : null),
       decoration: InputDecoration(
         labelText: label,
         hintText: hint,
-        prefixIcon: icon != null ? Icon(icon, color: _C.textSec, size: 20) : null,
-        suffixIcon: suffix,
+        prefixIcon:
+            icon != null ? Icon(icon, color: _C.textSec, size: 20) : null,
+        suffixIcon: readOnly
+            ? const Padding(
+                padding: EdgeInsets.only(right: 12),
+                child: Icon(Icons.lock_rounded, color: _C.border, size: 18),
+              )
+            : suffix,
         filled: true,
-        fillColor: _C.surface,
+        fillColor: readOnly ? _C.surfaceDim.withOpacity(0.55) : _C.surface,
         labelStyle: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 12.5),
-        hintStyle: GoogleFonts.spaceGrotesk(color: _C.textSec.withOpacity(0.6), fontSize: 12),
+        hintStyle: GoogleFonts.spaceGrotesk(
+            color: _C.textSec.withOpacity(0.6), fontSize: 12),
         errorStyle: GoogleFonts.spaceGrotesk(color: _C.danger, fontSize: 10.5),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 15),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 15),
         enabledBorder: outline,
         focusedBorder: focusOutline,
         errorBorder: errorOutline,
@@ -701,7 +769,9 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
             const SizedBox(width: 4),
             Text(label,
                 style: GoogleFonts.spaceGrotesk(
-                    color: _C.primary, fontSize: 11, fontWeight: FontWeight.w700)),
+                    color: _C.primary,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700)),
           ],
         ),
       ),
@@ -733,10 +803,13 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
               children: [
                 Text(title,
                     style: GoogleFonts.spaceGrotesk(
-                        color: _C.textPri, fontSize: 12.5, fontWeight: FontWeight.w700)),
+                        color: _C.textPri,
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700)),
                 const SizedBox(height: 3),
                 Text(subtitle,
-                    style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11, height: 1.4)),
+                    style: GoogleFonts.spaceGrotesk(
+                        color: _C.textSec, fontSize: 11, height: 1.4)),
               ],
             ),
           ),
@@ -760,7 +833,10 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
           gradient: const LinearGradient(colors: [_C.primary, _C.accent]),
           borderRadius: BorderRadius.circular(14),
           boxShadow: [
-            BoxShadow(color: _C.primary.withOpacity(0.3), blurRadius: 14, offset: const Offset(0, 5)),
+            BoxShadow(
+                color: _C.primary.withOpacity(0.3),
+                blurRadius: 14,
+                offset: const Offset(0, 5)),
           ],
         ),
         child: Center(
@@ -768,7 +844,8 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
               ? const SizedBox(
                   width: 20,
                   height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.white),
                 )
               : Row(
                   mainAxisSize: MainAxisSize.min,
@@ -777,13 +854,16 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
                     const SizedBox(width: 8),
                     Text(label,
                         style: GoogleFonts.spaceGrotesk(
-                            color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
+                            color: Colors.white,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700)),
                   ],
                 ),
         ),
       ),
     );
   }
+
   Widget _botonVps({
     required VoidCallback? onTap,
     bool loading = false,
@@ -794,7 +874,8 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
         decoration: BoxDecoration(
-          gradient: const LinearGradient(colors: [Color(0xFF0F172A), Color(0xFF1E293B)]),
+          gradient: const LinearGradient(
+              colors: [Color(0xFF0F172A), Color(0xFF1E293B)]),
           borderRadius: BorderRadius.circular(14),
         ),
         child: Center(
@@ -802,16 +883,20 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
               ? const SizedBox(
                   width: 20,
                   height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.white),
                 )
               : Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.cloud_upload_rounded, color: Colors.white, size: 18),
+                    const Icon(Icons.cloud_upload_rounded,
+                        color: Colors.white, size: 18),
                     const SizedBox(width: 8),
                     Text('Registrar en el VPS (IP dinámica)',
                         style: GoogleFonts.spaceGrotesk(
-                            color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.w700)),
+                            color: Colors.white,
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w700)),
                   ],
                 ),
         ),
@@ -838,15 +923,19 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
               const Icon(Icons.vpn_key_rounded, color: _C.primary, size: 16),
               const SizedBox(width: 6),
               Expanded(
-                child: Text('Tu clave pública (agregala como Peer en el MikroTik)',
+                child: Text(
+                    'Tu clave pública (agregala como Peer en el MikroTik)',
                     style: GoogleFonts.spaceGrotesk(
-                        color: _C.textPri, fontSize: 11.5, fontWeight: FontWeight.w700)),
+                        color: _C.textPri,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w700)),
               ),
               if (tienePrivada)
                 TextButton(
                   onPressed: _derivarPublica,
                   child: Text('Derivar',
-                      style: GoogleFonts.spaceGrotesk(color: _C.primary, fontSize: 10.5)),
+                      style: GoogleFonts.spaceGrotesk(
+                          color: _C.primary, fontSize: 10.5)),
                 ),
             ],
           ),
@@ -857,12 +946,16 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
                 Expanded(
                   child: SelectableText(
                     pub,
-                    style: const TextStyle(fontFamily: 'monospace', fontSize: 11, color: _C.textPri),
+                    style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 11,
+                        color: _C.textPri),
                   ),
                 ),
                 IconButton(
                   visualDensity: VisualDensity.compact,
-                  icon: const Icon(Icons.copy_rounded, color: _C.textSec, size: 16),
+                  icon: const Icon(Icons.copy_rounded,
+                      color: _C.textSec, size: 16),
                   onPressed: () {
                     Clipboard.setData(ClipboardData(text: pub));
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -874,7 +967,8 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
             )
           else
             Text('Generá tus claves para obtener tu clave pública.',
-                style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11)),
+                style:
+                    GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11)),
         ],
       ),
     );
@@ -883,7 +977,8 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
   // ── Tarjeta: vista previa del wg-quick (privada enmascarada) ──
   Widget _tarjetaPreview() {
     return Container(
-      decoration: BoxDecoration(color: _C.dark, borderRadius: BorderRadius.circular(14)),
+      decoration: BoxDecoration(
+          color: _C.dark, borderRadius: BorderRadius.circular(14)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -894,15 +989,22 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
               child: Row(
                 children: [
-                  const Icon(Icons.description_outlined, color: Colors.white54, size: 18),
+                  const Icon(Icons.description_outlined,
+                      color: Colors.white54, size: 18),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text('Vista previa wg-quick (privada oculta)',
                         style: GoogleFonts.spaceGrotesk(
-                            color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600)),
                   ),
-                  Icon(_mostrarPreview ? Icons.expand_less_rounded : Icons.expand_more_rounded,
-                      color: Colors.white38, size: 20),
+                  Icon(
+                      _mostrarPreview
+                          ? Icons.expand_less_rounded
+                          : Icons.expand_more_rounded,
+                      color: Colors.white38,
+                      size: 20),
                 ],
               ),
             ),
@@ -913,7 +1015,10 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
               child: SelectableText(
                 _wgQuickPreview(),
                 style: const TextStyle(
-                    fontFamily: 'monospace', fontSize: 11, color: Colors.white70, height: 1.5),
+                    fontFamily: 'monospace',
+                    fontSize: 11,
+                    color: Colors.white70,
+                    height: 1.5),
               ),
             ),
         ],
@@ -921,10 +1026,3 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
     );
   }
 }
-
-
-
-
-
-
-

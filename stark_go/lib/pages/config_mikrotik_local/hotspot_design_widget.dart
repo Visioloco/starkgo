@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 
 import 'package:flutter/services.dart';
@@ -8,6 +10,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 import '../../services/hotspot_ftp_service.dart';
 import '../../services/hotspot_design_store.dart';
 import '../../services/hotspot_design_firestore.dart';
+import '../../services/portal_vps_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────
 // Misma paleta usada en el resto del módulo MikroTik.
@@ -148,11 +151,39 @@ const String kPlantillaBaseErrors = '''
 </html>
 ''';
 
+const String kPromptIaPortal = '''
+Genera el HTML de UNA SOLA página (autocontenida, sin dependencias externas) para mostrar a un cliente de internet cuyo servicio está SUSPENDIDO por falta de pago (portal de mora). NO es un login de hotspot: NO incluyas formulario de usuario ni clave. Se verá en el celular del cliente.
+
+Requisitos:
+1. HTML5 con todo el CSS dentro del mismo archivo (tag <style> o estilos en línea). No uses fuentes ni scripts externos ni imágenes de internet: el cliente no tiene navegación.
+2. Usa EXACTAMENTE estos marcadores y NO los reemplaces por valores fijos:
+   {{nombre}} -> nombre del cliente (para saludarlo)
+   {{saldo}}  -> valor a pagar (debe quedar MUY destacado)
+   {{plan}}   -> plan contratado
+   {{ip}}     -> IP del cliente (opcional, en texto pequeño)
+   {{fecha}}  -> fecha actual (en el pie de página)
+3. Estructura sugerida:
+   - Encabezado: logo opcional <img src="logo.png"> y nombre de la empresa [NOMBRE EMPRESA].
+   - Aviso grande y claro: "Hola {{nombre}}, tu servicio está suspendido".
+   - Motivo: falta de pago del plan.
+   - Caja destacada con el monto: "Valor a pagar: {{saldo}}" y debajo "Plan: {{plan}}".
+   - Pasos para pagar (1. Realiza el pago, 2. Envía el comprobante por WhatsApp) con un botón grande de WhatsApp con el enlace: https://wa.me/57[WHATSAPP SOPORTE]?text=Hola,%20ya%20realic%C3%A9%20el%20pago%20de%20mi%20servicio
+   - Pie: "Si ya realizaste el pago, tu servicio se reactiva en pocos minutos." y {{fecha}}.
+4. Estilo con colores de marca [COLOR PRINCIPAL, ej. #1A73E8] y [COLOR SECUNDARIO, ej. #00C6AE], tipografía legible y botones grandes para móvil.
+5. NO uses variables de MikroTik del tipo \$(...). Solo los marcadores {{...}} de arriba.
+
+Entrega únicamente el código HTML completo dentro de un bloque ```html ... ```.
+''';
+
 class HotspotDesignWidget extends StatefulWidget {
   final String host;
   final String usuario;
   final String clave;
   final int puertoFtp;
+
+  /// true = modo remoto (portal de pago en el VPS): oculta la conexión FTP
+  /// local y el botón "Publicar en el router"; solo publica en el portal VPS.
+  final bool soloPortalVps;
 
   const HotspotDesignWidget({
     Key? key,
@@ -160,6 +191,7 @@ class HotspotDesignWidget extends StatefulWidget {
     required this.usuario,
     required this.clave,
     this.puertoFtp = 21,
+    this.soloPortalVps = false,
   }) : super(key: key);
 
   @override
@@ -180,6 +212,7 @@ class _HotspotDesignWidgetState extends State<HotspotDesignWidget> {
   HotspotPagina _paginaActual = HotspotPagina.login;
 
   bool _publicando = false;
+  bool _publicandoPortal = false;
   bool _cargandoHistorial = true;
   bool _cargandoBorrador = true;
   bool _cargandoFirestore = true;
@@ -405,13 +438,48 @@ class _HotspotDesignWidgetState extends State<HotspotDesignWidget> {
       final XFile? archivo = await _imagePicker.pickImage(source: ImageSource.gallery, imageQuality: 90);
       if (archivo == null) return;
       final bytes = await archivo.readAsBytes();
+      final logoReducido = await _redimensionarLogo(bytes);
       setState(() {
-        _logoBytes = bytes;
+        _logoBytes = logoReducido;
         _logoNombre = 'logo.png';
       });
       await _guardarBorrador();
     } catch (e) {
       _snack('No se pudo cargar la imagen: $e', _C.danger);
+    }
+  }
+
+  /// Reduce el logo a un tamaño razonable y lo convierte a PNG. Así el HTML
+  /// del portal VPS (con el logo incrustado) no supera el límite del servidor.
+  Future<Uint8List> _redimensionarLogo(Uint8List bytes,
+      {int maxLado = 256}) async {
+    try {
+      final codec = await ui.instantiateImageCodec(bytes);
+      final frame = await codec.getNextFrame();
+      final img = frame.image;
+      final ancho = img.width;
+      final alto = img.height;
+      final mayor = ancho > alto ? ancho : alto;
+      final escala = mayor > maxLado ? maxLado / mayor : 1.0;
+      final nAncho = (ancho * escala).round().clamp(1, maxLado).toInt();
+      final nAlto = (alto * escala).round().clamp(1, maxLado).toInt();
+
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+      canvas.drawImageRect(
+        img,
+        Rect.fromLTWH(0, 0, ancho.toDouble(), alto.toDouble()),
+        Rect.fromLTWH(0, 0, nAncho.toDouble(), nAlto.toDouble()),
+        Paint()..filterQuality = FilterQuality.high,
+      );
+      final picture = recorder.endRecording();
+      final resized = await picture.toImage(nAncho, nAlto);
+      final data = await resized.toByteData(format: ui.ImageByteFormat.png);
+      resized.dispose();
+      img.dispose();
+      return data?.buffer.asUint8List() ?? bytes;
+    } catch (_) {
+      return bytes;
     }
   }
 
@@ -425,6 +493,10 @@ class _HotspotDesignWidgetState extends State<HotspotDesignWidget> {
   }
 
   Future<void> _publicar() async {
+    if (widget.soloPortalVps) {
+      _snack('Modo remoto: usá "Publicar en portal VPS"', _C.warning);
+      return;
+    }
     final html = _htmlController.text.trim();
     if (html.isEmpty) {
       _snack('Pega o escribe el HTML antes de publicar', _C.warning);
@@ -603,51 +675,104 @@ class _HotspotDesignWidgetState extends State<HotspotDesignWidget> {
     }
     showDialog(
       context: context,
-      builder: (dialogContext) => Dialog(
-        backgroundColor: Colors.transparent,
-        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-        child: Container(
-          width: double.infinity,
-          height: double.infinity,
-          decoration: BoxDecoration(color: _C.surface, borderRadius: BorderRadius.circular(20)),
-          clipBehavior: Clip.antiAlias,
-          child: Column(
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                decoration: BoxDecoration(
-                  color: _C.dark,
-                  borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-                ),
-                child: Row(children: [
-                  const Icon(Icons.visibility_rounded, color: _C.accent, size: 18),
-                  const SizedBox(width: 8),
-                  Text('Vista previa de ${_paginaActual.etiqueta}',
-                      style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
-                  const Spacer(),
-                  GestureDetector(
-                    onTap: () => Navigator.pop(dialogContext),
-                    child: Container(
-                      padding: const EdgeInsets.all(6),
-                      decoration: BoxDecoration(color: Colors.white.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
-                      child: const Icon(Icons.close_rounded, color: Colors.white, size: 18),
-                    ),
-                  ),
-                ]),
-              ),
-              Expanded(
-                child: WebViewWidget(
-                  controller: WebViewController()
-                    ..setJavaScriptMode(JavaScriptMode.unrestricted)
-                    ..loadHtmlString(html),
-                ),
-              ),
-            ],
-          ),
-        ),
+      builder: (_) => _PreviewDialog(
+        titulo: 'Vista previa de ${_paginaActual.etiqueta}',
+        html: html,
       ),
     );
   }
+  // ── Publicar la página actual en el portal del VPS (remoto) ──
+  Future<void> _publicarPortalVps() async {
+    final html = _htmlController.text.trim();
+    if (html.isEmpty) {
+      _snack('Pega o escribe el HTML antes de publicar en el portal', _C.warning);
+      return;
+    }
+    setState(() => _publicandoPortal = true);
+    try {
+      String htmlPublicar = html;
+      if (_logoBytes != null) {
+        // En el portal VPS no existe logo.png del router: el logo se incrusta
+        // como data URI. Si el guardado es pesado (de antes), se reduce aquí.
+        final logo = _logoBytes!.length > 250000
+            ? await _redimensionarLogo(_logoBytes!)
+            : _logoBytes!;
+        htmlPublicar = _incrustarLogoEnHtml(html, logo, _logoNombre);
+      }
+
+      final ok = await PortalVpsService.publicarPagina(
+        archivo: _paginaActual.archivo,
+        html: htmlPublicar,
+      );
+      if (!ok) {
+        _snack('No se pudo publicar en el portal del VPS. Si elegiste logo, '
+            'probá con una imagen PNG más liviana o más pequeña.', _C.danger);
+        return;
+      }
+      await _guardarBorrador();
+      _snack('${_paginaActual.etiqueta} publicado en el portal (VPS) ✓', _C.success);
+      // Abre la vista previa REAL, tal como la sirve el VPS.
+      final url = await PortalVpsService.urlPortal(_paginaActual.archivo);
+      if (url != null && mounted) {
+        _verPreviewUrl(url, 'Portal publicado · ${_paginaActual.etiqueta}');
+      }
+    } catch (e) {
+      _snack('Error al publicar en el portal: $e', _C.danger);
+    } finally {
+      if (mounted) setState(() => _publicandoPortal = false);
+    }
+  }
+
+  /// Incrusta el logo como data URI dentro del HTML (portal VPS).
+  String _incrustarLogoEnHtml(String html, Uint8List bytes, String? nombre) {
+    final ext = (nombre ?? 'logo.png').split('.').last.toLowerCase();
+    final mime = ext == 'jpg' || ext == 'jpeg'
+        ? 'image/jpeg'
+        : ext == 'gif'
+            ? 'image/gif'
+            : ext == 'webp'
+                ? 'image/webp'
+                : 'image/png';
+    final uri = 'data:$mime;base64,${base64Encode(bytes)}';
+    final re = RegExp("src=([\"'])logo\\.[a-zA-Z0-9]+\\1");
+    var out = html.replaceAllMapped(re, (m) => 'src=${m[1]}$uri${m[1]}');
+    if (!re.hasMatch(html)) {
+      final div = '<div style="text-align:center;margin:10px auto;">'
+          '<img src="$uri" alt="Logo" '
+          'style="max-width:180px;max-height:80px;object-fit:contain;"></div>';
+      final nuevo = html.replaceFirstMapped(
+        RegExp(r'<body[^>]*>', caseSensitive: false),
+        (m) => '${m[0]}$div',
+      );
+      out = nuevo == html ? '$div$html' : nuevo;
+    }
+    return out;
+  }
+
+  /// Abre en un diálogo la página YA publicada en el VPS (ver cómo queda).
+  void _verPortalPublicado() async {
+    final url = await PortalVpsService.urlPortal(_paginaActual.archivo);
+    if (url == null) {
+      _snack('Falta vpsApiKey (Configuración → MikroTik)', _C.warning);
+      return;
+    }
+    _verPreviewUrl(url, 'Portal publicado · ${_paginaActual.etiqueta}');
+  }
+
+  void _verPreviewUrl(String url, String titulo) {
+    showDialog(
+      context: context,
+      builder: (_) => _PreviewDialog(
+        titulo: titulo,
+        url: url,
+        // El "Código" muestra el HTML publicado en el VPS (tal cual se guardó).
+        cargarCodigo: () =>
+            PortalVpsService.obtenerPaginaPublicada(_paginaActual.archivo),
+      ),
+    );
+  }
+
+
 
   // ─────────────────────────────────────────────────────────────────────
   @override
@@ -659,15 +784,92 @@ class _HotspotDesignWidgetState extends State<HotspotDesignWidget> {
         children: [
           _buildIntro(),
           const SizedBox(height: 16),
+          if (widget.soloPortalVps) ...[
+            _buildBannerVpsRemoto(),
+            const SizedBox(height: 16),
+          ],
           _buildLogoPicker(),
           const SizedBox(height: 16),
-          _buildConfigFtp(),
-          const SizedBox(height: 16),
+          if (!widget.soloPortalVps) ...[
+            _buildConfigFtp(),
+            const SizedBox(height: 16),
+          ],
           _buildHtmlEditor(),
           const SizedBox(height: 16),
-          _buildBotonPublicar(),
+          if (!widget.soloPortalVps) ...[
+            _buildBotonPublicar(),
+            const SizedBox(height: 16),
+          ],
+          _buildPortalRemotoCard(),
           const SizedBox(height: 20),
           _buildHistorial(),
+        ],
+      ),
+    );
+  }
+
+  void _copiarPromptIa() {
+    Clipboard.setData(const ClipboardData(text: kPromptIaPortal));
+    _snack('Prompt copiado. Pégalo en tu IA y luego pega el HTML aquí.', _C.success);
+  }
+
+  Widget _buildBannerVpsRemoto() {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _C.primary.withOpacity(0.07),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _C.primary.withOpacity(0.25)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                  gradient: const LinearGradient(colors: [_C.primary, _C.accent]),
+                  borderRadius: BorderRadius.circular(10)),
+              child: const Icon(Icons.lock_clock_rounded, color: Colors.white, size: 18),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Estás editando la página que verá el cliente cuando su servicio '
+                    'esté suspendido (portal de pago). Se publica en el VPS, sin '
+                    'tocar el hotspot de fichas.',
+                    style: GoogleFonts.spaceGrotesk(
+                        color: _C.textPri, fontSize: 11.5, height: 1.4),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Datos automáticos: {{nombre}} · {{saldo}} (valor del plan) · '
+                    '{{plan}} · {{ip}} · {{fecha}}',
+                    style: GoogleFonts.spaceGrotesk(
+                        color: _C.primary,
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+            ),
+          ]),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: _copiarPromptIa,
+              icon: const Icon(Icons.copy_rounded, size: 15),
+              label: Text('Copiar prompt para la IA',
+                  style: GoogleFonts.spaceGrotesk(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600)),
+              style: TextButton.styleFrom(foregroundColor: _C.primary),
+            ),
+          ),
         ],
       ),
     );
@@ -754,7 +956,13 @@ class _HotspotDesignWidgetState extends State<HotspotDesignWidget> {
               Text('Logo del hotspot', style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 13, fontWeight: FontWeight.w700)),
               const SizedBox(height: 2),
               Text(
-                _logoBytes != null ? 'Se subirá como logo.png' : 'Se referencia en el HTML como <img src="logo.png">',
+                _logoBytes != null
+                    ? (widget.soloPortalVps
+                        ? 'Se incrustará en la página al publicar en el VPS'
+                        : 'Se subirá como logo.png')
+                    : (widget.soloPortalVps
+                        ? 'Se incrustará al publicar (usa <img src="logo.png"> en tu HTML)'
+                        : 'Se referencia en el HTML como <img src="logo.png">'),
                 style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10.5),
               ),
             ],
@@ -969,6 +1177,78 @@ class _HotspotDesignWidgetState extends State<HotspotDesignWidget> {
     );
   }
 
+  Widget _buildPortalRemotoCard() {
+    return Container(
+      decoration: BoxDecoration(
+        color: _C.primary.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _C.primary.withOpacity(0.2)),
+      ),
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                  gradient: const LinearGradient(colors: [_C.primary, _C.accent]),
+                  borderRadius: BorderRadius.circular(9)),
+              child: const Icon(Icons.language_rounded, color: Colors.white, size: 17),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Portal de pago (VPS)',
+                    style: GoogleFonts.spaceGrotesk(
+                        color: _C.textPri, fontSize: 14, fontWeight: FontWeight.w700)),
+                Text(
+                    'Publica esta página en el VPS: la editas y la ves desde cualquier '
+                    'lugar (sin FTP local) y el hotspot puede redirigir al moroso aquí.',
+                    style: GoogleFonts.spaceGrotesk(
+                        color: _C.textSec, fontSize: 10.5, height: 1.35)),
+              ]),
+            ),
+          ]),
+          const SizedBox(height: 12),
+          Row(children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: _publicandoPortal ? null : _publicarPortalVps,
+                icon: _publicandoPortal
+                    ? const SizedBox(
+                        width: 15, height: 15, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.cloud_upload_rounded, size: 17),
+                label: Text(_publicandoPortal ? 'Publicando…' : 'Publicar en portal VPS',
+                    style: GoogleFonts.spaceGrotesk(fontSize: 11.5, fontWeight: FontWeight.w600)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _C.primary,
+                  side: BorderSide(color: _C.primary.withOpacity(0.4)),
+                  padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: _verPortalPublicado,
+                icon: const Icon(Icons.open_in_browser_rounded, size: 17),
+                label: Text('Ver publicado',
+                    style: GoogleFonts.spaceGrotesk(fontSize: 11.5, fontWeight: FontWeight.w600)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _C.primary,
+                  side: BorderSide(color: _C.primary.withOpacity(0.4)),
+                  padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+                ),
+              ),
+            ),
+          ]),
+        ],
+      ),
+    );
+  }
+
   Widget _buildBotonPublicar() {
     return SizedBox(
       width: double.infinity,
@@ -1051,5 +1331,273 @@ class _HotspotDesignWidgetState extends State<HotspotDesignWidget> {
     const meses = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
     String p(int n) => n.toString().padLeft(2, '0');
     return '${p(d.day)} ${meses[d.month - 1]} ${d.year} · ${p(d.hour)}:${p(d.minute)}';
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+//  Diálogo de vista previa del portal: pestañas "Visual" y "Código HTML".
+//   · Visual → WebView (HTML local o URL publicada en el VPS).
+//   · Código → el HTML del editor o el publicado (se descarga con cargarCodigo).
+// ═════════════════════════════════════════════════════════════════════════
+class _PreviewDialog extends StatefulWidget {
+  final String titulo;
+
+  /// HTML local (vista previa del editor). Se usa si no hay [url].
+  final String? html;
+
+  /// URL publicada en el VPS; se carga en el WebView.
+  final String? url;
+
+  /// Carga diferida del HTML publicado (pestaña "Código").
+  /// Si es null, el código mostrado es [html].
+  final Future<String?> Function()? cargarCodigo;
+
+  const _PreviewDialog({
+    required this.titulo,
+    this.html,
+    this.url,
+    this.cargarCodigo,
+  });
+
+  @override
+  State<_PreviewDialog> createState() => _PreviewDialogState();
+}
+
+class _PreviewDialogState extends State<_PreviewDialog> {
+  late final WebViewController _web;
+  bool _verCodigo = false;
+  bool _cargandoCodigo = false;
+  bool _codigoListo = false;
+  String? _codigo;
+  String? _error;
+
+  bool get _esPublicado => widget.cargarCodigo != null;
+
+  @override
+  void initState() {
+    super.initState();
+    _web = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(Colors.white);
+    if (widget.url != null) {
+      _web.loadRequest(Uri.parse(widget.url!));
+    } else {
+      _web.loadHtmlString(widget.html ?? '');
+    }
+  }
+
+  Future<void> _abrirCodigo() async {
+    setState(() => _verCodigo = true);
+    if (_codigoListo || _cargandoCodigo) return;
+
+    if (widget.cargarCodigo == null) {
+      setState(() {
+        _codigo = widget.html ?? '';
+        _codigoListo = true;
+      });
+      return;
+    }
+
+    setState(() => _cargandoCodigo = true);
+    try {
+      final html = await widget.cargarCodigo!();
+      if (!mounted) return;
+      setState(() {
+        _codigo = html;
+        _error = html == null ? 'No se pudo obtener el HTML publicado.' : null;
+        _codigoListo = true;
+        _cargandoCodigo = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'Error al leer el HTML: $e';
+        _codigoListo = true;
+        _cargandoCodigo = false;
+      });
+    }
+  }
+
+  void _copiarCodigo() {
+    final texto = _codigo ?? widget.html ?? '';
+    if (texto.trim().isEmpty) return;
+    Clipboard.setData(ClipboardData(text: texto));
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('Código HTML copiado al portapapeles'),
+      duration: Duration(milliseconds: 1400),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      child: Container(
+        width: double.infinity,
+        height: double.infinity,
+        decoration: BoxDecoration(
+            color: _C.surface, borderRadius: BorderRadius.circular(20)),
+        clipBehavior: Clip.antiAlias,
+        child: Column(children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: _C.dark,
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(20)),
+            ),
+            child: Row(children: [
+              Icon(_verCodigo ? Icons.code_rounded : Icons.visibility_rounded,
+                  color: _C.accent, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(widget.titulo,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.spaceGrotesk(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700)),
+              ),
+              if (_verCodigo) ...[
+                _btnHeader(Icons.copy_rounded, 'Copiar', _copiarCodigo),
+                const SizedBox(width: 6),
+              ],
+              _segmento('Visual', !_verCodigo,
+                  () => setState(() => _verCodigo = false)),
+              const SizedBox(width: 6),
+              _segmento('Código', _verCodigo, _abrirCodigo),
+              const SizedBox(width: 6),
+              GestureDetector(
+                onTap: () => Navigator.pop(context),
+                child: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8)),
+                  child: const Icon(Icons.close_rounded,
+                      color: Colors.white, size: 18),
+                ),
+              ),
+            ]),
+          ),
+          Expanded(
+            child: _verCodigo
+                ? _buildCodigo()
+                : WebViewWidget(controller: _web),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  Widget _segmento(String label, bool sel, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: sel ? _C.accent : Colors.white.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(label,
+            style: GoogleFonts.spaceGrotesk(
+                color: sel ? _C.dark : Colors.white,
+                fontSize: 11,
+                fontWeight: FontWeight.w700)),
+      ),
+    );
+  }
+
+  Widget _btnHeader(IconData icon, String label, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, color: Colors.white, size: 13),
+          const SizedBox(width: 4),
+          Text(label,
+              style:
+                  GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 11)),
+        ]),
+      ),
+    );
+  }
+
+  Widget _buildCodigo() {
+    if (_cargandoCodigo) {
+      return const Center(
+          child:
+              CircularProgressIndicator(color: _C.primary, strokeWidth: 2.5));
+    }
+    if (_error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.error_outline_rounded,
+                color: _C.danger, size: 36),
+            const SizedBox(height: 10),
+            Text(_error!,
+                textAlign: TextAlign.center,
+                style: GoogleFonts.spaceGrotesk(
+                    color: _C.textSec, fontSize: 13)),
+          ]),
+        ),
+      );
+    }
+    final texto = (_codigo ?? '').trimRight();
+    final lineas = texto.isEmpty ? 0 : texto.split('\n').length;
+    final titulo = _esPublicado ? 'HTML publicado' : 'HTML del editor';
+    return Container(
+      color: const Color(0xFF0B1220),
+      child: Column(children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          color: const Color(0xFF111C31),
+          child: Row(children: [
+            const Icon(Icons.code_rounded, color: _C.accent, size: 14),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text('$titulo · $lineas líneas',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.spaceGrotesk(
+                      color: Colors.white70, fontSize: 11)),
+            ),
+            GestureDetector(
+              onTap: _copiarCodigo,
+              child: Text('Copiar',
+                  style: GoogleFonts.spaceGrotesk(
+                      color: _C.accent,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700)),
+            ),
+          ]),
+        ),
+        Expanded(
+          child: Scrollbar(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(14),
+              child: SelectableText(
+                texto.isEmpty ? '(sin contenido)' : texto,
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontFamilyFallback: ['Courier', 'Courier New'],
+                  color: Color(0xFFE2E8F0),
+                  fontSize: 11.5,
+                  height: 1.5,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ]),
+    );
   }
 }

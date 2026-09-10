@@ -4,13 +4,14 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:stark_go/services/vps_service.dart';
 import 'config_mikro_tik_model.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 import '../config_perfiles/config_perfiles_widget.dart';
-import '../generar_fichas/generar_fichas_widget.dart';
 
 // ✅ NUEVO: CONEXIÓN LOCAL MIKROTIK
 import '../config_mikrotik_local/conectar_mikrotik_local_widget.dart';
+import '../config_mikrotik_local/hotspot_design_widget.dart';
 
 class _VPS {
   static const String url = 'http://5.161.88.42:3000';
@@ -132,10 +133,13 @@ class _Section extends StatelessWidget {
               child: Icon(icon, color: Colors.white, size: 20),
             ),
             const SizedBox(width: 12),
-            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(title, style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 15, fontWeight: FontWeight.w700)),
-              Text(subtitle, style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11)),
-            ]),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(title, style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 15, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 2),
+                Text(subtitle, style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11)),
+              ]),
+            ),
           ]),
           const SizedBox(height: 18),
           Divider(color: _C.border, height: 1),
@@ -285,6 +289,17 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
   // ── Controla si la tarjeta de Device-Mode aparece expandida ──
   bool _deviceModeExpandida = true;
 
+  // ── IP del túnel WireGuard del MikroTik (generada automáticamente) ──
+  String _mikrotikTunelIp = '';
+  bool _generandoIpTunel = false;
+
+  // ── Public Key del MikroTik → registro en el VPS ──
+  bool _mikrotikRegistrado = false;
+  bool _registrandoMikrotik = false;
+
+  // ── Portal de pago para morosos (opcional; apagado por defecto) ──
+  bool _portalMorosos = false;
+
   String _generarApiKey(String uid) {
     final parte = uid.substring(0, 8);
     final ts = DateTime.now().millisecondsSinceEpoch.toString().substring(7);
@@ -383,6 +398,8 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
     _model.mikrotikUserFocusNode ??= FocusNode();
     _model.mikrotikPassController ??= TextEditingController();
     _model.mikrotikPassFocusNode ??= FocusNode();
+    _model.mikrotikPubKeyController ??= TextEditingController();
+    _model.mikrotikPubKeyFocusNode ??= FocusNode();
     _cargarConfig();
   }
 
@@ -403,6 +420,11 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
         _model.mikrotikIpController!.text = d['mikrotikIp'] ?? '';
         _model.mikrotikUserController!.text = d['mikrotikUser'] ?? '';
         _model.mikrotikPassController!.text = d['mikrotikPass'] ?? '';
+        _mikrotikTunelIp = (d['mikrotikTunelIp'] ?? '').toString().trim();
+        _portalMorosos = (d['portalMorosos'] ?? false) == true;
+        final pubKey = (d['mikrotikPublicKey'] ?? '').toString().trim();
+        _model.mikrotikPubKeyController!.text = pubKey;
+        _mikrotikRegistrado = pubKey.isNotEmpty && (d['mikrotikRegistradoEn'] != null);
         setState(() => _model.schedulerMinutos = d['schedulerMinutos'] as int?);
         _model.scriptVisible = d['scriptGenerado'] == true;
       } else {
@@ -430,8 +452,11 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
         'mikrotikIp': _model.mikrotikIpController!.text.trim(),
         'mikrotikUser': _model.mikrotikUserController!.text.trim(),
         'mikrotikPass': _model.mikrotikPassController!.text.trim(),
+        'mikrotikTunelIp': _mikrotikTunelIp.isEmpty ? null : _mikrotikTunelIp,
+        'mikrotikPublicKey': _model.mikrotikPubKeyController!.text.trim().isEmpty ? null : _model.mikrotikPubKeyController!.text.trim(),
         'schedulerMinutos': _model.schedulerMinutos,
         'scriptGenerado': true,
+        'portalMorosos': _portalMorosos,
         'actualizadoEn': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
       if (mounted) {
@@ -452,6 +477,224 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
       behavior: SnackBarBehavior.floating,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     ));
+  }
+
+  /// Abre el editor del portal de pago (morosos) en modo remoto (VPS).
+  /// No requiere FTP local: se publica en el VPS y se previsualiza desde ahí.
+  void _abrirEditorPortalPago() {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => Scaffold(
+        appBar: AppBar(
+          backgroundColor: _C.surface,
+          title: Text('Portal de pago · morosos',
+              style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 15, fontWeight: FontWeight.w700)),
+        ),
+        body: HotspotDesignWidget(
+          host: '',
+          usuario: '',
+          clave: '',
+          soloPortalVps: true,
+        ),
+      ),
+    ));
+  }
+
+  // ── Generar la IP del túnel del MikroTik (única, sin chocar) ──
+  Future<void> _generarIpTunel() async {
+    if (_uid == null) return;
+    setState(() => _generandoIpTunel = true);
+    try {
+      final ip = await VpsService.generarIpTunelMikrotik();
+      if (ip == null) {
+        _snack('No hay IPs libres del túnel (2-250)', _C.danger);
+        return;
+      }
+      setState(() => _mikrotikTunelIp = ip);
+      await FirebaseFirestore.instance.collection(_col).doc(_uid).set(
+        {'mikrotikTunelIp': ip},
+        SetOptions(merge: true),
+      );
+      _snack('IP del túnel asignada: $ip', _C.success);
+    } catch (e) {
+      _snack('Error: $e', _C.danger);
+    } finally {
+      if (mounted) setState(() => _generandoIpTunel = false);
+    }
+  }
+
+  // ── Tarjeta de la IP del túnel del MikroTik ──
+  Widget _buildIpTunelCard() {
+    final ip = _mikrotikTunelIp.trim();
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _C.primary.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _C.primary.withOpacity(0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('IP del túnel para este MikroTik (10.50.50.x)',
+              style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          Row(children: [
+            Expanded(
+              child: Text(
+                ip.isEmpty ? 'Pendiente — tocá "Generar"' : ip,
+                style: GoogleFonts.spaceGrotesk(color: ip.isEmpty ? _C.textSec : _C.primary, fontSize: 20, fontWeight: FontWeight.w800)
+                    .copyWith(fontFamily: 'monospace'),
+              ),
+            ),
+            if (ip.isNotEmpty)
+              IconButton(
+                icon: const Icon(Icons.copy_rounded, color: _C.primary),
+                onPressed: () {
+                  Clipboard.setData(ClipboardData(text: ip));
+                  _snack('IP copiada: $ip', _C.success);
+                },
+              ),
+          ]),
+          const SizedBox(height: 4),
+          Text(
+            'Es única: la app consulta las IPs en uso (teléfonos registrados y otros MikroTik) '
+            'y asigna la primera libre. Va en el MikroTik: IP → Addresses → (+) → Address: '
+            '${ip.isEmpty ? '10.50.50.X' : ip}/24 · Interface: wg1.',
+            style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10.5, height: 1.4),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 42,
+            child: OutlinedButton.icon(
+              onPressed: _generandoIpTunel ? null : _generarIpTunel,
+              icon: _generandoIpTunel
+                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.auto_fix_high_rounded, size: 16),
+              label: Text(_generandoIpTunel ? 'Generando…' : 'Generar IP del túnel',
+                  style: GoogleFonts.spaceGrotesk(color: _C.primary, fontSize: 12.5, fontWeight: FontWeight.w700)),
+              style: OutlinedButton.styleFrom(
+                side: BorderSide(color: _C.primary.withOpacity(0.4)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Registrar la Public Key del MikroTik en el VPS ────────────────
+  Future<void> _registrarMikrotik() async {
+    final pk = _model.mikrotikPubKeyController!.text.trim();
+    if (pk.isEmpty) {
+      _snack('Pegá primero la Public Key del MikroTik', _C.warning);
+      return;
+    }
+    if (!RegExp(r'^[A-Za-z0-9+/]{43}=$').hasMatch(pk)) {
+      _snack('La Public Key no es válida (debe tener 44 caracteres)', _C.danger);
+      return;
+    }
+    if (_mikrotikTunelIp.isEmpty) {
+      _snack('Primero generá la IP del túnel del MikroTik (tarjeta de arriba)', _C.danger);
+      return;
+    }
+    setState(() => _registrandoMikrotik = true);
+    final ok = await VpsService.registrarMikrotikVps(publicKey: pk);
+    if (!mounted) return;
+    setState(() {
+      _registrandoMikrotik = false;
+      if (ok) _mikrotikRegistrado = true;
+    });
+    if (ok) {
+      _snack('✅ MikroTik registrado en el VPS', _C.success);
+    } else {
+      _snack('No se pudo registrar. Verificá que el VPS esté actualizado y reintentá.', _C.danger);
+    }
+  }
+
+  // ── Tarjeta de la Public Key del MikroTik → VPS ──
+  Widget _buildMikrotikPeerCard() {
+    final registered = _mikrotikRegistrado;
+    final pubCtl = _model.mikrotikPubKeyController;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _C.accent.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _C.accent.withOpacity(0.3)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(
+            child: Text('PUBLIC KEY DE TU MIKROTIK (wg1)',
+                style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10.5, fontWeight: FontWeight.w700, letterSpacing: 0.3)),
+          ),
+          if (registered)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                  color: _C.success.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: _C.success.withOpacity(0.4))),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.check_circle_rounded, color: _C.success, size: 13),
+                const SizedBox(width: 4),
+                Text('Registrado en el VPS',
+                    style: GoogleFonts.spaceGrotesk(color: _C.success, fontSize: 9.5, fontWeight: FontWeight.w700)),
+              ]),
+            ),
+        ]),
+        const SizedBox(height: 2),
+        Text('Copiala del router: Winbox → WireGuard → doble clic en wg1 → campo Public Key',
+            style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10.5, height: 1.35)),
+        const SizedBox(height: 10),
+        TextField(
+          controller: pubCtl,
+          focusNode: _model.mikrotikPubKeyFocusNode,
+          style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 12.5, fontWeight: FontWeight.w500).copyWith(fontFamily: 'monospace'),
+          decoration: InputDecoration(
+            hintText: 'Pegá la Public Key aquí (ej: Xm9a…fM4=)',
+            hintStyle: GoogleFonts.spaceGrotesk(color: _C.textSec.withOpacity(0.6), fontSize: 12),
+            prefixIcon: Container(
+              margin: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+              decoration: BoxDecoration(color: _C.accent.withOpacity(0.12), borderRadius: BorderRadius.circular(8)),
+              child: const Icon(Icons.key_rounded, color: _C.accent, size: 16),
+            ),
+            filled: true,
+            fillColor: _C.surface,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            enabledBorder:
+                OutlineInputBorder(borderSide: const BorderSide(color: _C.border, width: 1.2), borderRadius: BorderRadius.circular(12)),
+            focusedBorder:
+                OutlineInputBorder(borderSide: BorderSide(color: _C.accent, width: 1.8), borderRadius: BorderRadius.circular(12)),
+          ),
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          width: double.infinity,
+          height: 44,
+          child: ElevatedButton.icon(
+            onPressed: _registrandoMikrotik ? null : _registrarMikrotik,
+            icon: _registrandoMikrotik
+                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.cloud_upload_rounded, size: 18),
+            label: Text(_registrandoMikrotik ? 'Registrando…' : (registered ? 'Registrar de nuevo' : 'Registrar en el VPS'),
+                style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _C.accent,
+              foregroundColor: Colors.white,
+              disabledBackgroundColor: _C.border,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'El VPS lo agrega como peer estático con tu IP (${_mikrotikTunelIp.isEmpty ? '10.50.50.X' : _mikrotikTunelIp}/32) y tu subred de antenas, automáticamente.',
+          style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10, height: 1.4),
+        ),
+      ]),
+    );
   }
 
   String? _required(String? v) => (v == null || v.trim().isEmpty) ? 'Este campo es obligatorio' : null;
@@ -527,6 +770,26 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
                           ).animate().fadeIn(duration: 350.ms, delay: 200.ms).slideY(begin: 0.05, end: 0),
                           const SizedBox(height: 14),
 
+                          // ── IP del túnel WireGuard del MikroTik ──
+                          _Section(
+                            icon: Icons.wifi_tethering_rounded,
+                            color: _C.primary,
+                            title: 'IP del túnel (WireGuard)',
+                            subtitle: 'La IP que va en el MikroTik: IP → Addresses → interface wg1',
+                            children: [_buildIpTunelCard()],
+                          ).animate().fadeIn(duration: 350.ms, delay: 220.ms).slideY(begin: 0.05, end: 0),
+                          const SizedBox(height: 14),
+
+                          // ── Public Key del MikroTik → registrar en el VPS ──
+                          _Section(
+                            icon: Icons.vpn_key_rounded,
+                            color: _C.accent,
+                            title: 'Peer del MikroTik en el VPS',
+                            subtitle: 'Pegá la Public Key de tu wg1 y registrala automáticamente',
+                            children: [_buildMikrotikPeerCard()],
+                          ).animate().fadeIn(duration: 350.ms, delay: 230.ms).slideY(begin: 0.05, end: 0),
+                          const SizedBox(height: 14),
+
                           // ── Herramientas de Hotspot ──
                           _buildHerramientasHotspot().animate().fadeIn(duration: 350.ms, delay: 240.ms).slideY(begin: 0.05, end: 0),
                           const SizedBox(height: 14),
@@ -551,7 +814,9 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
                             const SizedBox(height: 14),
                             _buildSchedulerCard().animate().fadeIn(duration: 400.ms, delay: 80.ms).slideY(begin: 0.05, end: 0),
                             const SizedBox(height: 14),
-                            _buildDashboardReportCard().animate().fadeIn(duration: 400.ms, delay: 160.ms).slideY(begin: 0.05, end: 0),
+                            _buildFirewallRuleCard().animate().fadeIn(duration: 400.ms, delay: 120.ms).slideY(begin: 0.05, end: 0),
+                            const SizedBox(height: 14),
+                            _buildGuiaPortalCard().animate().fadeIn(duration: 400.ms, delay: 140.ms).slideY(begin: 0.05, end: 0),
                             const SizedBox(height: 14),
                           ],
 
@@ -566,13 +831,13 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
     );
   }
 
-  // ── Herramientas de Hotspot: Perfiles, Fichas y Modo Local ────────────────
+  // ── Herramientas de Hotspot: Perfiles y Modo Local ────────────────
   Widget _buildHerramientasHotspot() {
     return _Section(
       icon: Icons.build_circle_rounded,
       color: _C.pppoe,
       title: 'Herramientas de Hotspot',
-      subtitle: 'Perfiles, fichas y conexión directa',
+      subtitle: 'Perfiles y conexión directa',
       children: [
         // ✅ NUEVO: Modo Local
         _NavCard(
@@ -593,16 +858,6 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
           onTap: () => Navigator.push(
             context,
             MaterialPageRoute(builder: (_) => const ConfigPerfilesWidget()),
-          ),
-        ),
-        _NavCard(
-          icon: Icons.confirmation_number_rounded,
-          color: _C.accent,
-          title: 'Fichas / Vouchers',
-          subtitle: 'Generar cupones y exportarlos en PDF',
-          onTap: () => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const GenerarFichasWidget()),
           ),
         ),
       ],
@@ -921,7 +1176,290 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
     );
   }
 
-  // ── PASO 3: Reporte del Dashboard ──────────────────────────────────────────
+  // ── PASO 3: Regla de firewall para morosos ──────────────────────────────
+  void _copiarClipboard(String texto, String aviso) {
+    Clipboard.setData(ClipboardData(text: texto));
+    _snack(aviso, _C.success);
+  }
+
+  // ── Guía "Portal de pago para morosos": comandos para el MikroTik ──
+  Widget _buildGuiaPortalCard() {
+    final apiKey = _model.vpsApiKeyController?.text.trim() ?? '';
+    // OJO: la URL del redirect DEBE ir por el puerto estándar 80 (sin :3000).
+    // Si apunta a un puerto no estándar, el sistema operativo del celular
+    // descarta la detección del portal cautivo y muestra "sin acceso a internet".
+    // Además lleva ?ip=$(ip): RouterOS reemplaza $(ip) por la IP del cliente
+    // cuando sirve este login.html, y así el VPS rellena {{nombre}}, {{saldo}},
+    // etc. del portal. Sin ese parámetro la página carga pero sin datos dinámicos.
+    final url = 'http://5.161.88.42/portal/${apiKey.isEmpty ? 'TU_APIKEY' : apiKey}'
+        '/login.html?ip=\$(ip)';
+    final loginHtml = '<!DOCTYPE html>\n<html>\n  <head>\n'
+        '    <meta charset="utf-8">\n'
+        '    <meta http-equiv="refresh" content="0; url=$url">\n'
+        '  </head>\n  <body><p>Redirigiendo...</p></body>\n</html>';
+    const comandoSync =
+        ':foreach q in=[/queue simple find] do={ :local t [/queue simple get \$q target]; :local n [/queue simple get \$q name]; :local ip [:pick \$t 0 [:find \$t "/"]]; :if ([:len [/ip hotspot ip-binding find where address=\$ip]] = 0) do={ /ip hotspot ip-binding add address=\$ip type=bypassed comment=\$n } }';
+    const crearTodo =
+        ':if ([:len [/ip hotspot profile find where name="perfil-pago"]] = 0) do={ /ip hotspot profile add name=perfil-pago html-directory=hotspot }\n'
+        ':if ([:len [/ip hotspot find where name="hs-pago"]] = 0) do={ /ip hotspot add name=hs-pago interface=bridge-local profile=perfil-pago } else={ /ip hotspot enable [find where name="hs-pago"] }';
+    const walled = '/ip hotspot walled-garden add dst-host=5.161.88.42';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: _C.surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _C.primary.withOpacity(0.25)),
+      ),
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration:
+                  BoxDecoration(gradient: const LinearGradient(colors: [_C.primary, _C.accent]), borderRadius: BorderRadius.circular(10)),
+              child: const Icon(Icons.verified_user_rounded, color: Colors.white, size: 18),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text('Portal de pago · configurar MikroTik (1 vez)',
+                  style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 13.5, fontWeight: FontWeight.w700)),
+            ),
+          ]),
+          const SizedBox(height: 4),
+          Text(
+              'Pega cada comando en Winbox → New Terminal. Cambia bridge-local '
+              'por la interfaz real de tus clientes (ej: bridge1). El login.html '
+              'se sube una sola vez a la carpeta hotspot/ del router (usa '
+              '"Publicar en el router" o FTP).',
+              style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10.5, height: 1.35)),
+          const SizedBox(height: 8),
+          _buildCopyRow(
+            icon: Icons.lock_open_rounded,
+            color: _C.primary,
+            titulo: '1) Walled garden (permite cargar tu página)',
+            codigo: walled,
+          ),
+          _buildCopyRow(
+            icon: Icons.ads_click_rounded,
+            color: _C.accent,
+            titulo: apiKey.isEmpty
+                ? '2) login.html (redirige al portal) — guarda antes para usar tu key'
+                : '2) login.html (redirige al portal) — key ya incluida',
+            codigo: loginHtml,
+          ),
+          _buildCopyRow(
+            icon: Icons.playlist_add_check_rounded,
+            color: _C.warning,
+            titulo: '3) Colas → binding bypassed (blinda las IPs: hazlo ANTES de activar el hotspot)',
+            codigo: comandoSync,
+          ),
+          _buildCopyRow(
+            icon: Icons.wifi_tethering_rounded,
+            color: _C.success,
+            titulo: '4) Crear perfil + crear/activar el hotspot (ÚLTIMO paso, cuando ya estén blindadas las IPs)',
+            codigo: crearTodo,
+          ),
+          const SizedBox(height: 6),
+          Text(
+              'Con el portal activo, cada cliente al día necesita su binding '
+              '"bypassed" para que NO le salga el portal. Los clientes NUEVOS '
+              'creados o reactivados desde la app lo reciben automáticamente '
+              '(con el switch de arriba activo). Para los que ya existen, pega '
+              'el comando 3 ANTES de activar el hotspot y re-ejecútalo cada vez '
+              'que agregues clientes/colas.',
+              style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10.5, height: 1.35)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCopyRow({
+    required IconData icon,
+    required Color color,
+    required String titulo,
+    required String codigo,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Icon(icon, color: color, size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(titulo, style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 11, fontWeight: FontWeight.w700)),
+            ),
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              tooltip: 'Copiar',
+              onPressed: () => _copiarClipboard(codigo, 'Comando copiado'),
+              icon: Icon(Icons.copy_rounded, color: color, size: 16),
+            ),
+          ]),
+          const SizedBox(height: 2),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: _C.surfaceDim,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: SelectableText(
+              codigo,
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 10.5, color: Color(0xFF0F172A), height: 1.45),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFirewallRuleCard() {
+    const regla = '/ip firewall filter add chain=forward src-address-list=morosos action=drop comment="Bloqueo a Morosos"';
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _C.danger.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: _C.danger.withOpacity(0.3)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Header
+        Row(children: [
+          Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                  gradient: const LinearGradient(colors: [_C.danger, Color(0xFFB91C1C)]), borderRadius: BorderRadius.circular(10)),
+              child: const Icon(Icons.block_rounded, color: Colors.white, size: 18)),
+          const SizedBox(width: 10),
+          Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Paso 3 — Regla de bloqueo a morosos',
+                style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 14, fontWeight: FontWeight.w700)),
+            Text('Una sola vez, para que el bloqueo funcione', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10)),
+          ])),
+        ]),
+        const SizedBox(height: 14),
+
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+              color: _C.danger.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _C.danger.withOpacity(0.3))),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Icon(Icons.info_outline_rounded, color: _C.danger, size: 16),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Cuando pones un cliente en mora, la app agrega su IP a la lista '
+                '"morosos". Para que ese bloqueo realmente corte el internet, en el '
+                'MikroTik debe existir ESTA regla de firewall. Sin ella, el scheduler '
+                'agrega la IP pero el tráfico sigue pasando.',
+                style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11.5, height: 1.4),
+              ),
+            ),
+          ]),
+        ),
+        const SizedBox(height: 14),
+
+        _buildPaso(1, Icons.terminal_rounded, _C.danger, 'Winbox → IP → Firewall → pestaña Filter Rules → +', textColor: _C.textPri),
+        _buildPaso(2, Icons.playlist_add_rounded, _C.danger, 'Chain: forward · Src. Address List: morosos · Action: drop',
+            textColor: _C.textPri),
+        _buildPaso(3, Icons.code_rounded, _C.danger, 'Comment: Bloqueo a Morosos (o copiá el comando de abajo)', textColor: _C.textPri),
+        const SizedBox(height: 8),
+        Row(children: [
+          Expanded(
+            child: Text('Comando (New Terminal)',
+                style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10, fontWeight: FontWeight.w600)),
+          ),
+          GestureDetector(
+            onTap: () {
+              Clipboard.setData(const ClipboardData(text: regla));
+              _snack('Regla copiada', _C.success);
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(color: _C.danger.withOpacity(0.12), borderRadius: BorderRadius.circular(8)),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.copy_rounded, color: _C.danger, size: 13),
+                const SizedBox(width: 4),
+                Text('Copiar', style: GoogleFonts.spaceGrotesk(color: _C.danger, fontSize: 11, fontWeight: FontWeight.w700)),
+              ]),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 6),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: _C.dark,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: SelectableText(
+            regla,
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 11, color: Colors.white70, height: 1.5),
+          ),
+        ),
+        const SizedBox(height: 14),
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+              color: _C.primary.withOpacity(0.05),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: _C.primary.withOpacity(0.2))),
+          child: Row(children: [
+            const Icon(Icons.wifi_password_rounded, color: _C.primary, size: 20),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Portal de pago para morosos',
+                    style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 13, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 2),
+                Text(
+                    'Opcional: al suspender, esa IP queda cautiva y ve el '
+                    'login/hotspot con tu info de pago en vez de solo '
+                    '"sin internet". Requiere hotspot + página subida '
+                    '(ver PORTAL_MOROSOS.md).',
+                    style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10.5, height: 1.35)),
+              ]),
+            ),
+            Switch(
+              value: _portalMorosos,
+              onChanged: (v) => setState(() => _portalMorosos = v),
+              activeTrackColor: _C.primary,
+            ),
+          ]),
+        ),
+        const SizedBox(height: 8),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: _abrirEditorPortalPago,
+            icon: const Icon(Icons.edit_note_rounded, size: 17),
+            label: Text('Editar página del portal (morosos)', style: GoogleFonts.spaceGrotesk(fontSize: 12, fontWeight: FontWeight.w600)),
+            style: TextButton.styleFrom(foregroundColor: _C.primary),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  // ── PASO 4: Reporte del Dashboard (OCULTO — deshabilitado por el dueño) ─────
+  // ignore: unused_element
   Widget _buildDashboardReportCard() {
     final src = _buildScriptSourceDashboard();
     final cmd = _buildComandoSchedulerDashboard();
@@ -944,9 +1482,9 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
           const SizedBox(width: 10),
           Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Paso 3 — Reporte del Dashboard',
+            Text('Paso 4 — Reporte del Dashboard',
                 style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 14, fontWeight: FontWeight.w700)),
-            Text('Perfiles, fichas y estadisticas en vivo', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10)),
+            Text('Planes y estadisticas en vivo', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10)),
           ])),
         ]),
         const SizedBox(height: 14),
@@ -962,7 +1500,7 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
             const SizedBox(width: 8),
             Expanded(
               child: Text(
-                'Este paso es opcional pero necesario si usas Planes, Fichas o el '
+                'Este paso es opcional pero necesario si usas Planes o el '
                 'Dashboard. El router envia su inventario cada 10 minutos, en un '
                 'scheduler separado del de bloqueos para no afectarlo si algo falla.',
                 style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11.5, height: 1.4),
@@ -973,9 +1511,9 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
         const SizedBox(height: 14),
 
         // 3a — Script
-        _buildPaso(1, Icons.folder_rounded, _C.warning, 'System → Scripts → + → Name: starkgo-dashboard-report'),
-        _buildPaso(2, Icons.policy_rounded, _C.pppoe, 'Marca: read, write, policy, test'),
-        _buildPaso(3, Icons.code_rounded, _C.purple, 'En Source pega el codigo de abajo'),
+        _buildPaso(1, Icons.folder_rounded, _C.warning, 'System → Scripts → + → Name: starkgo-dashboard-report', textColor: _C.textPri),
+        _buildPaso(2, Icons.policy_rounded, _C.pppoe, 'Marca: read, write, policy, test', textColor: _C.textPri),
+        _buildPaso(3, Icons.code_rounded, _C.purple, 'En Source pega el codigo de abajo', textColor: _C.textPri),
         const SizedBox(height: 4),
         Row(children: [
           Expanded(
@@ -1017,7 +1555,7 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
         const SizedBox(height: 14),
 
         // 3b — Scheduler
-        _buildPaso(4, Icons.terminal_rounded, _C.accent, 'Abre New Terminal y pega el comando de abajo'),
+        _buildPaso(4, Icons.terminal_rounded, _C.accent, 'Abre New Terminal y pega el comando de abajo', textColor: _C.textPri),
         const SizedBox(height: 4),
         Row(children: [
           Expanded(
@@ -1058,7 +1596,7 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
     );
   }
 
-  Widget _buildPaso(int n, IconData icon, Color color, String texto) => Padding(
+  Widget _buildPaso(int n, IconData icon, Color color, String texto, {Color textColor = Colors.white70}) => Padding(
         padding: const EdgeInsets.only(bottom: 10),
         child: Row(children: [
           Container(
@@ -1070,7 +1608,7 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
           const SizedBox(width: 10),
           Icon(icon, color: color, size: 15),
           const SizedBox(width: 8),
-          Expanded(child: Text(texto, style: GoogleFonts.spaceGrotesk(color: Colors.white70, fontSize: 12))),
+          Expanded(child: Text(texto, style: GoogleFonts.spaceGrotesk(color: textColor, fontSize: 12))),
         ]),
       );
 

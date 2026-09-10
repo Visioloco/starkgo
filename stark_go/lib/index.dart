@@ -16,3 +16,6 @@ import 'package:stark_go/pages/reporte_consumo/reporte_consumo_widget.dart';
 
 // ── Perfil ──
 export '/pages/completar_perfil/completar_perfil_widget.dart' show CompletarPerfilWidget;
+
+// ── Finanzas personales ──
+export '/pages/finanzas/finanzas_widget.dart' show FinanzasWidget;

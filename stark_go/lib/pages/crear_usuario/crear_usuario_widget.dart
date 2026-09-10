@@ -1,7 +1,6 @@
 import 'package:stark_go/services/vps_service.dart';
 import 'package:stark_go/pages/config_velocidades/config_velocidades_widget.dart';
 import '/backend/backend.dart';
-import '/flutter_flow/flutter_flow_theme.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 import '/custom_code/actions/index.dart' as actions;
 import '/index.dart';
@@ -78,7 +77,7 @@ class _PlanItem {
 // ─────────────────────────────────────────────────────────────
 //  Componentes reutilizables
 // ─────────────────────────────────────────────────────────────
-class _FormField extends StatelessWidget {
+class _FormField extends StatefulWidget {
   final TextEditingController controller;
   final FocusNode focusNode;
   final String label, hint;
@@ -87,6 +86,7 @@ class _FormField extends StatelessWidget {
   final TextInputType keyboardType;
   final String? Function(String?)? validator;
   final List<TextInputFormatter>? inputFormatters;
+  final bool obscureText;
 
   const _FormField({
     required this.controller,
@@ -98,46 +98,69 @@ class _FormField extends StatelessWidget {
     this.keyboardType = TextInputType.text,
     this.validator,
     this.inputFormatters,
+    this.obscureText = false,
   });
 
   @override
-  Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Padding(
-          padding: const EdgeInsets.only(left: 4, bottom: 6),
-          child: Text(label,
-              style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 12, fontWeight: FontWeight.w600, letterSpacing: 0.3)),
-        ),
-        TextFormField(
-          controller: controller,
-          focusNode: focusNode,
-          keyboardType: keyboardType,
-          inputFormatters: inputFormatters,
-          style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 14, fontWeight: FontWeight.w500),
-          validator: validator,
-          decoration: InputDecoration(
-            hintText: hint,
-            hintStyle: GoogleFonts.spaceGrotesk(color: _C.textSec.withOpacity(0.6), fontSize: 14),
-            prefixIcon: Container(
-              margin: const EdgeInsets.fromLTRB(12, 8, 8, 8),
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(color: iconColor.withOpacity(0.1), borderRadius: BorderRadius.circular(9)),
-              child: Icon(icon, color: iconColor, size: 17),
-            ),
-            filled: true,
-            fillColor: _C.surface,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            enabledBorder:
-                OutlineInputBorder(borderSide: BorderSide(color: _C.border, width: 1.2), borderRadius: BorderRadius.circular(14)),
-            focusedBorder:
-                OutlineInputBorder(borderSide: BorderSide(color: iconColor, width: 1.8), borderRadius: BorderRadius.circular(14)),
-            errorBorder: OutlineInputBorder(borderSide: BorderSide(color: _C.danger, width: 1.5), borderRadius: BorderRadius.circular(14)),
-            focusedErrorBorder:
-                OutlineInputBorder(borderSide: BorderSide(color: _C.danger, width: 1.8), borderRadius: BorderRadius.circular(14)),
-            errorStyle: GoogleFonts.spaceGrotesk(color: _C.danger, fontSize: 11),
+  State<_FormField> createState() => _FormFieldState();
+}
+
+class _FormFieldState extends State<_FormField> {
+  // Solo aplica a campos de clave: controla el "ojito" mostrar/ocultar.
+  bool _ocultarClave = true;
+
+  @override
+  Widget build(BuildContext context) {
+    final w = widget;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Padding(
+        padding: const EdgeInsets.only(left: 4, bottom: 6),
+        child: Text(w.label,
+            style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 12, fontWeight: FontWeight.w600, letterSpacing: 0.3)),
+      ),
+      TextFormField(
+        controller: w.controller,
+        focusNode: w.focusNode,
+        keyboardType: w.keyboardType,
+        obscureText: w.obscureText && _ocultarClave,
+        inputFormatters: w.inputFormatters,
+        style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 14, fontWeight: FontWeight.w500),
+        validator: w.validator,
+        decoration: InputDecoration(
+          hintText: w.hint,
+          hintStyle: GoogleFonts.spaceGrotesk(color: _C.textSec.withOpacity(0.6), fontSize: 14),
+          prefixIcon: Container(
+            margin: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(color: w.iconColor.withOpacity(0.1), borderRadius: BorderRadius.circular(9)),
+            child: Icon(w.icon, color: w.iconColor, size: 17),
           ),
+          suffixIcon: w.obscureText
+              ? IconButton(
+                  tooltip: _ocultarClave ? 'Mostrar clave' : 'Ocultar clave',
+                  icon: Icon(
+                    _ocultarClave ? Icons.visibility_rounded : Icons.visibility_off_rounded,
+                    color: _C.textSec,
+                    size: 20,
+                  ),
+                  onPressed: () => setState(() => _ocultarClave = !_ocultarClave),
+                )
+              : null,
+          filled: true,
+          fillColor: _C.surface,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: _C.border, width: 1.2), borderRadius: BorderRadius.circular(14)),
+          focusedBorder:
+              OutlineInputBorder(borderSide: BorderSide(color: w.iconColor, width: 1.8), borderRadius: BorderRadius.circular(14)),
+          errorBorder: OutlineInputBorder(borderSide: BorderSide(color: _C.danger, width: 1.5), borderRadius: BorderRadius.circular(14)),
+          focusedErrorBorder:
+              OutlineInputBorder(borderSide: BorderSide(color: _C.danger, width: 1.8), borderRadius: BorderRadius.circular(14)),
+          errorStyle: GoogleFonts.spaceGrotesk(color: _C.danger, fontSize: 11),
         ),
-      ]);
+      ),
+    ]);
+  }
 }
 
 class _StyledDropdown<T> extends StatelessWidget {
@@ -191,7 +214,7 @@ class _StyledDropdown<T> extends StatelessWidget {
                 decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(9)),
                 child: Icon(icon, color: color, size: 16),
               ),
-              Text(hint, style: GoogleFonts.spaceGrotesk(color: _C.textSec.withOpacity(0.6), fontSize: 14)),
+              Flexible(child: Text(hint, style: GoogleFonts.spaceGrotesk(color: _C.textSec.withOpacity(0.6), fontSize: 14))),
             ]),
             items: items,
             onChanged: onChanged,
@@ -241,10 +264,12 @@ class _FormSection extends StatelessWidget {
                 child: Icon(icon, color: Colors.white, size: 20),
               ),
               const SizedBox(width: 12),
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(title, style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 15, fontWeight: FontWeight.w700)),
-                Text(subtitle, style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11)),
-              ]),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(title, style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 15, fontWeight: FontWeight.w700)),
+                  Text(subtitle, style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11)),
+                ]),
+              ),
             ]),
             const SizedBox(height: 18),
             Divider(color: _C.border, height: 1),
@@ -274,10 +299,6 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
 
   Map<String, dynamic>? _starlinkSel;
   String? _starlinkId;
-  Map<String, dynamic>? _antenaSel;
-  String? _antenaId;
-  Map<String, dynamic>? _routerSel;
-  String? _routerId;
   String? _tipoServicio;
   String? _velocidad;
   _PaisItem _selPais = _paises.first;
@@ -290,14 +311,18 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
   bool _cargandoVelocidades = false;
 
   List<QueryDocumentSnapshot> _starlinks = [];
-  List<QueryDocumentSnapshot> _antenas = [];
-  List<QueryDocumentSnapshot> _routers = [];
 
   // Controllers manuales de IP
   final _ctrlIpAntena = TextEditingController();
   final _focusIpAntena = FocusNode();
   final _ctrlIpRouter = TextEditingController();
   final _focusIpRouter = FocusNode();
+  // Credenciales de la antena — obligatorias, se escriben manualmente
+  // (el usuario NO se autogenera ni trae valor por defecto).
+  final _ctrlUsuarioAtn = TextEditingController();
+  final _focusUsuarioAtn = FocusNode();
+  final _ctrlClaveAtn = TextEditingController();
+  final _focusClaveAtn = FocusNode();
 
   static const _tiposServicio = ['Fibra Óptica', 'Radio Enlace'];
   static const String _kColVel = 'velocidades';
@@ -305,8 +330,11 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
   String? get _uid => FirebaseAuth.instance.currentUser?.uid;
 
   // ── Validador de IP ──────────────────────────────────────
-  static String? _validarIp(String? val) {
-    if (val == null || val.trim().isEmpty) return 'Ingresa la IP';
+  static String? _validarIp(String? val, {bool requerida = false}) {
+    if (val == null || val.trim().isEmpty) {
+      if (requerida) return 'La IP que limita megas es obligatoria';
+      return null; // opcional
+    }
     final ok = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$').hasMatch(val.trim());
     if (!ok) return 'IP inválida · Ej: 192.168.1.100';
     final partes = val.trim().split('.');
@@ -345,6 +373,10 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
     _focusIpAntena.dispose();
     _ctrlIpRouter.dispose();
     _focusIpRouter.dispose();
+    _ctrlUsuarioAtn.dispose();
+    _focusUsuarioAtn.dispose();
+    _ctrlClaveAtn.dispose();
+    _focusClaveAtn.dispose();
     _model.dispose();
     super.dispose();
   }
@@ -356,16 +388,12 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
 
     final r = await Future.wait([
       FirebaseFirestore.instance.collection('starlinks').where('propietarioUid', isEqualTo: _uid).get(),
-      FirebaseFirestore.instance.collection('equipos').where('tipo', isEqualTo: 'antena').where('propietarioUid', isEqualTo: _uid).get(),
-      FirebaseFirestore.instance.collection('equipos').where('tipo', isEqualTo: 'router').where('propietarioUid', isEqualTo: _uid).get(),
       _cargarPlanesUsuario(),
     ]);
 
     if (mounted) {
       setState(() {
-        _starlinks = (r[0] as QuerySnapshot).docs;
-        _antenas = (r[1] as QuerySnapshot).docs;
-        _routers = (r[2] as QuerySnapshot).docs;
+        _starlinks = r[0].docs;
       });
     }
   }
@@ -413,13 +441,7 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
     }
   }
 
-  bool get _dropdownsValidos =>
-      _starlinkSel != null &&
-      _antenaSel != null &&
-      _routerSel != null &&
-      _selPlanItem != null &&
-      _tipoServicio != null &&
-      _velocidad != null;
+  bool get _dropdownsValidos => _starlinkSel != null && _selPlanItem != null && _tipoServicio != null && _velocidad != null;
 
   // ── Registrar ────────────────────────────────────────────
   Future<void> _registrar() async {
@@ -436,7 +458,7 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
     }
 
     // Validar IPs manualmente
-    final errIpAtn = _validarIp(_ctrlIpAntena.text);
+    final errIpAtn = _validarIp(_ctrlIpAntena.text, requerida: true);
     final errIpRtr = _validarIp(_ctrlIpRouter.text);
     if (errIpAtn != null || errIpRtr != null) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -450,46 +472,46 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
 
     setState(() => _isLoading = true);
     try {
-      // IPs ingresadas manualmente
-      _model.antna = _ctrlIpAntena.text.trim();
-      _model.routr = _ctrlIpRouter.text.trim();
+      // IPs ingresadas manualmente (la de megas es obligatoria, router opcional)
+      final ipAtnManual = _ctrlIpAntena.text.trim();
+      final ipRtrManual = _ctrlIpRouter.text.trim();
+      _model.antna = ipAtnManual.isEmpty ? null : ipAtnManual;
+      _model.routr = ipRtrManual.isEmpty ? null : ipRtrManual;
 
-      // Clave sigue siendo auto-generada
-      _model.clav = await actions.generarClave(_model.textController5.text, int.parse(_model.textController3.text));
+      // Clave autogenerada SOLO para la sección Router (opcional/legado).
+      // La clave de la ANTENA ya NO se autogenera: se escribe manualmente
+      // (campo obligatorio CLAVE ANTENA).
+      final ccNumero = int.tryParse(_model.textController3.text.trim());
+      final telNumero = int.tryParse(_model.textController4.text.trim());
+      _model.clav = await actions.generarClave(
+        _model.textController5.text,
+        ccNumero ?? telNumero ?? 0,
+      );
 
       final uid = FirebaseAuth.instance.currentUser?.uid;
       final ref = ClientesRecord.collection.doc();
 
-      final data = createClientesRecordData(
+      final Map<String, dynamic> data = createClientesRecordData(
         nombre: _model.textController1.text.trim(),
         apellido: _model.textController2.text.trim(),
         cc: int.tryParse(_model.textController3.text),
         numero: int.tryParse(_model.textController4.text),
         nombrefinca: _model.textController5.text.trim(),
         vereda: _model.textController6.text.trim(),
-        ipatn: _model.antna, // ← IP manual antena
-        usuarioatn: _model.clav,
-        claveatn: _model.clav,
-        iprouter: _model.routr, // ← IP manual router
+        ipatn: _model.antna, // ← IP que limita megas (obligatoria, la reconoce MikroTik)
+        usuarioatn: _ctrlUsuarioAtn.text.trim(),
+        claveatn: _ctrlClaveAtn.text.trim(),
+        iprouter: _model.routr, // ← IP manual router (opcional)
         usuariorouter: _model.clav,
         claverouter: _model.clav,
         fecha: getCurrentTimestamp,
         status: 'activo',
         starlinkId: _starlinkId,
         starlinkNombre: _starlinkSel!['nombre'],
-        antenaId: _antenaId,
-        antenaMarca: _antenaSel!['marca'],
-        antenaModelo: _antenaSel!['modelo'],
-        antenaIp: _antenaSel!['ip'],
-        routerId: _routerId,
-        routerMarca: _routerSel!['marca'],
-        routerModelo: _routerSel!['modelo'],
-        routerIp: _routerSel!['ip'],
         planCliente: _selPlanItem!.nombre,
         tipoServicio: _tipoServicio,
         velocidadPlan: _velocidad,
       );
-
       await ref.set(data);
       _model.rf = ClientesRecord.getDocumentFromData(data, ref);
 
@@ -637,31 +659,51 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
                       icon: Icons.satellite_alt_rounded,
                       color: _C.primary,
                       title: 'Red y Equipos',
-                      subtitle: 'IPs manuales, Starlink, antena y router',
+                      subtitle: 'IP de megas y credenciales de antena obligatorias',
                       children: [
-                        // IP Antena manual
+                        // IP que limita megas (obligatoria — la reconoce MikroTik)
                         _FormField(
                           controller: _ctrlIpAntena,
                           focusNode: _focusIpAntena,
-                          label: 'IP ANTENA',
+                          label: 'IP QUE LIMITA MEGAS *',
                           hint: 'Ej: 192.168.1.100',
-                          icon: Icons.cell_tower_rounded,
+                          icon: Icons.speed_rounded,
                           iconColor: _C.accent,
                           keyboardType: TextInputType.numberWithOptions(decimal: true),
                           inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d.]'))],
-                          validator: _validarIp,
+                          validator: (val) => _validarIp(val, requerida: true),
                         ),
-                        // IP Router manual
+                        // IP Router manual (opcional)
                         _FormField(
                           controller: _ctrlIpRouter,
                           focusNode: _focusIpRouter,
-                          label: 'IP ROUTER',
+                          label: 'IP ROUTER (OPCIONAL)',
                           hint: 'Ej: 192.168.1.1',
                           icon: Icons.router_rounded,
                           iconColor: _C.purple,
                           keyboardType: TextInputType.numberWithOptions(decimal: true),
                           inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d.]'))],
                           validator: _validarIp,
+                        ),
+                        // Credenciales de la antena — obligatorias y manuales
+                        _FormField(
+                          controller: _ctrlUsuarioAtn,
+                          focusNode: _focusUsuarioAtn,
+                          label: 'USUARIO ANTENA *',
+                          hint: 'Ej: ubnt',
+                          icon: Icons.person_pin_rounded,
+                          iconColor: _C.accent,
+                          validator: (val) => (val == null || val.trim().isEmpty) ? 'El usuario de la antena es obligatorio' : null,
+                        ),
+                        _FormField(
+                          controller: _ctrlClaveAtn,
+                          focusNode: _focusClaveAtn,
+                          label: 'CLAVE ANTENA *',
+                          hint: 'Clave de acceso a la antena',
+                          icon: Icons.key_rounded,
+                          iconColor: _C.warning,
+                          obscureText: true,
+                          validator: (val) => (val == null || val.trim().isEmpty) ? 'La clave de la antena es obligatoria' : null,
                         ),
                         // Starlink
                         _StyledDropdown<String>(
@@ -683,52 +725,6 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
                             setState(() {
                               _starlinkId = id;
                               _starlinkSel = doc.data() as Map<String, dynamic>;
-                            });
-                          },
-                        ),
-                        // Antena
-                        _StyledDropdown<String>(
-                          label: 'ANTENA',
-                          hint: 'Selecciona la antena',
-                          icon: Icons.cell_tower_rounded,
-                          color: _C.accent,
-                          value: _antenaId,
-                          errorText: _validarDropdowns && _antenaSel == null ? 'Selecciona una antena' : null,
-                          items: _antenas.map((doc) {
-                            final d = doc.data() as Map<String, dynamic>;
-                            return DropdownMenuItem<String>(
-                              value: doc.id,
-                              child: _ddItem(Icons.cell_tower_rounded, '${d['marca']} ${d['modelo']}', 'IP: ${d['ip']}', _C.accent),
-                            );
-                          }).toList(),
-                          onChanged: (id) {
-                            final doc = _antenas.firstWhere((d) => d.id == id);
-                            setState(() {
-                              _antenaId = id;
-                              _antenaSel = doc.data() as Map<String, dynamic>;
-                            });
-                          },
-                        ),
-                        // Router
-                        _StyledDropdown<String>(
-                          label: 'ROUTER',
-                          hint: 'Selecciona el router',
-                          icon: Icons.router_rounded,
-                          color: _C.purple,
-                          value: _routerId,
-                          errorText: _validarDropdowns && _routerSel == null ? 'Selecciona un router' : null,
-                          items: _routers.map((doc) {
-                            final d = doc.data() as Map<String, dynamic>;
-                            return DropdownMenuItem<String>(
-                              value: doc.id,
-                              child: _ddItem(Icons.router_rounded, '${d['marca']} ${d['modelo']}', 'IP: ${d['ip']}', _C.purple),
-                            );
-                          }).toList(),
-                          onChanged: (id) {
-                            final doc = _routers.firstWhere((d) => d.id == id);
-                            setState(() {
-                              _routerId = id;
-                              _routerSel = doc.data() as Map<String, dynamic>;
                             });
                           },
                         ),
@@ -856,7 +852,7 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Padding(
         padding: const EdgeInsets.only(left: 4, bottom: 6),
-        child: Text('TELÉFONO',
+        child: Text('WHATSAPP *',
             style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 12, fontWeight: FontWeight.w600, letterSpacing: 0.3)),
       ),
       Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -900,7 +896,7 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
             style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 14, fontWeight: FontWeight.w500),
             validator: (val) => _model.textController4Validator.asValidator(context)?.call(val),
             decoration: InputDecoration(
-              hintText: 'Número sin prefijo',
+              hintText: 'Número de WhatsApp sin prefijo',
               hintStyle: GoogleFonts.spaceGrotesk(color: _C.textSec.withOpacity(0.5), fontSize: 13),
               prefixIcon: Container(
                 margin: const EdgeInsets.fromLTRB(12, 8, 8, 8),
@@ -1067,7 +1063,7 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text('Nuevo Cliente', style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 20, fontWeight: FontWeight.w800)),
-              Text('Completa todos los campos', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 12)),
+              Text('El WhatsApp y la IP de megas son lo más importante', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 12)),
             ]),
           ),
           Container(
@@ -1108,7 +1104,7 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text('Registrar nuevo cliente',
                   style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
-              Text('Ingresa las IPs manualmente · clave generada automáticamente',
+              Text('WhatsApp, nombre, IP de megas y datos del plan son obligatorios · antena y router opcionales',
                   style: GoogleFonts.spaceGrotesk(color: Colors.white60, fontSize: 12)),
             ]),
           ),
@@ -1118,7 +1114,8 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
   // ── Tarjeta info auto ────────────────────────────────────
   Widget _buildAutoInfoCard() {
     final items = [
-      (Icons.lock_rounded, _C.warning, 'Claves', 'Basadas en finca + cédula'),
+      (Icons.person_pin_rounded, _C.warning, 'Usuario antena', 'ubnt por defecto'),
+      (Icons.lock_rounded, _C.success, 'Clave', 'Finca + cédula'),
       (Icons.wifi_rounded, _C.success, 'Estado inicial', 'Activo'),
     ];
     return Container(

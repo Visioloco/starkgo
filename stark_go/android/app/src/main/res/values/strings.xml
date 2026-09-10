@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <resources>
     <string name="app_name">StarkGo</string>
-
+    <string name="vpn_tile_label">VPN StarkGo</string>
+    <string name="vpn_tile_on">VPN activa</string>
+    <string name="vpn_tile_off">VPN</string>
+    <string name="vpn_tile_sub_on">Conectado a MikroTik</string>
+    <string name="vpn_tile_sub_off">Desconectada</string>
 </resources>

@@ -1,4 +1,5 @@
 import 'dart:math';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -135,6 +136,35 @@ class _StarlinkData {
   }
 }
 
+/// Movimiento de la colección `finanzas` (conectada a Mis Finanzas).
+class _FinanzaReg {
+  final String tipo;
+  final double monto;
+  final DateTime? fecha;
+  final bool origenCliente;
+  bool get esIngreso => tipo == 'ingreso';
+
+  const _FinanzaReg({
+    required this.tipo,
+    required this.monto,
+    required this.fecha,
+    this.origenCliente = false,
+  });
+
+  factory _FinanzaReg.fromDoc(QueryDocumentSnapshot doc) {
+    final d = doc.data() as Map<String, dynamic>;
+    DateTime? fecha;
+    final ts = d['fecha'];
+    if (ts is Timestamp) fecha = ts.toDate();
+    return _FinanzaReg(
+      tipo: (d['tipo'] ?? 'gasto').toString(),
+      monto: _toDouble(d['monto']).abs(),
+      fecha: fecha,
+      origenCliente: (d['origenCliente'] ?? false) == true,
+    );
+  }
+}
+
 class _ConsumoCliente {
   final String nombre;
   final String ip;
@@ -155,6 +185,33 @@ class _ConsumoCliente {
   }
 }
 
+// ─── Consumo de un día (colección consumo_diario) ────────────────────────────
+// Cada documento es {clienteId}_{YYYY-MM-DD} y acumula subida/bajada de ese
+// día. Aquí lo usamos ya agregado (sumando todos los clientes o uno solo).
+class _ConsumoDia {
+  final String fecha; // YYYY-MM-DD
+  final double upGB;
+  final double downGB;
+  double get totalGB => upGB + downGB;
+
+  const _ConsumoDia({required this.fecha, required this.upGB, required this.downGB});
+}
+
+// ─── Helpers de ciclo (día 25) y fechas ──────────────────────────────────────
+// El VPS (index.js → obtenerMesKeyCiclo) y el resto de la app etiquetan el
+// ciclo de facturación por el mes en que inicia (día 25). Estas funciones
+// replican esa lógica para poder consultar consumo_diario por ciclo.
+Map<String, int> _cicloDeFecha(DateTime d) {
+  if (d.day >= 25) return {'anio': d.year, 'mes': d.month};
+  final prev = DateTime(d.year, d.month - 1, 1);
+  return {'anio': prev.year, 'mes': prev.month};
+}
+
+/// Fecha en formato YYYY-MM-DD (mismo formato del campo `fecha`).
+String _fechaKey(DateTime d) => '${d.year.toString().padLeft(4, '0')}-'
+    '${d.month.toString().padLeft(2, '0')}-'
+    '${d.day.toString().padLeft(2, '0')}';
+
 // ═══════════════════════════════════════════════════════════════════════════
 //  WIDGET PRINCIPAL — 4 PESTAÑAS EN UNA SOLA PANTALLA
 // ═══════════════════════════════════════════════════════════════════════════
@@ -173,6 +230,7 @@ class _InformesWidgetState extends State<InformesWidget> with SingleTickerProvid
 
   List<_ClienteData> _clientes = [];
   List<_StarlinkData> _starlinks = [];
+  List<_FinanzaReg> _finanzas = [];
   bool _cargando = true;
 
   @override
@@ -187,11 +245,14 @@ class _InformesWidgetState extends State<InformesWidget> with SingleTickerProvid
     final results = await Future.wait([
       FirebaseFirestore.instance.collection('clientes').where('propietarioUid', isEqualTo: _uid).get(),
       FirebaseFirestore.instance.collection('starlinks').where('propietarioUid', isEqualTo: _uid).get(),
+      // Colección finanzas → para reportes reales (cobros y gastos registrados)
+      FirebaseFirestore.instance.collection('finanzas').where('propietarioUid', isEqualTo: _uid).get(),
     ]);
     if (!mounted) return;
     setState(() {
       _clientes = (results[0] as QuerySnapshot).docs.map((d) => _ClienteData.fromDoc(d)).toList();
       _starlinks = (results[1] as QuerySnapshot).docs.map((d) => _StarlinkData.fromDoc(d)).toList();
+      _finanzas = (results[2] as QuerySnapshot).docs.map((d) => _FinanzaReg.fromDoc(d)).toList();
       _cargando = false;
     });
   }
@@ -262,7 +323,8 @@ class _InformesWidgetState extends State<InformesWidget> with SingleTickerProvid
                 RefreshIndicator(
                   color: _C.primary,
                   onRefresh: _cargar,
-                  child: _TabFinanciero(clientes: _clientes, starlinks: _starlinks, costoTotalStarlinks: costoTotalStarlinks),
+                  child: _TabFinanciero(
+                      clientes: _clientes, starlinks: _starlinks, costoTotalStarlinks: costoTotalStarlinks, finanzas: _finanzas),
                 ),
                 RefreshIndicator(color: _C.primary, onRefresh: _cargar, child: _TabClientes(clientes: _clientes)),
                 RefreshIndicator(color: _C.primary, onRefresh: _cargar, child: _TabPlanes(clientes: _clientes)),
@@ -318,18 +380,27 @@ class _TabFinanciero extends StatelessWidget {
   final List<_ClienteData> clientes;
   final List<_StarlinkData> starlinks;
   final double costoTotalStarlinks;
+  final List<_FinanzaReg> finanzas;
 
-  const _TabFinanciero({required this.clientes, required this.starlinks, required this.costoTotalStarlinks});
+  const _TabFinanciero({
+    required this.clientes,
+    required this.starlinks,
+    required this.costoTotalStarlinks,
+    this.finanzas = const [],
+  });
 
-  List<_ChartPoint> _historico(double base) {
+  // Serie real de últimos 6 meses con los ingresos (cobros) de `finanzas`.
+  List<_ChartPoint> _ingresosReales() {
     final now = DateTime.now();
-    final rng = Random(42);
-    return List.generate(6, (i) {
-      final mes = now.month - 5 + i;
-      final idx = ((mes - 1) % 12 + 12) % 12;
-      final variacion = 0.85 + rng.nextDouble() * 0.30;
-      return _ChartPoint(_mesesCortos[idx], base * variacion);
-    });
+    final pts = <_ChartPoint>[];
+    for (int i = 5; i >= 0; i--) {
+      final d = DateTime(now.year, now.month - i, 1);
+      final total = finanzas
+          .where((f) => f.esIngreso && f.fecha != null && f.fecha!.year == d.year && f.fecha!.month == d.month)
+          .fold(0.0, (s, f) => s + f.monto);
+      pts.add(_ChartPoint(_mesesCortos[d.month - 1], total));
+    }
+    return pts;
   }
 
   @override
@@ -351,6 +422,22 @@ class _TabFinanciero extends StatelessWidget {
     final subtotal = ingresoBruto - costoTotalStarlinks;
     final diezmo = subtotal > 0 ? subtotal * 0.10 : 0.0;
     final ingresoNeto = subtotal - diezmo;
+
+    // ── Datos reales de la colección `finanzas` ──
+    final now = DateTime.now();
+    double sumaEnMes(bool ingreso, bool soloClientes) => finanzas
+        .where((f) =>
+            f.esIngreso == ingreso &&
+            (!soloClientes || f.origenCliente) &&
+            f.fecha != null &&
+            f.fecha!.year == now.year &&
+            f.fecha!.month == now.month)
+        .fold(0.0, (s, f) => s + f.monto);
+    final cobradoMes = sumaEnMes(true, true);
+    final gastosMes = sumaEnMes(false, false);
+    final pendienteMes = (ingresoBruto - cobradoMes).clamp(0.0, double.infinity).toDouble();
+    final ingresosReales = _ingresosReales();
+    final hayCobrosReal = ingresosReales.any((p) => p.value > 0);
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
@@ -381,6 +468,35 @@ class _TabFinanciero extends StatelessWidget {
             child: _KpiCard(label: 'Neto tras diezmo', value: _pesosShort(ingresoNeto), icon: Icons.savings_rounded, color: _C.success),
           ),
         ]),
+        if (finanzas.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Row(children: [
+            Expanded(
+              child: _KpiCard(
+                  label: 'Cobrado clientes (finanzas)', value: _pesosShort(cobradoMes), icon: Icons.payments_rounded, color: _C.accent),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _KpiCard(
+                  label: 'Pendiente por cobrar', value: _pesosShort(pendienteMes), icon: Icons.hourglass_bottom_rounded, color: _C.warning),
+            ),
+          ]),
+          const SizedBox(height: 10),
+          Row(children: [
+            Expanded(
+              child: _KpiCard(
+                  label: 'Gastos registrados', value: '-${_pesosShort(gastosMes)}', icon: Icons.receipt_long_rounded, color: _C.danger),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _KpiCard(
+                  label: 'Neto cobrado mes',
+                  value: _pesosShort(cobradoMes - gastosMes),
+                  icon: Icons.account_balance_wallet_rounded,
+                  color: cobradoMes - gastosMes >= 0 ? _C.success : _C.danger),
+            ),
+          ]),
+        ],
         const SizedBox(height: 22),
         if (starlinks.isNotEmpty) ...[
           const _SectionHeader(icon: Icons.satellite_alt_rounded, title: 'Costos por Starlink'),
@@ -392,16 +508,32 @@ class _TabFinanciero extends StatelessWidget {
         const SizedBox(height: 12),
         _ClientStatusBar(activo: activos.length, mora: mora.length, inactivo: inactivo.length, total: clientes.length),
         const SizedBox(height: 22),
-        const _SectionHeader(icon: Icons.show_chart_rounded, title: 'Histórico 6 meses (estimado)'),
+        const _SectionHeader(icon: Icons.show_chart_rounded, title: 'Cobrado 6 meses · datos reales de finanzas'),
         const SizedBox(height: 12),
-        _BarChartPro(
-          data: _historico(ingresoBruto),
-          color: _C.primary,
-          overlayColor: _C.purple,
-          overlayFraction: 0.10,
-          legendPrimary: 'Ingreso',
-          legendSecondary: 'Diezmo 10%',
-        ),
+        if (hayCobrosReal)
+          _BarChartPro(
+            data: ingresosReales,
+            color: _C.accent,
+            legendPrimary: 'Cobrado',
+          )
+        else
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: _cardDecoration(),
+            child: Row(children: [
+              const Icon(Icons.info_outline_rounded, color: _C.textTer, size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  finanzas.isEmpty
+                      ? 'Aún no hay movimientos en la colección finanzas. '
+                          'Se llenan automáticamente cuando registras pagos de clientes (y desde Mis Finanzas).'
+                      : 'Aún no hay cobros registrados en finanzas. Se crean automáticamente al registrar pagos de clientes.',
+                  style: _f(11.5, c: _C.textSec, h: 1.4),
+                ),
+              ),
+            ]),
+          ),
         const SizedBox(height: 22),
         _DiezmoCard(ingresoBruto: ingresoBruto, costoStarlinks: costoTotalStarlinks, subtotal: subtotal, diezmo: diezmo, neto: ingresoNeto),
       ],
@@ -653,6 +785,16 @@ class _ConsumoTabState extends State<_ConsumoTab> {
   List<_ChartPoint> _historicoGB = [];
   late List<Map<String, int>> _meses;
 
+  // ── Vista DIARIA (nueva): filtros por rango de fechas y cliente ────────
+  bool _modoDiario = false;
+  bool _cargandoDias = false;
+  String _rangoSel = 'ciclo'; // hoy | 7d | 30d | ciclo | custom
+  late DateTime _desde;
+  late DateTime _hasta;
+  String? _clienteFiltroId; // null = todos los clientes
+  List<_ConsumoDia> _dias = [];
+  final Map<String, String> _clientesDisp = {}; // clienteId → nombre
+
   // Ciclo de facturación: inicia el día 25. Un ciclo que arranca el 25 de un
   // mes se etiqueta con ese mismo mes (ej. 25 jun → 24 jul = ciclo "Junio").
   // Si tu script del VPS etiqueta el campo 'mes' distinto, ajusta esta función
@@ -674,6 +816,9 @@ class _ConsumoTabState extends State<_ConsumoTab> {
       final d = DateTime(ciclo['anio']!, ciclo['mes']! - i, 1);
       return {'anio': d.year, 'mes': d.month};
     });
+    // Rango por defecto de la vista diaria: del inicio del ciclo actual a hoy.
+    _hasta = DateTime(now.year, now.month, now.day);
+    _desde = _inicioCicloActual(_hasta);
     _cargar();
     _cargarHistorico();
   }
@@ -737,6 +882,154 @@ class _ConsumoTabState extends State<_ConsumoTab> {
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  //  VISTA DIARIA — carga y filtros
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /// Fecha (día 25) en que inició el ciclo al que pertenece [hoy].
+  DateTime _inicioCicloActual(DateTime hoy) {
+    final c = _cicloDeFecha(hoy);
+    return DateTime(c['anio']!, c['mes']!, 25);
+  }
+
+  /// Conjunto de claves de ciclo (YYYY-MM) que toca un rango de fechas.
+  /// Así consultamos consumo_diario con filtros de IGUALDAD
+  /// (propietarioUid + mes), que no necesitan índice compuesto, y luego
+  /// filtramos el rango exacto de días en memoria.
+  Set<String> _ciclosDelRango(DateTime desde, DateTime hasta) {
+    final set = <String>{};
+    final ini = _cicloDeFecha(desde);
+    final fin = _cicloDeFecha(hasta);
+    var cur = DateTime(ini['anio']!, ini['mes']!, 1);
+    final ultimo = DateTime(fin['anio']!, fin['mes']!, 1);
+    while (!cur.isAfter(ultimo)) {
+      set.add('${cur.year}-${cur.month.toString().padLeft(2, '0')}');
+      cur = DateTime(cur.year, cur.month + 1, 1);
+    }
+    return set;
+  }
+
+  void _aplicarRango(String tipo, {bool recargar = true}) {
+    final hoy = DateTime.now();
+    final base = DateTime(hoy.year, hoy.month, hoy.day);
+    DateTime desde;
+    switch (tipo) {
+      case 'hoy':
+        desde = base;
+        break;
+      case '7d':
+        desde = base.subtract(const Duration(days: 6));
+        break;
+      case '30d':
+        desde = base.subtract(const Duration(days: 29));
+        break;
+      case 'ciclo':
+      default:
+        desde = _inicioCicloActual(base);
+        break;
+    }
+    setState(() {
+      _rangoSel = tipo;
+      _desde = desde;
+      _hasta = base;
+    });
+    if (recargar) _cargarDias();
+  }
+
+  Future<void> _elegirRangoPersonalizado() async {
+    final ahora = DateTime.now();
+    final rango = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2023, 1, 1),
+      lastDate: DateTime(ahora.year, ahora.month, ahora.day),
+      initialDateRange: DateTimeRange(start: _desde, end: _hasta),
+      helpText: 'SELECCIONA EL RANGO',
+      saveText: 'APLICAR',
+      builder: (context, child) => Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: const ColorScheme.light(
+            primary: _C.primary,
+            onPrimary: Colors.white,
+            surface: _C.surface,
+            onSurface: _C.textPri,
+          ),
+        ),
+        child: child ?? const SizedBox.shrink(),
+      ),
+    );
+    if (rango == null) return;
+    setState(() {
+      _rangoSel = 'custom';
+      _desde = DateTime(rango.start.year, rango.start.month, rango.start.day);
+      _hasta = DateTime(rango.end.year, rango.end.month, rango.end.day);
+    });
+    _cargarDias();
+  }
+
+  /// Carga el consumo diario del rango y cliente seleccionados, agregando
+  /// por fecha (suma de todos los clientes o de uno solo si hay filtro).
+  Future<void> _cargarDias() async {
+    if (_uid.isEmpty) return;
+    setState(() => _cargandoDias = true);
+    try {
+      final ciclos = _ciclosDelRango(_desde, _hasta);
+      final snaps = await Future.wait(ciclos.map((k) => FirebaseFirestore.instance
+          .collection('consumo_diario')
+          .where('propietarioUid', isEqualTo: _uid)
+          .where('mes', isEqualTo: k)
+          .get()));
+
+      final desdeKey = _fechaKey(_desde);
+      final hastaKey = _fechaKey(_hasta);
+      final acum = <String, List<double>>{}; // fecha → [up, down]
+
+      for (final snap in snaps) {
+        for (final doc in snap.docs) {
+          final d = doc.data();
+          final fecha = (d['fecha'] ?? '').toString();
+          if (fecha.isEmpty) continue;
+          if (fecha.compareTo(desdeKey) < 0 || fecha.compareTo(hastaKey) > 0) {
+            continue;
+          }
+          final cid = (d['clienteId'] ?? '').toString();
+          if (cid.isNotEmpty) {
+            _clientesDisp[cid] = (d['nombre'] ?? 'Sin nombre').toString();
+          }
+          if (_clienteFiltroId != null && cid != _clienteFiltroId) continue;
+          final up = ((d['totalUpBytes'] ?? 0) as num) / 1e9;
+          final down = ((d['totalDownBytes'] ?? 0) as num) / 1e9;
+          final acc = acum.putIfAbsent(fecha, () => [0, 0]);
+          acc[0] += up;
+          acc[1] += down;
+        }
+      }
+
+      final dias = acum.entries.map((e) => _ConsumoDia(fecha: e.key, upGB: e.value[0], downGB: e.value[1])).toList()
+        ..sort((a, b) => a.fecha.compareTo(b.fecha));
+
+      if (!mounted) return;
+      setState(() {
+        _dias = dias;
+        _cargandoDias = false;
+      });
+    } catch (e) {
+      debugPrint('[CONSUMO DIARIO] Error: $e');
+      if (mounted) setState(() => _cargandoDias = false);
+    }
+  }
+
+  String _fmtFechaCorta(String fecha) {
+    final partes = fecha.split('-');
+    if (partes.length != 3) return fecha;
+    final mes = (int.tryParse(partes[1]) ?? 1).clamp(1, 12);
+    final dia = int.tryParse(partes[2]) ?? 1;
+    return '${dia.toString().padLeft(2, '0')} ${_mesesCortos[mes - 1]}';
+  }
+
+  double get _diasTotalGB => _dias.fold(0.0, (s, d) => s + d.totalGB);
+  double get _diasPromedioGB => _dias.isEmpty ? 0 : _diasTotalGB / _dias.length;
+  double get _diasMaxGB => _dias.fold(0.0, (m, d) => d.totalGB > m ? d.totalGB : m);
+
   String _fmtGB(double gb) => gb < 1.0 ? '${(gb * 1024).toStringAsFixed(0)} MB' : '${gb.toStringAsFixed(2)} GB';
 
   Color _colorPorConsumo(double gb) {
@@ -749,97 +1042,353 @@ class _ConsumoTabState extends State<_ConsumoTab> {
   double get _totalDown => _datos.fold(0.0, (s, c) => s + c.downGB);
   double get _totalGB => _totalUp + _totalDown;
 
+  // ── Toggle Por ciclo / Diario ─────────────────────────────────────────
+  Widget _buildModoToggle() {
+    Widget opcion(String id, String label, IconData icon) {
+      final sel = (_modoDiario ? 'diario' : 'ciclo') == id;
+      return Expanded(
+        child: GestureDetector(
+          onTap: () {
+            final diario = id == 'diario';
+            if (diario == _modoDiario) return;
+            setState(() => _modoDiario = diario);
+            if (diario && _dias.isEmpty) _cargarDias();
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            decoration: BoxDecoration(
+              gradient: sel ? const LinearGradient(colors: [_C.primary, _C.accent]) : null,
+              color: sel ? null : _C.surface,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: sel ? Colors.transparent : _C.border, width: 1.1),
+            ),
+            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              Icon(icon, size: 15, color: sel ? Colors.white : _C.textSec),
+              const SizedBox(width: 6),
+              Text(label, style: _f(12.5, w: sel ? FontWeight.w700 : FontWeight.w500, c: sel ? Colors.white : _C.textSec)),
+            ]),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: _C.surfaceDim,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _C.border),
+      ),
+      child: Row(children: [
+        opcion('ciclo', 'Por ciclo', Icons.calendar_month_rounded),
+        const SizedBox(width: 4),
+        opcion('diario', 'Diario', Icons.calendar_view_day_rounded),
+      ]),
+    );
+  }
+
+  // ── Chip de rango rápido ──────────────────────────────────────────────
+  Widget _chipRango(String id, String label) {
+    final sel = _rangoSel == id;
+    return GestureDetector(
+      onTap: () => _aplicarRango(id),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        margin: const EdgeInsets.only(right: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
+        decoration: BoxDecoration(
+          gradient: sel ? const LinearGradient(colors: [_C.primary, _C.accent]) : null,
+          color: sel ? null : _C.surface,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: sel ? Colors.transparent : _C.border, width: 1.1),
+        ),
+        child: Text(label, style: _f(12, w: sel ? FontWeight.w700 : FontWeight.w500, c: sel ? Colors.white : _C.textSec)),
+      ),
+    );
+  }
+
+  // ── Filtros: rango de fechas + cliente ────────────────────────────────
+  Widget _buildFiltrosDiario() {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const _SectionHeader(icon: Icons.date_range_rounded, title: 'Rango de fechas'),
+      const SizedBox(height: 10),
+      SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(children: [
+            _chipRango('hoy', 'Hoy'),
+            _chipRango('7d', '7 días'),
+            _chipRango('30d', '30 días'),
+            _chipRango('ciclo', 'Ciclo actual'),
+            GestureDetector(
+              onTap: _elegirRangoPersonalizado,
+              child: Container(
+                margin: const EdgeInsets.only(right: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
+                decoration: BoxDecoration(
+                  gradient: _rangoSel == 'custom' ? const LinearGradient(colors: [_C.primary, _C.accent]) : null,
+                  color: _rangoSel == 'custom' ? null : _C.surface,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: _rangoSel == 'custom' ? Colors.transparent : _C.border, width: 1.1),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.event_rounded, size: 13, color: _rangoSel == 'custom' ? Colors.white : _C.textSec),
+                  const SizedBox(width: 4),
+                  Text('Personalizado',
+                      style: _f(12,
+                          w: _rangoSel == 'custom' ? FontWeight.w700 : FontWeight.w500,
+                          c: _rangoSel == 'custom' ? Colors.white : _C.textSec)),
+                ]),
+              ),
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 10),
+      Row(children: [
+        const Icon(Icons.calendar_today_rounded, size: 12, color: _C.textSec),
+        const SizedBox(width: 5),
+        Flexible(
+          child: Text('${_fechaKey(_desde)}  →  ${_fechaKey(_hasta)}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: _f(11.5, w: FontWeight.w600, c: _C.textSec)),
+        ),
+      ]),
+      const SizedBox(height: 18),
+      const _SectionHeader(icon: Icons.person_search_rounded, title: 'Cliente'),
+      const SizedBox(height: 10),
+      _buildFiltroCliente(),
+    ]);
+  }
+
+  Widget _buildFiltroCliente() {
+    final ids = _clientesDisp.keys.toList()
+      ..sort((a, b) => (_clientesDisp[a] ?? '').toLowerCase().compareTo((_clientesDisp[b] ?? '').toLowerCase()));
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      decoration: BoxDecoration(
+        color: _C.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _C.border),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String?>(
+          isExpanded: true,
+          value: _clienteFiltroId,
+          icon: const Icon(Icons.expand_more_rounded, color: _C.textSec),
+          dropdownColor: _C.surface,
+          style: _f(13, w: FontWeight.w600),
+          items: [
+            DropdownMenuItem<String?>(
+              value: null,
+              child: Text('Todos los clientes', style: _f(13, w: FontWeight.w600)),
+            ),
+            ...ids.map((id) => DropdownMenuItem<String?>(
+                  value: id,
+                  child: Text(_clientesDisp[id] ?? 'Sin nombre',
+                      style: _f(13, w: FontWeight.w500), maxLines: 1, overflow: TextOverflow.ellipsis),
+                )),
+          ],
+          onChanged: (v) {
+            setState(() => _clienteFiltroId = v);
+            _cargarDias();
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildResumenDiario() {
+    return Row(children: [
+      Expanded(child: _KpiCard(label: 'Total', value: _fmtGB(_diasTotalGB), icon: Icons.data_usage_rounded, color: _C.primary)),
+      const SizedBox(width: 8),
+      Expanded(child: _KpiCard(label: 'Promedio/día', value: _fmtGB(_diasPromedioGB), icon: Icons.functions_rounded, color: _C.accent)),
+      const SizedBox(width: 8),
+      Expanded(child: _KpiCard(label: 'Día mayor', value: _fmtGB(_diasMaxGB), icon: Icons.trending_up_rounded, color: _C.warning)),
+    ]);
+  }
+
+  Widget _buildListaDias() {
+    if (_dias.isEmpty) {
+      return const _EmptyState(
+        icon: Icons.data_usage_rounded,
+        title: 'Sin consumo diario',
+        subtitle: 'No hay registros para el rango y cliente seleccionados.',
+      );
+    }
+
+    final max = _diasMaxGB <= 0 ? 1.0 : _diasMaxGB;
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      // Gráfica de barras por día. Es desplazable en horizontal y cada día
+      // tiene ancho fijo, así no se aplastan ni se desbordan las etiquetas
+      // (a diferencia de _BarChartPro, que reparte el ancho entre todas).
+      _DailyBarChart(
+        data: _dias.map((d) => _ChartPoint(_fmtFechaCorta(d.fecha), d.totalGB)).toList(),
+        color: _C.primary,
+        fmtValue: (v) => v < 1 ? '${(v * 1024).toStringAsFixed(0)}MB' : '${v.toStringAsFixed(1)}GB',
+      ),
+      const SizedBox(height: 14),
+      ..._dias.reversed.map((d) {
+        final pct = (d.totalGB / max).clamp(0.0, 1.0);
+        return Container(
+          margin: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.all(12),
+          decoration: _cardDecoration(borderColor: _C.primary.withOpacity(0.18)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(color: _C.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
+                child: const Icon(Icons.calendar_today_rounded, size: 15, color: _C.primary),
+              ),
+              const SizedBox(width: 10),
+              Expanded(child: Text(_fmtFechaCorta(d.fecha), style: _f(13.5, w: FontWeight.w700))),
+              Text(_fmtGB(d.totalGB), style: _f(13, w: FontWeight.w800, c: _C.primary)),
+            ]),
+            const SizedBox(height: 8),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(5),
+              child: LinearProgressIndicator(
+                value: pct,
+                minHeight: 6,
+                backgroundColor: _C.primary.withOpacity(0.1),
+                valueColor: const AlwaysStoppedAnimation(_C.primary),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(children: [
+              _MiniStat(icon: Icons.upload_rounded, color: _C.success, label: 'Subida', valor: _fmtGB(d.upGB)),
+              const SizedBox(width: 12),
+              _MiniStat(icon: Icons.download_rounded, color: _C.accent, label: 'Bajada', valor: _fmtGB(d.downGB)),
+            ]),
+          ]),
+        );
+      }),
+    ]);
+  }
+
+  Widget _buildDiario() {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      _buildFiltrosDiario(),
+      const SizedBox(height: 18),
+      if (_cargandoDias)
+        const Padding(padding: EdgeInsets.symmetric(vertical: 60), child: _LoadingState(text: 'Cargando consumo diario...'))
+      else ...[
+        const _SectionHeader(icon: Icons.data_usage_rounded, title: 'Resumen'),
+        const SizedBox(height: 12),
+        _buildResumenDiario(),
+        const SizedBox(height: 22),
+        const _SectionHeader(icon: Icons.bar_chart_rounded, title: 'Consumo por día'),
+        const SizedBox(height: 12),
+        _buildListaDias(),
+      ],
+    ]);
+  }
+
   @override
   Widget build(BuildContext context) {
     return RefreshIndicator(
       color: _C.primary,
-      onRefresh: () => Future.wait([_cargar(), _cargarHistorico()]),
+      onRefresh: () => Future.wait([
+        _cargar(),
+        _cargarHistorico(),
+        if (_modoDiario) _cargarDias(),
+      ]),
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
         children: [
-          const _SectionHeader(icon: Icons.calendar_month_rounded, title: 'Periodo'),
-          const SizedBox(height: 10),
-          _MesSelector(
-            meses: _meses,
-            anioSel: _anioSel,
-            mesSel: _mesSel,
-            onSel: (a, m) {
-              setState(() {
-                _anioSel = a;
-                _mesSel = m;
-              });
-              _cargar();
-            },
-          ),
+          _buildModoToggle(),
           const SizedBox(height: 18),
-          if (_cargando)
-            const Padding(padding: EdgeInsets.symmetric(vertical: 60), child: _LoadingState(text: 'Cargando consumo...'))
+          if (_modoDiario)
+            _buildDiario()
           else ...[
-            const _SectionHeader(icon: Icons.data_usage_rounded, title: 'Resumen'),
-            const SizedBox(height: 12),
-            Row(children: [
-              Expanded(child: _KpiCard(label: 'Total', value: _fmtGB(_totalGB), icon: Icons.data_usage_rounded, color: _C.primary)),
-              const SizedBox(width: 8),
-              Expanded(child: _KpiCard(label: 'Subida', value: _fmtGB(_totalUp), icon: Icons.upload_rounded, color: _C.success)),
-              const SizedBox(width: 8),
-              Expanded(child: _KpiCard(label: 'Bajada', value: _fmtGB(_totalDown), icon: Icons.download_rounded, color: _C.accent)),
-            ]),
-            const SizedBox(height: 22),
-            const _SectionHeader(icon: Icons.bar_chart_rounded, title: 'Top clientes (ciclo actual)'),
-            const SizedBox(height: 12),
-            if (_datos.isEmpty)
-              const SizedBox()
-            else
-              _BarChartPro(
-                data: _datos.take(6).map((c) {
-                  final corto = c.nombre.length > 10 ? '${c.nombre.substring(0, 9)}…' : c.nombre;
-                  return _ChartPoint(corto, c.totalGB);
-                }).toList(),
-                color: _C.accent,
-                currency: false,
-                formatter: (v) => v < 1 ? '${(v * 1024).toStringAsFixed(0)}MB' : '${v.toStringAsFixed(1)}GB',
-              ),
-            const SizedBox(height: 22),
-            const _SectionHeader(icon: Icons.show_chart_rounded, title: 'Histórico de consumo (6 ciclos)'),
-            const SizedBox(height: 12),
-            if (_cargandoHistorico)
-              const Padding(padding: EdgeInsets.symmetric(vertical: 30), child: _LoadingState(text: 'Calculando histórico...'))
-            else if (_historicoGB.every((p) => p.value == 0))
-              const _EmptyState(
-                icon: Icons.show_chart_rounded,
-                title: 'Sin histórico disponible',
-                subtitle: 'Aún no hay suficientes ciclos con datos para comparar meses.',
-              )
-            else ...[
-              _BarChartPro(
-                data: _historicoGB,
-                color: _C.purple,
-                currency: false,
-                formatter: (v) => '${v.toStringAsFixed(0)}GB',
-              ),
-              const SizedBox(height: 10),
-              _MesMayorConsumoBadge(historico: _historicoGB),
-            ],
-            const SizedBox(height: 22),
-            const _SectionHeader(icon: Icons.leaderboard_rounded, title: 'Consumo por cliente'),
+            const _SectionHeader(icon: Icons.calendar_month_rounded, title: 'Periodo'),
             const SizedBox(height: 10),
-            if (_datos.isEmpty)
-              const _EmptyState(
-                icon: Icons.data_usage_rounded,
-                title: 'Sin datos de consumo',
-                subtitle: 'No hay registros para este periodo. Verifica que el tracking esté activo en el VPS.',
-              )
-            else
-              ..._datos.asMap().entries.map((e) {
-                final i = e.key;
-                final c = e.value;
-                final col = _colorPorConsumo(c.totalGB);
-                final pct = (c.totalGB / 200).clamp(0.0, 1.0);
-                return _ConsumoCard(rank: i + 1, cliente: c, color: col, porcentaje: pct, fmtGB: _fmtGB)
-                    .animate()
-                    .fadeIn(duration: 260.ms, delay: (i * 25).ms)
-                    .slideY(begin: 0.04, end: 0);
-              }),
+            _MesSelector(
+              meses: _meses,
+              anioSel: _anioSel,
+              mesSel: _mesSel,
+              onSel: (a, m) {
+                setState(() {
+                  _anioSel = a;
+                  _mesSel = m;
+                });
+                _cargar();
+              },
+            ),
+            const SizedBox(height: 18),
+            if (_cargando)
+              const Padding(padding: EdgeInsets.symmetric(vertical: 60), child: _LoadingState(text: 'Cargando consumo...'))
+            else ...[
+              const _SectionHeader(icon: Icons.data_usage_rounded, title: 'Resumen'),
+              const SizedBox(height: 12),
+              Row(children: [
+                Expanded(child: _KpiCard(label: 'Total', value: _fmtGB(_totalGB), icon: Icons.data_usage_rounded, color: _C.primary)),
+                const SizedBox(width: 8),
+                Expanded(child: _KpiCard(label: 'Subida', value: _fmtGB(_totalUp), icon: Icons.upload_rounded, color: _C.success)),
+                const SizedBox(width: 8),
+                Expanded(child: _KpiCard(label: 'Bajada', value: _fmtGB(_totalDown), icon: Icons.download_rounded, color: _C.accent)),
+              ]),
+              const SizedBox(height: 22),
+              const _SectionHeader(icon: Icons.bar_chart_rounded, title: 'Top clientes (ciclo actual)'),
+              const SizedBox(height: 12),
+              if (_datos.isEmpty)
+                const SizedBox()
+              else
+                _BarChartPro(
+                  data: _datos.take(6).map((c) {
+                    final corto = c.nombre.length > 10 ? '${c.nombre.substring(0, 9)}…' : c.nombre;
+                    return _ChartPoint(corto, c.totalGB);
+                  }).toList(),
+                  color: _C.accent,
+                  currency: false,
+                  formatter: (v) => v < 1 ? '${(v * 1024).toStringAsFixed(0)}MB' : '${v.toStringAsFixed(1)}GB',
+                ),
+              const SizedBox(height: 22),
+              const _SectionHeader(icon: Icons.show_chart_rounded, title: 'Histórico de consumo (6 ciclos)'),
+              const SizedBox(height: 12),
+              if (_cargandoHistorico)
+                const Padding(padding: EdgeInsets.symmetric(vertical: 30), child: _LoadingState(text: 'Calculando histórico...'))
+              else if (_historicoGB.every((p) => p.value == 0))
+                const _EmptyState(
+                  icon: Icons.show_chart_rounded,
+                  title: 'Sin histórico disponible',
+                  subtitle: 'Aún no hay suficientes ciclos con datos para comparar meses.',
+                )
+              else ...[
+                _BarChartPro(
+                  data: _historicoGB,
+                  color: _C.purple,
+                  currency: false,
+                  formatter: (v) => '${v.toStringAsFixed(0)}GB',
+                ),
+                const SizedBox(height: 10),
+                _MesMayorConsumoBadge(historico: _historicoGB),
+              ],
+              const SizedBox(height: 22),
+              const _SectionHeader(icon: Icons.leaderboard_rounded, title: 'Consumo por cliente'),
+              const SizedBox(height: 10),
+              if (_datos.isEmpty)
+                const _EmptyState(
+                  icon: Icons.data_usage_rounded,
+                  title: 'Sin datos de consumo',
+                  subtitle: 'No hay registros para este periodo. Verifica que el tracking esté activo en el VPS.',
+                )
+              else
+                ..._datos.asMap().entries.map((e) {
+                  final i = e.key;
+                  final c = e.value;
+                  final col = _colorPorConsumo(c.totalGB);
+                  final pct = (c.totalGB / 200).clamp(0.0, 1.0);
+                  return _ConsumoCard(rank: i + 1, cliente: c, color: col, porcentaje: pct, fmtGB: _fmtGB)
+                      .animate()
+                      .fadeIn(duration: 260.ms, delay: (i * 25).ms)
+                      .slideY(begin: 0.04, end: 0);
+                }),
+            ],
           ],
         ],
       ),
@@ -1118,6 +1667,116 @@ class _ChartPoint {
   final String label;
   final double value;
   const _ChartPoint(this.label, this.value);
+}
+
+// ─── Gráfica diaria: barras deslizables con ancho fijo por día ──────────────
+// A diferencia de _BarChartPro (que reparte el ancho entre todas las barras y
+// se desborda con muchos días), aquí cada día tiene ancho fijo y la gráfica se
+// desliza en horizontal. Así nunca se rompen los espacios ni las etiquetas.
+class _DailyBarChart extends StatelessWidget {
+  final List<_ChartPoint> data;
+  final Color color;
+  final String Function(double) fmtValue;
+
+  const _DailyBarChart({
+    required this.data,
+    required this.color,
+    required this.fmtValue,
+  });
+
+  static const double _colW = 48; // ancho de cada día (barra + fecha)
+  static const double _barAreaH = 120; // alto útil de las barras
+  static const double _labelH = 20; // franja inferior para la fecha
+
+  @override
+  Widget build(BuildContext context) {
+    if (data.isEmpty) return const SizedBox();
+
+    final maxVal = data.map((d) => d.value).fold<double>(0, (a, b) => b > a ? b : a);
+    final safeMax = maxVal <= 0 ? 1.0 : maxVal;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 16, 10, 10),
+      decoration: _cardDecoration(),
+      child: SizedBox(
+        height: _barAreaH + _labelH,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final totalW = data.length * _colW;
+            final fila = Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: data.map((d) {
+                final frac = (d.value / safeMax).clamp(0.0, 1.0);
+                return SizedBox(
+                  width: _colW,
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      // Valor: se encoge si no cabe (nunca desborda).
+                      SizedBox(
+                        height: 16,
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(d.value <= 0 ? '' : fmtValue(d.value), style: _f(9, w: FontWeight.w700, c: color)),
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Container(
+                        height: (_barAreaH - 26) * frac,
+                        margin: const EdgeInsets.symmetric(horizontal: 7),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                              begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [color, color.withOpacity(0.55)]),
+                          borderRadius: const BorderRadius.vertical(top: Radius.circular(5)),
+                        ),
+                      ),
+                      const SizedBox(height: 5),
+                      SizedBox(
+                        height: _labelH - 5,
+                        child: Text(d.label,
+                            textAlign: TextAlign.center, maxLines: 1, overflow: TextOverflow.ellipsis, style: _f(9.5, c: _C.textSec)),
+                      ),
+                    ],
+                  ),
+                );
+              }).toList(),
+            );
+
+            return Stack(children: [
+              // Líneas guía
+              Positioned.fill(
+                bottom: _labelH,
+                child: Column(
+                  children: List.generate(
+                    4,
+                    (i) => Expanded(
+                      child: Container(decoration: const BoxDecoration(border: Border(top: BorderSide(color: _C.border, width: 1)))),
+                    ),
+                  ),
+                ),
+              ),
+              Positioned.fill(
+                bottom: _labelH,
+                child: Align(
+                  alignment: Alignment.bottomCenter,
+                  child: Container(height: 1, color: _C.border),
+                ),
+              ),
+              // Cabe completo → centrado; si no, se desliza en horizontal.
+              if (totalW <= constraints.maxWidth)
+                Center(child: fila)
+              else
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: fila,
+                ),
+            ]);
+          },
+        ),
+      ),
+    );
+  }
 }
 
 class _BarChartPro extends StatelessWidget {

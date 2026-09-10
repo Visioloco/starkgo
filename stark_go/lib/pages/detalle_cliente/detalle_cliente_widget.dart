@@ -4,7 +4,6 @@ import 'package:stark_go/pages/config_velocidades/config_velocidades_widget.dart
 import 'package:stark_go/widgets/consumo_widgets.dart';
 
 import '/backend/backend.dart';
-import '/flutter_flow/flutter_flow_theme.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 import '/index.dart';
 import 'package:flutter/material.dart';
@@ -270,15 +269,9 @@ class _DetalleClienteWidgetState extends State<DetalleClienteWidget> {
   final _ctrlClaveRouter = TextEditingController();
 
   List<QueryDocumentSnapshot> _starlinks = [];
-  List<QueryDocumentSnapshot> _antenas = [];
-  List<QueryDocumentSnapshot> _routers = [];
 
   String? _selStarlinkId;
   Map<String, dynamic>? _selStarlinkData;
-  String? _selAntenaId;
-  Map<String, dynamic>? _selAntenaData;
-  String? _selRouterId;
-  Map<String, dynamic>? _selRouterData;
   String? _selVelocidad;
   String? _selTipoServicio;
 
@@ -509,25 +502,14 @@ class _DetalleClienteWidgetState extends State<DetalleClienteWidget> {
   Future<void> _cargarEquipos() async {
     if (_uid == null) return;
 
-    final sl = await FirebaseFirestore.instance.collection('starlinks').where('propietarioUid', isEqualTo: _uid).get();
-
-    final an = await FirebaseFirestore.instance
-        .collection('equipos')
-        .where('tipo', isEqualTo: 'antena')
-        .where('propietarioUid', isEqualTo: _uid)
-        .get();
-
-    final ro = await FirebaseFirestore.instance
-        .collection('equipos')
-        .where('tipo', isEqualTo: 'router')
+    final sl = await FirebaseFirestore.instance
+        .collection('starlinks')
         .where('propietarioUid', isEqualTo: _uid)
         .get();
 
     if (!mounted) return;
     setState(() {
       _starlinks = sl.docs;
-      _antenas = an.docs;
-      _routers = ro.docs;
     });
   }
 
@@ -539,24 +521,20 @@ class _DetalleClienteWidgetState extends State<DetalleClienteWidget> {
     _ctrlFinca.text = c.nombrefinca;
     _ctrlVereda.text = c.vereda;
     _ctrlIpAtn.text = c.ipatn;
-    _ctrlUsuarioAtn.text = c.usuarioatn;
-    _ctrlClaveAtn.text = c.claveatn;
+    _ctrlUsuarioAtn.text = _pick(raw, 'usuarioutn') ?? c.usuarioatn;
+    _ctrlClaveAtn.text = _pick(raw, 'claveutn') ?? c.claveatn;
     _ctrlIpRouter.text = c.iprouter;
     _ctrlUsuarioRouter.text = c.usuariorouter;
     _ctrlClaveRouter.text = c.claverouter;
 
     _selPais = _paisPorCodigo(_pick(raw, 'codigoPais'));
     _selStarlinkId = _pick(raw, 'starlinkId');
-    _selAntenaId = _pick(raw, 'antenaId');
-    _selRouterId = _pick(raw, 'routerId');
 
     final velGuardada = _pick(raw, 'velocidadPlan');
     _selVelocidad = (_velocidades.isNotEmpty && _velocidades.contains(velGuardada)) ? velGuardada : null;
     _selTipoServicio = _tiposServicio.contains(_pick(raw, 'tipoServicio')) ? _pick(raw, 'tipoServicio') : null;
     _selPlanItem = null;
     _selStarlinkData = null;
-    _selAntenaData = null;
-    _selRouterData = null;
 
     setState(() => _modoEdicion = true);
 
@@ -579,22 +557,6 @@ class _DetalleClienteWidgetState extends State<DetalleClienteWidget> {
             _selStarlinkId = null;
           }
         }
-        if (_selAntenaId != null) {
-          final idx = _antenas.indexWhere((d) => d.id == _selAntenaId);
-          if (idx >= 0) {
-            _selAntenaData = _antenas[idx].data() as Map<String, dynamic>;
-          } else {
-            _selAntenaId = null;
-          }
-        }
-        if (_selRouterId != null) {
-          final idx = _routers.indexWhere((d) => d.id == _selRouterId);
-          if (idx >= 0) {
-            _selRouterData = _routers[idx].data() as Map<String, dynamic>;
-          } else {
-            _selRouterId = null;
-          }
-        }
       });
     });
   }
@@ -604,10 +566,6 @@ class _DetalleClienteWidgetState extends State<DetalleClienteWidget> {
       _modoEdicion = false;
       _selStarlinkId = null;
       _selStarlinkData = null;
-      _selAntenaId = null;
-      _selAntenaData = null;
-      _selRouterId = null;
-      _selRouterData = null;
       _selPlanItem = null;
       _selVelocidad = null;
       _selTipoServicio = null;
@@ -651,18 +609,6 @@ class _DetalleClienteWidgetState extends State<DetalleClienteWidget> {
       if (_selStarlinkId != null && _selStarlinkData != null) {
         updates['starlinkId'] = _selStarlinkId!;
         updates['starlinkNombre'] = _selStarlinkData!['nombre'] ?? '';
-      }
-      if (_selAntenaId != null && _selAntenaData != null) {
-        updates['antenaId'] = _selAntenaId!;
-        updates['antenaMarca'] = _selAntenaData!['marca'] ?? '';
-        updates['antenaModelo'] = _selAntenaData!['modelo'] ?? '';
-        updates['antenaIp'] = _selAntenaData!['ip'] ?? '';
-      }
-      if (_selRouterId != null && _selRouterData != null) {
-        updates['routerId'] = _selRouterId!;
-        updates['routerMarca'] = _selRouterData!['marca'] ?? '';
-        updates['routerModelo'] = _selRouterData!['modelo'] ?? '';
-        updates['routerIp'] = _selRouterData!['ip'] ?? '';
       }
       if (_selPlanItem != null) {
         updates['planId'] = _selPlanItem!.id;
@@ -1064,6 +1010,7 @@ class _DetalleClienteWidgetState extends State<DetalleClienteWidget> {
       },
     );
   }
+
 
   Widget _buildBannerSinConfig() {
     return Padding(
@@ -1898,42 +1845,6 @@ class _DetalleClienteWidgetState extends State<DetalleClienteWidget> {
                   setState(() {
                     _selStarlinkId = id;
                     _selStarlinkData = doc.data() as Map<String, dynamic>;
-                  });
-                }),
-            const SizedBox(height: 10),
-            drop<String>(
-                label: 'ANTENA',
-                icon: Icons.cell_tower_rounded,
-                color: _C.accent,
-                value: _selAntenaId,
-                items: _antenas.map((doc) {
-                  final d = doc.data() as Map<String, dynamic>;
-                  return DropdownMenuItem<String>(
-                      value: doc.id, child: dItem(Icons.cell_tower_rounded, '${d['marca']} ${d['modelo']}', 'IP: ${d['ip']}', _C.accent));
-                }).toList(),
-                onChanged: (id) {
-                  final doc = _antenas.firstWhere((d) => d.id == id);
-                  setState(() {
-                    _selAntenaId = id;
-                    _selAntenaData = doc.data() as Map<String, dynamic>;
-                  });
-                }),
-            const SizedBox(height: 10),
-            drop<String>(
-                label: 'ROUTER',
-                icon: Icons.router_rounded,
-                color: _C.purple,
-                value: _selRouterId,
-                items: _routers.map((doc) {
-                  final d = doc.data() as Map<String, dynamic>;
-                  return DropdownMenuItem<String>(
-                      value: doc.id, child: dItem(Icons.router_rounded, '${d['marca']} ${d['modelo']}', 'IP: ${d['ip']}', _C.purple));
-                }).toList(),
-                onChanged: (id) {
-                  final doc = _routers.firstWhere((d) => d.id == id);
-                  setState(() {
-                    _selRouterId = id;
-                    _selRouterData = doc.data() as Map<String, dynamic>;
                   });
                 }),
             const SizedBox(height: 10),

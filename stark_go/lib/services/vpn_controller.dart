@@ -4,13 +4,14 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 
+import 'notificaciones_service.dart';
+
 // ══════════════════════════════════════════════════════════════
 //  Import condicional de plataforma:
 //    - Web  → vpn_controller_stub.dart (sin plugin, no rompe el build web)
 //    - IO (Android/iOS/desktop) → vpn_controller_io.dart (wireguard_flutter)
 // ══════════════════════════════════════════════════════════════
-import 'vpn_controller_stub.dart'
-    if (dart.library.io) 'vpn_controller_io.dart' as impl;
+import 'vpn_controller_stub.dart' if (dart.library.io) 'vpn_controller_io.dart' as impl;
 
 // ══════════════════════════════════════════════════════════════
 //  Tipos compartidos (independientes de la plataforma)
@@ -54,16 +55,12 @@ class VpnConfig {
 
   /// Representación SEGURA para logs: nunca expone la private key.
   String toDebugString() {
-    final pk = RegExp(r'PrivateKey\s*=\s*([^\s]+)')
-            .firstMatch(wgQuickConfig)
-            ?.group(1) ??
-        '';
+    final pk = RegExp(r'PrivateKey\s*=\s*([^\s]+)').firstMatch(wgQuickConfig)?.group(1) ?? '';
     return 'VpnConfig(server=$serverAddress, conf.length=${wgQuickConfig.length}, '
         'privateKey=${_mask(pk)})';
   }
 
-  static String _mask(String s) =>
-      s.length < 8 ? '***' : '${s.substring(0, 4)}…${s.substring(s.length - 4)}';
+  static String _mask(String s) => s.length < 8 ? '***' : '${s.substring(0, 4)}…${s.substring(s.length - 4)}';
 }
 
 /// Contrato de la implementación por plataforma.
@@ -121,10 +118,7 @@ class VpnController {
       return null;
     }
     try {
-      final doc = await FirebaseFirestore.instance
-          .collection(_coleccionConfig)
-          .doc(uid)
-          .get();
+      final doc = await FirebaseFirestore.instance.collection(_coleccionConfig).doc(uid).get();
       if (!doc.exists) return null;
       return doc.data() as Map<String, dynamic>;
     } catch (e) {
@@ -160,6 +154,13 @@ class VpnController {
       );
     }
     debugPrint('[VpnController] Iniciando túnel… ${config.toDebugString()}');
+
+    // Android 13+: la notificación persistente del túnel (FGS nativo o el
+    // fallback local) solo es visible si POST_NOTIFICATIONS está concedido.
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      await NotificacionesService.instance.asegurarPermisoNotificaciones();
+    }
+
     return _impl.start(config);
   }
 
@@ -177,10 +178,8 @@ class VpnController {
     // Formato 1: wg-quick completo.
     final wgQuick = (data['wgQuickConfig'] ?? '').toString().trim();
     if (wgQuick.isNotEmpty) {
-      final minimo = wgQuick.contains('[Interface]') &&
-          wgQuick.contains('PrivateKey') &&
-          wgQuick.contains('[Peer]') &&
-          wgQuick.contains('PublicKey');
+      final minimo =
+          wgQuick.contains('[Interface]') && wgQuick.contains('PrivateKey') && wgQuick.contains('[Peer]') && wgQuick.contains('PublicKey');
       final endpoint = _extraerEndpoint(wgQuick);
       if (!minimo || endpoint == null) return null;
       return VpnConfig(
@@ -196,11 +195,7 @@ class VpnController {
     final peerPublicKey = (data['peerPublicKey'] ?? '').toString().trim();
     final allowedIps = (data['allowedIps'] ?? '').toString().trim();
     final endpoint = (data['endpoint'] ?? '').toString().trim();
-    if (privateKey.isEmpty ||
-        address.isEmpty ||
-        peerPublicKey.isEmpty ||
-        allowedIps.isEmpty ||
-        endpoint.isEmpty) {
+    if (privateKey.isEmpty || address.isEmpty || peerPublicKey.isEmpty || allowedIps.isEmpty || endpoint.isEmpty) {
       return null;
     }
 
@@ -238,4 +233,3 @@ class VpnController {
     return null;
   }
 }
-

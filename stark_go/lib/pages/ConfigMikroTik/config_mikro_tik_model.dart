@@ -66,6 +66,10 @@ class ConfigMikroTikModel extends FlutterFlowModel<ConfigMikroTikWidget> {
     return null;
   }
 
+  // ── Public Key WireGuard del MikroTik (para registrar en el VPS) ──
+  FocusNode? mikrotikPubKeyFocusNode;
+  TextEditingController? mikrotikPubKeyController;
+
   // ── Scheduler ──
   // State field(s) for SchedulerDropdown widget.
   int? schedulerMinutos;
@@ -100,5 +104,8 @@ class ConfigMikroTikModel extends FlutterFlowModel<ConfigMikroTikWidget> {
 
     mikrotikPassFocusNode?.dispose();
     mikrotikPassController?.dispose();
+
+    mikrotikPubKeyFocusNode?.dispose();
+    mikrotikPubKeyController?.dispose();
   }
 }

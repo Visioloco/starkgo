@@ -42,6 +42,8 @@ import 'package:stark_go/pages/splash/splash_widget.dart';
 import 'package:stark_go/pages/config_ultra_msg/config_ultra_msg_widget.dart';
 import 'package:stark_go/pages/config_mikro_tik/config_mikro_tik_widget.dart';
 import 'package:stark_go/pages/config_velocidades/config_velocidades_widget.dart';
+// ── FINANZAS PERSONALES (NUEVO) ──────────────────────────────────────────────
+import 'package:stark_go/pages/finanzas/finanzas_widget.dart';
 
 const kTransitionInfoKey = '__transition_info__';
 
@@ -276,6 +278,12 @@ GoRouter createRouter(AppStateNotifier appStateNotifier) => GoRouter(
               name: InformesWidget.routeName, // 'Informes'
               path: InformesWidget.routePath, // 'informes'
               builder: (context, params) => const InformesWidget(),
+            ),
+            // ── FINANZAS PERSONALES ✅ NUEVO ─────────────────────────────────────────
+            FFRoute(
+              name: FinanzasWidget.routeName, // 'Finanzas'
+              path: FinanzasWidget.routePath, // 'finanzas'
+              builder: (context, params) => const FinanzasWidget(),
             ),
             FFRoute(
               name: ReporteConsumoWidget.routeName,

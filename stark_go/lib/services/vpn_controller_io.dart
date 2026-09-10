@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:wireguard_flutter/wireguard_flutter.dart';
 
 import 'vpn_controller.dart';
+import 'vpn_foreground.dart';
+import 'notificaciones_service.dart';
 
 // ══════════════════════════════════════════════════════════════
 //  Implementación real del controlador VPN (Android / iOS / desktop)
@@ -186,6 +188,48 @@ class VpnControllerImpl implements VpnControllerPlatform {
   void _setStatus(VpnStatus status) {
     _currentStatus = status;
     if (!_statusController.isClosed) _statusController.add(status);
+    _syncForegroundNativo(status);
+  }
+
+  /// En Android mantiene sincronizado el servicio en primer plano
+  /// (notificación persistente) y el Tile de Ajustes Rápidos con el estado
+  /// real del túnel:
+  ///   · connected      → arranca el FGS + notificación "VPN Activa"
+  ///   · disconnected/error → detiene el FGS (la notificación se elimina sola)
+  void _syncForegroundNativo(VpnStatus status) {
+    if (kIsWeb || !Platform.isAndroid) return;
+    if (status == VpnStatus.connected) {
+      unawaited(_arrancarForegroundAndroid());
+    } else if (status == VpnStatus.disconnected ||
+        status == VpnStatus.error) {
+      unawaited(_detenerForegroundAndroid());
+    }
+  }
+
+  Future<void> _arrancarForegroundAndroid() async {
+    try {
+      final ok = await vpnForegroundBridge.start();
+      if (!ok) {
+        // Fallback: si el canal nativo no está disponible (p. ej. el plugin no
+        // se registró), mostramos la notificación local "ongoing" como antes.
+        debugPrint('[VpnController] FGS nativo no disponible; '
+            'uso notificación local de respaldo.');
+        await NotificacionesService.instance.mostrarTunelActivo();
+      }
+    } catch (e) {
+      debugPrint('[VpnController] Error arrancando FGS Android: $e');
+    }
+  }
+
+  Future<void> _detenerForegroundAndroid() async {
+    try {
+      await vpnForegroundBridge.stop();
+    } catch (e) {
+      debugPrint('[VpnController] Error deteniendo FGS Android: $e');
+    } finally {
+      // Quita la notificación local de respaldo si existiera.
+      await NotificacionesService.instance.ocultarTunelActivo();
+    }
   }
 
   /// Libera recursos (llamar al salir de la app si se desea).

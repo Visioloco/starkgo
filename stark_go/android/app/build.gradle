@@ -80,6 +80,15 @@ android {
             signingConfig = signingConfigs.release
         }
     }
+
+    // Compatibilidad con dispositivos Android de 16 KB page size
+    // (requisito de Google Play). Mantiene las libs nativas sin extraer
+    // y alineadas a 16 KB para que la app corra en los nuevos dispositivos.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
+        }
+    }
 }
 
 flutter {
@@ -89,4 +98,17 @@ flutter {
 dependencies {
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.1.0"
+    // ⚠️ WireGuard tunnel por build type:
+    //  - 1.0.20250531 (libwg.so alineado a 16 KB, requisito de Google Play) trae
+    //    un Java Record (Statistics$PeerStats). D8 NO puede desugarlo en el
+    //    dexing de debug (mergeExtDexDebug → "global synthetic ... consumer").
+    //    En release sí funciona porque R8 dexea todo el programa junto.
+    //  - Por eso: DEBUG → tunnel 1.0.20230427 (sin records) y
+    //             RELEASE → tunnel 1.0.20250531 (16 KB, requisito Play).
+    debugImplementation('com.wireguard.android:tunnel:1.0.20230427') {
+        version { strictly '1.0.20230427' }
+    }
+    releaseImplementation('com.wireguard.android:tunnel:1.0.20250531') {
+        version { strictly '1.0.20250531' }
+    }
 }

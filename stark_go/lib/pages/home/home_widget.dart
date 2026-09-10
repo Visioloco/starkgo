@@ -16,6 +16,7 @@ import 'package:stark_go/pages/lista_starlinks_clientes/lista_starlinks_clientes
 import 'package:stark_go/widgets/consumo_widgets.dart';
 import 'package:stark_go/pages/reporte_consumo/reporte_consumo_widget.dart';
 import 'package:stark_go/pages/completar_perfil/completar_perfil_widget.dart';
+import 'package:stark_go/pages/finanzas/finanzas_widget.dart';
 import 'package:stark_go/services/bienvenida_service.dart';
 import 'package:stark_go/services/mora_automatica_service.dart';
 
@@ -43,6 +44,7 @@ import 'package:provider/provider.dart';
 import 'package:text_search/text_search.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:http/http.dart' as http;
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:convert';
 import 'home_model.dart';
@@ -65,6 +67,8 @@ class _AppColors {
   static const Color cardBorder = Color(0xFFE2E8F0);
   static const Color purple = Color(0xFF7C3AED);
   static const Color whatsapp = Color(0xFF25D366);
+  static const Color header1 = Color(0xFF1E293B);
+  static const Color header2 = Color(0xFF334155);
 }
 
 // ─────────────────────────────────────────────
@@ -501,34 +505,75 @@ class _StatCard extends StatelessWidget {
   final String label, count;
   final IconData icon;
   final Color color;
+  final VoidCallback? onTap;
+  final bool selected;
 
-  const _StatCard({required this.label, required this.count, required this.icon, required this.color});
+  const _StatCard({
+    required this.label,
+    required this.count,
+    required this.icon,
+    required this.color,
+    this.onTap,
+    this.selected = false,
+  });
 
   @override
   Widget build(BuildContext context) => Expanded(
-        child: Container(
-          margin: const EdgeInsets.symmetric(horizontal: 3),
-          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-          decoration: BoxDecoration(
-            color: color.withOpacity(0.09),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: color.withOpacity(0.25), width: 1.2),
-          ),
-          child: Column(children: [
-            Container(
-              padding: const EdgeInsets.all(7),
-              decoration: BoxDecoration(color: color.withOpacity(0.15), shape: BoxShape.circle),
-              child: Icon(icon, color: color, size: 16),
+        child: GestureDetector(
+          onTap: onTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            margin: const EdgeInsets.symmetric(horizontal: 3),
+            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 6),
+            decoration: BoxDecoration(
+              color: selected ? color.withOpacity(0.16) : color.withOpacity(0.07),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: selected ? color : color.withOpacity(0.22),
+                width: selected ? 1.8 : 1.2,
+              ),
             ),
-            const SizedBox(height: 6),
-            Text(count, style: GoogleFonts.spaceGrotesk(color: color, fontSize: 20, fontWeight: FontWeight.w800)),
-            const SizedBox(height: 2),
-            Text(label,
-                style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 10, fontWeight: FontWeight.w500),
-                textAlign: TextAlign.center,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis),
-          ]),
+            child: Column(children: [
+              Container(
+                padding: const EdgeInsets.all(7),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [color.withOpacity(0.9), color.withOpacity(0.55)],
+                  ),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, color: Colors.white, size: 15),
+              ),
+              const SizedBox(height: 6),
+              Text(count,
+                  style: GoogleFonts.spaceGrotesk(color: selected ? color : _AppColors.textPri, fontSize: 20, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 2),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  if (selected) ...[
+                    Container(
+                      width: 5,
+                      height: 5,
+                      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+                    ),
+                    const SizedBox(width: 4),
+                  ],
+                  Flexible(
+                    child: Text(label,
+                        style: GoogleFonts.spaceGrotesk(
+                            color: _AppColors.textSec, fontSize: 10, fontWeight: selected ? FontWeight.w700 : FontWeight.w500),
+                        textAlign: TextAlign.center,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis),
+                  ),
+                ],
+              ),
+            ]),
+          ),
         ),
       );
 }
@@ -543,6 +588,7 @@ class _DrawerItem extends StatelessWidget {
   final bool active;
   final Color? iconColor;
   final String? badge;
+  final Color? badgeColor;
 
   const _DrawerItem({
     required this.icon,
@@ -551,6 +597,7 @@ class _DrawerItem extends StatelessWidget {
     this.active = false,
     this.iconColor,
     this.badge,
+    this.badgeColor,
   });
 
   @override
@@ -564,16 +611,20 @@ class _DrawerItem extends StatelessWidget {
             borderRadius: BorderRadius.circular(14),
             splashColor: _AppColors.primary.withOpacity(0.1),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
               child: Row(children: [
                 Container(
                   width: 36,
                   height: 36,
                   decoration: BoxDecoration(
-                    color: active ? _AppColors.primary.withOpacity(0.2) : (iconColor ?? Colors.white).withOpacity(0.07),
+                    gradient: active
+                        ? const LinearGradient(
+                            begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [_AppColors.primary, _AppColors.accent])
+                        : null,
+                    color: active ? null : (iconColor ?? Colors.white).withOpacity(0.08),
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: Icon(icon, color: active ? _AppColors.primary : (iconColor ?? Colors.white70), size: 18),
+                  child: Icon(icon, color: active ? Colors.white : (iconColor ?? Colors.white70), size: 18),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -584,18 +635,20 @@ class _DrawerItem extends StatelessWidget {
                         fontWeight: active ? FontWeight.w600 : FontWeight.w400,
                       )),
                 ),
-                if (badge != null)
+                if (badge != null) ...[
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                     decoration: BoxDecoration(
-                      color: _AppColors.accent.withOpacity(0.2),
+                      color: (badgeColor ?? _AppColors.accent).withOpacity(0.15),
                       borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: _AppColors.accent.withOpacity(0.4)),
+                      border: Border.all(color: (badgeColor ?? _AppColors.accent).withOpacity(0.45)),
                     ),
-                    child:
-                        Text(badge!, style: GoogleFonts.spaceGrotesk(color: _AppColors.accent, fontSize: 10, fontWeight: FontWeight.w700)),
-                  )
-                else
+                    child: Text(badge!,
+                        style: GoogleFonts.spaceGrotesk(color: badgeColor ?? _AppColors.accent, fontSize: 10, fontWeight: FontWeight.w700)),
+                  ),
+                  const SizedBox(width: 6),
+                  Icon(Icons.arrow_forward_ios_rounded, color: Colors.white24, size: 12),
+                ] else
                   const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white24, size: 13),
               ]),
             ),
@@ -644,10 +697,17 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
   late AnimationController _drawerCtrl;
   late Animation<double> _drawerAnim;
   bool _drawerOpen = false;
+  bool _dragDesdeBorde = false;
+
+  /// Versión de la app (se lee de pubspec con package_info_plus).
+  String _appVersion = 'v1.8.0+18';
 
   final TextEditingController _searchCtrl = TextEditingController();
   bool _isSearching = false;
   List<ClientesRecord> _searchResults = [];
+
+  // Filtro por estado al tocar las tarjetas de resumen (null = todos).
+  String? _filterEstado;
 
   // ── STARLINKS: ahora con Stream en tiempo real ──
   Stream<List<_StarlinkInfo>>? _starlinksStream;
@@ -673,6 +733,20 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
 
   String get _uid => FirebaseAuth.instance.currentUser?.uid ?? '';
 
+  /// Lee la versión real instalada (no se vuelve a quedar en una fija).
+  Future<void> _cargarVersionApp() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      if (!mounted) return;
+      final v = info.version.trim();
+      final b = info.buildNumber.trim();
+      if (v.isEmpty) return;
+      setState(() => _appVersion = b.isEmpty ? 'v$v' : 'v$v+$b');
+    } catch (_) {
+      // Si falla, se mantiene el valor por defecto.
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -688,14 +762,15 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
     _cargarConfigFacturacion();
     _verificarMembresia();
     _verificarBienvenida();
+    _cargarVersionApp();
     _ejecutarMoraAutomatica();
 
     WidgetsBinding.instance.addObserver(this);
 
     SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
-      statusBarIconBrightness: Brightness.dark,
-      statusBarBrightness: Brightness.light,
+      statusBarIconBrightness: Brightness.light,
+      statusBarBrightness: Brightness.dark,
     ));
   }
 
@@ -1061,6 +1136,23 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
     FFAppState().drawer = _drawerOpen;
   }
 
+  // Deslizar desde el borde izquierdo abre el drawer; hacia la izquierda lo cierra.
+  void _onDragInicio(DragStartDetails d) {
+    if (!_drawerOpen && d.globalPosition.dx <= 56) {
+      _dragDesdeBorde = true;
+    }
+  }
+
+  void _onDragFin(DragEndDetails d) {
+    final vel = d.primaryVelocity ?? 0;
+    if (_dragDesdeBorde && !_drawerOpen && vel > 250) {
+      _toggleDrawer();
+    } else if (_drawerOpen && vel < -250) {
+      _toggleDrawer();
+    }
+    _dragDesdeBorde = false;
+  }
+
   void _onSearchChanged(String query, List<ClientesRecord> allClients) {
     EasyDebounce.debounce('search', const Duration(milliseconds: 400), () {
       if (query.trim().isEmpty) {
@@ -1274,6 +1366,16 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
       if (!mounted) return;
 
       if (response.statusCode == 200 || response.statusCode == 201) {
+        // Al enviar el recordatorio, el cliente pasa a rojo (mora).
+        // El pago (registrar pago) lo devuelve a verde (activo).
+        try {
+          await clienteRef.update({
+            'status': 'mora',
+            'fechaPasoMora': FieldValue.serverTimestamp(),
+          });
+        } catch (e) {
+          debugPrint('[StarkGo] Error marcando cliente en mora: $e');
+        }
         _showSuccessDialog(nombre, numeroDestino);
       } else {
         String detalle = '';
@@ -1293,12 +1395,13 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
   }
 
   // ──────────────────────────────────────────
-  //  SOPORTE WHATSAPP (plan Solo Vouchers)
+  //  SOPORTE WHATSAPP — ayuda para configurar y conectar MikroTik
   // ──────────────────────────────────────────
   Future<void> _abrirSoporteWhatsApp() async {
     const numero = '573137756497';
-    const mensaje = 'Hola Fabián, necesito soporte para crear vouchers en StarkGo. '
-        '¿Me puedes ayudar, por favor?';
+    const mensaje = 'Hola, Ing. Fabián 👋. Quiero que me ayudes a configurar y '
+        'conectar mi app StarkGo con MikroTik. Quedo atento a tu ayuda. '
+        '¡Muchas gracias!';
     final uri = Uri.parse('https://wa.me/$numero?text=${Uri.encodeComponent(mensaje)}');
     try {
       if (await canLaunchUrl(uri)) {
@@ -1781,7 +1884,8 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
         final allClients = snapshot.data!;
         final filteredByStarlink =
             _selectedStarlinkId != null ? allClients.where((c) => c.starlinkId == _selectedStarlinkId).toList() : allClients;
-        final displayList = _isSearching ? _searchResults : filteredByStarlink;
+        final baseList = _isSearching ? _searchResults : filteredByStarlink;
+        final displayList = _filterEstado == null ? baseList : baseList.where((c) => c.status == _filterEstado).toList();
 
         final moraCount = filteredByStarlink.where((c) => c.status == 'mora').length;
         final inactivoCount = filteredByStarlink.where((c) => c.status == 'inactivo').length;
@@ -1792,24 +1896,27 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
             FocusScope.of(context).unfocus();
             if (_drawerOpen) _toggleDrawer();
           },
+          onHorizontalDragStart: _onDragInicio,
+          onHorizontalDragEnd: _onDragFin,
+          onHorizontalDragCancel: () {
+            _dragDesdeBorde = false;
+          },
           child: Scaffold(
             key: scaffoldKey,
             backgroundColor: _AppColors.surfaceDim,
-            // ── Botón flotante de soporte (solo plan Solo Vouchers) ──
-            floatingActionButton: _tipoPlanUsuario == 'vouchers'
-                ? FloatingActionButton.extended(
-                    onPressed: _abrirSoporteWhatsApp,
-                    backgroundColor: _AppColors.whatsapp,
-                    foregroundColor: Colors.white,
-                    elevation: 6,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-                    icon: const Icon(FontAwesomeIcons.whatsapp, size: 20),
-                    label: Text(
-                      'Soporte',
-                      style: GoogleFonts.spaceGrotesk(fontSize: 14, fontWeight: FontWeight.w700),
-                    ),
-                  )
-                : null,
+            // ── Botón flotante de soporte WhatsApp (todos los planes) ──
+            floatingActionButton: FloatingActionButton.extended(
+              onPressed: _abrirSoporteWhatsApp,
+              backgroundColor: _AppColors.whatsapp,
+              foregroundColor: Colors.white,
+              elevation: 6,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+              icon: const Icon(FontAwesomeIcons.whatsapp, size: 20),
+              label: Text(
+                'Soporte',
+                style: GoogleFonts.spaceGrotesk(fontSize: 14, fontWeight: FontWeight.w700),
+              ),
+            ),
             body: Stack(children: [
               _buildDrawer(context, allClients),
               AnimatedBuilder(
@@ -1836,6 +1943,19 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                   displayList,
                 ),
               ),
+              // Cierra el drawer al tocar la zona derecha de la pantalla
+              if (_drawerOpen)
+                Positioned(
+                  left: 290,
+                  top: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: GestureDetector(
+                    onTap: _toggleDrawer,
+                    behavior: HitTestBehavior.opaque,
+                    child: const SizedBox.expand(),
+                  ),
+                ),
             ]),
           ),
         );
@@ -1847,6 +1967,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
   //  DRAWER
   // ──────────────────────────────────────────
   Widget _buildDrawer(BuildContext context, List<ClientesRecord> allClients) {
+    final moraCountDrawer = allClients.where((c) => c.status == 'mora').length;
     return Positioned(
       left: 0,
       top: 0,
@@ -1859,23 +1980,46 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
-                child: Row(children: [
-                  Container(
-                    width: 46,
-                    height: 46,
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(colors: [_AppColors.primary, _AppColors.accent]),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: const Icon(Icons.wifi_tethering_rounded, color: Colors.white, size: 24),
-                  ),
-                  const SizedBox(width: 12),
-                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text('StarkGo', style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
-                    Text('Panel de gestión', style: GoogleFonts.spaceGrotesk(color: Colors.white38, fontSize: 11)),
-                  ]),
-                ]),
+                padding: const EdgeInsets.fromLTRB(16, 18, 16, 6),
+                child: FutureBuilder<DocumentSnapshot>(
+                  future: _uid.isEmpty ? null : FirebaseFirestore.instance.collection('user').doc(_uid).get(),
+                  builder: (context, snap) {
+                    final nombre =
+                        snap.hasData && snap.data!.exists ? (snap.data!.data() as Map<String, dynamic>)['nombre'] ?? 'Usuario' : 'Usuario';
+                    final inicial = nombre.isNotEmpty ? nombre[0].toUpperCase() : '?';
+                    return Row(children: [
+                      Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(colors: [_AppColors.primary, _AppColors.accent]),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Center(
+                          child: Text(inicial,
+                              style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(nombre,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w800)),
+                            const SizedBox(height: 2),
+                            Text(_nombreEmpresa.isEmpty ? 'Panel de gestión' : _nombreEmpresa,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: GoogleFonts.spaceGrotesk(color: Colors.white54, fontSize: 11)),
+                          ],
+                        ),
+                      ),
+                    ]);
+                  },
+                ),
               ),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
@@ -1893,6 +2037,8 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                         _DrawerItem(
                           icon: Icons.people_alt_rounded,
                           label: 'Clientes',
+                          badge: moraCountDrawer > 0 ? '$moraCountDrawer en mora' : null,
+                          badgeColor: _AppColors.danger,
                           onTap: () {
                             _toggleDrawer();
                             context.pushNamed(ListaclientesWidget.routeName);
@@ -1946,6 +2092,16 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                           onTap: () {
                             _toggleDrawer();
                             context.pushNamed(InformesWidget.routeName);
+                          },
+                        ),
+                        _DrawerItem(
+                          icon: Icons.account_balance_wallet_rounded,
+                          label: 'Mis Finanzas',
+                          iconColor: _AppColors.accent,
+                          badge: 'Nuevo',
+                          onTap: () {
+                            _toggleDrawer();
+                            context.pushNamed(FinanzasWidget.routeName);
                           },
                         ),
                         _DrawerItem(
@@ -2014,6 +2170,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                       ),
                       // ✅ Solo plan completo: Configuración VPS, Velocidades, WhatsApp, Facturación
                       if (_tipoPlanUsuario != 'vouchers') ...[
+                        const _DrawerSectionHeader(title: 'MikroTik & VPN'),
                         // ✅ VPN WireGuard · Antenas
                         _DrawerItem(
                           icon: Icons.vpn_lock_rounded,
@@ -2091,7 +2248,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
               _DrawerItem(icon: Icons.logout_rounded, label: 'Cerrar sesión', iconColor: _AppColors.danger, onTap: _cerrarSesion),
               Padding(
                 padding: const EdgeInsets.all(20),
-                child: Text('v1.0.0+5', style: GoogleFonts.spaceGrotesk(color: Colors.white24, fontSize: 11)),
+                child: Text(_appVersion, style: GoogleFonts.spaceGrotesk(color: Colors.white24, fontSize: 11)),
               ),
             ],
           ),
@@ -2117,8 +2274,9 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
       return Container(
         color: _AppColors.surfaceDim,
         child: SafeArea(
+          top: false,
           child: Column(children: [
-            _buildTopBar(context, allClients),
+            _buildTopBarPro(context, allClients),
             const SizedBox(height: 4),
             Expanded(
               child: _buildVouchersHome(),
@@ -2131,8 +2289,9 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
     return Container(
       color: _AppColors.surfaceDim,
       child: SafeArea(
+        top: false,
         child: Column(children: [
-          _buildTopBar(context, allClients),
+          _buildTopBarPro(context, allClients),
           const SizedBox(height: 4),
           if (_facturacionCargada && _diaVencimiento == 0) _buildFechaAlertBanner(),
           _buildStatsRow(filteredClients.length, activoCount, moraCount, inactivoCount),
@@ -2516,7 +2675,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('Bienvenido 👋', style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 12)),
             FutureBuilder<DocumentSnapshot>(
-              future: FirebaseFirestore.instance.collection('user').doc(_uid).get(),
+              future: _uid.isEmpty ? null : FirebaseFirestore.instance.collection('user').doc(_uid).get(),
               builder: (context, snap) {
                 final nombre =
                     snap.hasData && snap.data!.exists ? (snap.data!.data() as Map<String, dynamic>)['nombre'] ?? 'Usuario' : 'Usuario';
@@ -2595,14 +2754,178 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
     );
   }
 
+  String get _fechaHoy {
+    final d = DateTime.now();
+    const meses = [
+      'enero',
+      'febrero',
+      'marzo',
+      'abril',
+      'mayo',
+      'junio',
+      'julio',
+      'agosto',
+      'septiembre',
+      'octubre',
+      'noviembre',
+      'diciembre'
+    ];
+    return '${d.day} de ${meses[d.month - 1]} de ${d.year}';
+  }
+
+  void _alternarFiltroEstado(String? estado) {
+    setState(() {
+      if (_filterEstado == estado) {
+        _filterEstado = null;
+      } else {
+        _filterEstado = estado;
+        _selectedStarlinkId = null;
+        _isSearching = false;
+        _searchResults = [];
+        _searchCtrl.clear();
+      }
+    });
+  }
+
+  Widget _glassCircle(IconData icon, Color color) {
+    return Container(
+      width: 40,
+      height: 40,
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.14),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withOpacity(0.18)),
+      ),
+      child: Icon(icon, color: color, size: 19),
+    );
+  }
+
+  Widget _buildTopBarPro(BuildContext context, List<ClientesRecord> allClients) {
+    final Color blanco = Colors.white;
+    return Container(
+      padding: EdgeInsets.fromLTRB(16, MediaQuery.paddingOf(context).top + 8, 16, 14),
+      decoration: BoxDecoration(
+        gradient:
+            const LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [_AppColors.header1, _AppColors.header2]),
+        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(22)),
+        boxShadow: [BoxShadow(color: _AppColors.header1.withOpacity(0.3), blurRadius: 14, offset: const Offset(0, 6))],
+      ),
+      child: Column(children: [
+        Row(children: [
+          GestureDetector(
+            onTap: _toggleDrawer,
+            child: AnimatedBuilder(
+              animation: _drawerAnim,
+              builder: (_, __) => Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                    color: blanco.withOpacity(0.14),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: blanco.withOpacity(0.2))),
+                child: Icon(_drawerOpen ? Icons.close_rounded : Icons.menu_rounded, color: blanco, size: 22),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: FutureBuilder<DocumentSnapshot>(
+              future: _uid.isEmpty ? null : FirebaseFirestore.instance.collection('user').doc(_uid).get(),
+              builder: (context, snap) {
+                final nombre =
+                    snap.hasData && snap.data!.exists ? (snap.data!.data() as Map<String, dynamic>)['nombre'] ?? 'Usuario' : 'Usuario';
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Bienvenido de nuevo 👋', style: GoogleFonts.spaceGrotesk(color: blanco.withOpacity(0.75), fontSize: 12)),
+                    const SizedBox(height: 2),
+                    Text.rich(TextSpan(children: [
+                      TextSpan(text: nombre, style: GoogleFonts.spaceGrotesk(color: blanco, fontSize: 19, fontWeight: FontWeight.w800)),
+                      TextSpan(
+                          text: '  ·  $_nombreEmpresa',
+                          style: GoogleFonts.spaceGrotesk(color: blanco.withOpacity(0.8), fontSize: 13, fontWeight: FontWeight.w600)),
+                    ])),
+                  ],
+                );
+              },
+            ),
+          ),
+          if (_tipoPlanUsuario != 'vouchers') ...[
+            GestureDetector(
+              onTap: () => _marcarTodosEnMora(allClients),
+              child: _glassCircle(Icons.warning_amber_rounded, const Color(0xFFFF8A80)),
+            ),
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: () => _marcarTodosActivos(allClients),
+              child: _glassCircle(Icons.check_circle_outline_rounded, const Color(0xFF69F0AE)),
+            ),
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: () => context.pushNamed(CrearUsuarioWidget.routeName),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                    color: blanco,
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 10, offset: const Offset(0, 4))]),
+                child: Row(mainAxisSize: MainAxisSize.min, children: const [
+                  Icon(Icons.person_add_rounded, color: Color(0xFF0F172A), size: 16),
+                  SizedBox(width: 6),
+                  Text('Nuevo', style: TextStyle(color: Color(0xFF0F172A), fontWeight: FontWeight.w700)),
+                ]),
+              ),
+            ),
+          ],
+        ]),
+        const SizedBox(height: 12),
+        Row(children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(color: blanco.withOpacity(0.14), borderRadius: BorderRadius.circular(20)),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.calendar_month_rounded, color: Colors.white70, size: 14),
+              const SizedBox(width: 6),
+              Text(_fechaHoy, style: GoogleFonts.spaceGrotesk(color: blanco, fontSize: 12, fontWeight: FontWeight.w600)),
+            ]),
+          ),
+        ]),
+      ]),
+    );
+  }
+
   Widget _buildStatsRow(int total, int activo, int mora, int inactivo) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-        _StatCard(label: 'Clientes', count: total.toString(), icon: Icons.people_alt_rounded, color: _AppColors.primary),
-        _StatCard(label: 'Activos', count: activo.toString(), icon: Icons.wifi_rounded, color: _AppColors.success),
-        _StatCard(label: 'En Mora', count: mora.toString(), icon: Icons.warning_amber_rounded, color: _AppColors.danger),
-        _StatCard(label: 'Inactivos', count: inactivo.toString(), icon: Icons.wifi_off_rounded, color: _AppColors.warning),
+        _StatCard(
+            label: 'Clientes',
+            count: total.toString(),
+            icon: Icons.people_alt_rounded,
+            color: _AppColors.primary,
+            selected: _filterEstado == null,
+            onTap: () => _alternarFiltroEstado(null)),
+        _StatCard(
+            label: 'Activos',
+            count: activo.toString(),
+            icon: Icons.wifi_rounded,
+            color: _AppColors.success,
+            selected: _filterEstado == 'activo',
+            onTap: () => _alternarFiltroEstado('activo')),
+        _StatCard(
+            label: 'En Mora',
+            count: mora.toString(),
+            icon: Icons.warning_amber_rounded,
+            color: _AppColors.danger,
+            selected: _filterEstado == 'mora',
+            onTap: () => _alternarFiltroEstado('mora')),
+        _StatCard(
+            label: 'Inactivos',
+            count: inactivo.toString(),
+            icon: Icons.wifi_off_rounded,
+            color: _AppColors.warning,
+            selected: _filterEstado == 'inactivo',
+            onTap: () => _alternarFiltroEstado('inactivo')),
       ]),
     );
   }

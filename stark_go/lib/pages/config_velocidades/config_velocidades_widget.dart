@@ -49,6 +49,37 @@ class _ConfigVelocidadesWidgetState extends State<ConfigVelocidadesWidget> {
   final _ctrlBajada = TextEditingController();
   final _formKey = GlobalKey<FormState>();
 
+  // ── Ráfagas (Burst) que se enviarán a las Simple Queues ──
+  // Valores por defecto sugeridos (los que ya tenés en el router):
+  //   Bajada: burst-limit 6M · umbral 1.5M
+  //   Subida: burst-limit 2M · umbral 768k
+  //   Tiempo de ráfaga: 8 s
+  static const String _kBlBajada = '6M';
+  static const String _kBlSubida = '2M';
+  static const String _kUbBajada = '1.5M';
+  static const String _kUbSubida = '768k';
+  static const String _kTiempo = '8';
+
+  bool _aplicarBurst = true;
+  final _ctrlBlBajada = TextEditingController(text: _kBlBajada); // burst-limit ↓
+  final _ctrlBlSubida = TextEditingController(text: _kBlSubida); // burst-limit ↑
+  final _ctrlUbBajada = TextEditingController(text: _kUbBajada); // burst-threshold ↓
+  final _ctrlUbSubida = TextEditingController(text: _kUbSubida); // burst-threshold ↑
+  final _ctrlTiempo = TextEditingController(text: _kTiempo); // burst-time (s)
+
+  /// Perfil de ráfaga armado con los textfields (usa los defaults si están vacíos).
+  /// Se guarda POR CADA VELOCIDAD (individual), no para todas las colas.
+  Map<String, String> get _perfilCampos => {
+        'burstBajada': _ctrlBlBajada.text.trim().toUpperCase().isEmpty ? _kBlBajada : _ctrlBlBajada.text.trim().toUpperCase(),
+        'burstSubida': _ctrlBlSubida.text.trim().toUpperCase().isEmpty ? _kBlSubida : _ctrlBlSubida.text.trim().toUpperCase(),
+        'umbralBajada': _ctrlUbBajada.text.trim().toUpperCase().isEmpty ? _kUbBajada : _ctrlUbBajada.text.trim().toUpperCase(),
+        'umbralSubida': _ctrlUbSubida.text.trim().toUpperCase().isEmpty ? _kUbSubida : _ctrlUbSubida.text.trim().toUpperCase(),
+        'tiempo': _ctrlTiempo.text.trim().isEmpty ? _kTiempo : _ctrlTiempo.text.trim(),
+      };
+
+  /// Ráfagas guardadas por velocidad: `perfiles: { "SUBIDA/BAJADA": {...} }`.
+  final Map<String, Map<String, String>> _perfiles = {};
+
   @override
   void initState() {
     super.initState();
@@ -59,6 +90,11 @@ class _ConfigVelocidadesWidgetState extends State<ConfigVelocidadesWidget> {
   void dispose() {
     _ctrlSubida.dispose();
     _ctrlBajada.dispose();
+    _ctrlBlBajada.dispose();
+    _ctrlBlSubida.dispose();
+    _ctrlUbBajada.dispose();
+    _ctrlUbSubida.dispose();
+    _ctrlTiempo.dispose();
     super.dispose();
   }
 
@@ -73,9 +109,20 @@ class _ConfigVelocidadesWidgetState extends State<ConfigVelocidadesWidget> {
     try {
       final doc = await FirebaseFirestore.instance.collection(_kCol).doc(_uid).get();
       if (doc.exists && mounted) {
-        final raw = (doc.data() as Map<String, dynamic>)['lista'];
+        final data = doc.data() as Map<String, dynamic>;
+        final raw = data['lista'];
+        final perfiles = data['perfiles'];
         setState(() {
           _velocidades = raw is List ? List<String>.from(raw.map((e) => e.toString())) : [];
+          _perfiles.clear();
+          if (perfiles is Map<String, dynamic>) {
+            perfiles.forEach((k, v) {
+              if (v is Map) {
+                _perfiles[k.toString()] =
+                    Map<String, String>.fromEntries(v.entries.map((e) => MapEntry(e.key.toString(), e.value.toString())));
+              }
+            });
+          }
         });
       }
     } catch (e) {
@@ -90,9 +137,19 @@ class _ConfigVelocidadesWidgetState extends State<ConfigVelocidadesWidget> {
     if (_uid.isEmpty || _guardando) return;
     setState(() => _guardando = true);
     try {
+      // Ráfaga individual por velocidad: las velocidades nuevas guardan la suya
+      // al agregarse; las viejas (sin perfil) se rellenan con los valores
+      // actuales de los campos la primera vez que se toca Guardar.
+      final perfilesGuardar = <String, Map<String, String>>{};
+      if (_aplicarBurst) {
+        for (final v in _velocidades) {
+          perfilesGuardar[v] = _perfiles[v] ?? Map.of(_perfilCampos);
+        }
+      }
       await FirebaseFirestore.instance.collection(_kCol).doc(_uid).set({
         'uid': _uid,
         'lista': _velocidades,
+        'perfiles': perfilesGuardar,
         'actualizadoEn': FieldValue.serverTimestamp(),
       });
       if (mounted) _snack('Velocidades guardadas', _C.success);
@@ -115,13 +172,23 @@ class _ConfigVelocidadesWidgetState extends State<ConfigVelocidadesWidget> {
     }
     setState(() {
       _velocidades.add(nueva);
+      if (_aplicarBurst) {
+        // Cada velocidad guarda SU propia ráfaga (individual por cliente).
+        _perfiles[nueva] = Map.of(_perfilCampos);
+      }
       _ctrlSubida.clear();
       _ctrlBajada.clear();
     });
     FocusScope.of(context).unfocus();
   }
 
-  void _eliminar(int i) => setState(() => _velocidades.removeAt(i));
+  void _eliminar(int i) {
+    final v = _velocidades[i];
+    setState(() {
+      _velocidades.removeAt(i);
+      _perfiles.remove(v);
+    });
+  }
 
   void _snack(String msg, Color color) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(msg, style: GoogleFonts.spaceGrotesk(color: Colors.white)),
@@ -301,6 +368,94 @@ class _ConfigVelocidadesWidgetState extends State<ConfigVelocidadesWidget> {
 
                   const SizedBox(height: 24),
 
+                  const SizedBox(height: 14),
+
+                  // ── Ráfagas (Burst) para las Simple Queues ──
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: _C.surface,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: _C.accent.withOpacity(0.35), width: 1.2),
+                    ),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Row(children: [
+                        Container(
+                          padding: const EdgeInsets.all(9),
+                          decoration: BoxDecoration(
+                            color: _C.accent.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Icon(Icons.bolt_rounded, color: Color(0xFF00C6AE), size: 20),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Text('Ráfaga de la velocidad (individual)',
+                                style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 13.5, fontWeight: FontWeight.w700)),
+                            Text('Se guarda con cada velocidad y se aplica solo a la cola de ese cliente',
+                                style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10)),
+                          ]),
+                        ),
+                        Switch(
+                          value: _aplicarBurst,
+                          onChanged: (v) => setState(() => _aplicarBurst = v),
+                          activeTrackColor: _C.accent,
+                        ),
+                      ]),
+                      const SizedBox(height: 6),
+                      if (_aplicarBurst) ...[
+                        Row(children: [
+                          Expanded(child: _burstField(_ctrlBlSubida, 'BURST SUBIDA ↑ (máx)', '2M', Icons.arrow_upward_rounded, _C.primary)),
+                          const SizedBox(width: 10),
+                          Expanded(
+                              child: _burstField(_ctrlBlBajada, 'BURST BAJADA ↓ (máx)', '6M', Icons.arrow_downward_rounded, _C.accent)),
+                        ]),
+                        const SizedBox(height: 10),
+                        Row(children: [
+                          Expanded(child: _burstField(_ctrlUbSubida, 'UMBRAL SUBIDA ↑', '768k', Icons.trending_up_rounded, _C.primary)),
+                          const SizedBox(width: 10),
+                          Expanded(child: _burstField(_ctrlUbBajada, 'UMBRAL BAJADA ↓', '1.5M', Icons.trending_down_rounded, _C.accent)),
+                        ]),
+                        const SizedBox(height: 10),
+                        _burstField(_ctrlTiempo, 'TIEMPO DE RÁFAGA (segundos)', '8', Icons.timer_outlined, _C.warning),
+                        const SizedBox(height: 10),
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: _C.accent.withOpacity(0.05),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: _C.accent.withOpacity(0.15)),
+                          ),
+                          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Icon(Icons.info_outline_rounded, color: _C.accent, size: 15),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Al agregar una velocidad se guarda con: burst-limit='
+                                '${_perfilCampos['burstBajada']}/${_perfilCampos['burstSubida']} · '
+                                'burst-threshold='
+                                '${_perfilCampos['umbralBajada']}/${_perfilCampos['umbralSubida']} · '
+                                'burst-time=${_perfilCampos['tiempo']}s. '
+                                'Así, si creás otro cliente con otra velocidad, cada uno '
+                                'recibe la ráfaga de SU velocidad.',
+                                style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10.5, height: 1.4),
+                              ),
+                            ),
+                          ]),
+                        ),
+                      ] else
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            'Ráfagas apagadas: las colas se crean solo con el '
+                            'max-limit (como hasta ahora).',
+                            style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11),
+                          ),
+                        ),
+                    ]),
+                  ),
+
                   // ── Lista configuradas ────────────────────
                   Row(children: [
                     Expanded(
@@ -419,10 +574,63 @@ class _ConfigVelocidadesWidgetState extends State<ConfigVelocidadesWidget> {
     ]);
   }
 
+  Widget _burstField(
+    TextEditingController controller,
+    String label,
+    String hint,
+    IconData icon,
+    Color color, {
+    bool esTiempo = false,
+  }) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Padding(
+        padding: const EdgeInsets.only(left: 2, bottom: 5),
+        child: Text(label,
+            style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10.5, fontWeight: FontWeight.w600, letterSpacing: 0.3)),
+      ),
+      TextFormField(
+        controller: controller,
+        textCapitalization: TextCapitalization.characters,
+        keyboardType: esTiempo ? TextInputType.number : TextInputType.text,
+        style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 14, fontWeight: FontWeight.w700),
+        validator: (v) {
+          final t = (v ?? '').trim();
+          if (t.isEmpty) return null; // vacío → usa el default
+          final ok = esTiempo ? RegExp(r'^\d{1,3}$').hasMatch(t) : RegExp(r'^\d+(\.\d+)?[kKmMgG]?$').hasMatch(t);
+          if (!ok) return esTiempo ? 'Ej: 8' : 'Ej: 6M / 768k';
+          return null;
+        },
+        decoration: InputDecoration(
+          hintText: hint,
+          isDense: true,
+          hintStyle: GoogleFonts.spaceGrotesk(color: _C.textSec.withOpacity(0.5), fontSize: 12),
+          prefixIcon: Container(
+            margin: const EdgeInsets.fromLTRB(10, 6, 6, 6),
+            width: 30,
+            height: 30,
+            decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
+            child: Icon(icon, color: color, size: 15),
+          ),
+          filled: true,
+          fillColor: _C.surfaceDim,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          enabledBorder:
+              OutlineInputBorder(borderSide: BorderSide(color: _C.cardBorder, width: 1.1), borderRadius: BorderRadius.circular(11)),
+          focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: color, width: 1.6), borderRadius: BorderRadius.circular(11)),
+          errorBorder: OutlineInputBorder(borderSide: BorderSide(color: _C.danger, width: 1.3), borderRadius: BorderRadius.circular(11)),
+          focusedErrorBorder:
+              OutlineInputBorder(borderSide: BorderSide(color: _C.danger, width: 1.6), borderRadius: BorderRadius.circular(11)),
+          errorStyle: GoogleFonts.spaceGrotesk(color: _C.danger, fontSize: 9.5),
+        ),
+      ),
+    ]);
+  }
+
   Widget _buildTile(String velocidad, int index) {
     final parts = velocidad.split('/');
     final subida = parts.isNotEmpty ? parts[0] : '-';
     final bajada = parts.length > 1 ? parts[1] : '-';
+    final pf = _perfiles[velocidad];
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -456,8 +664,30 @@ class _ConfigVelocidadesWidgetState extends State<ConfigVelocidadesWidget> {
               const SizedBox(width: 3),
               Text('$bajada bajada', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11)),
             ]),
+            const SizedBox(height: 3),
+            if (pf != null)
+              Text(
+                'Ráfaga ↑${pf['burstSubida']} ↓${pf['burstBajada']} · '
+                'Umbral ↑${pf['umbralSubida']} ↓${pf['umbralBajada']} · ${pf['tiempo']}s',
+                style: GoogleFonts.spaceGrotesk(color: _C.success.withOpacity(0.9), fontSize: 9.5, fontWeight: FontWeight.w600),
+              )
+            else
+              Text('Sin ráfaga · la cola se crea solo con max-limit',
+                  style: GoogleFonts.spaceGrotesk(color: _C.textSec.withOpacity(0.7), fontSize: 9.5)),
           ]),
         ),
+        GestureDetector(
+          onTap: () => _abrirEditarVelocidad(index),
+          child: Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: _C.primary.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(9),
+            ),
+            child: const Icon(Icons.edit_outlined, color: Color(0xFF1A73E8), size: 18),
+          ),
+        ),
+        const SizedBox(width: 6),
         GestureDetector(
           onTap: () => _confirmarEliminar(index, velocidad),
           child: Container(
@@ -471,6 +701,130 @@ class _ConfigVelocidadesWidgetState extends State<ConfigVelocidadesWidget> {
         ),
       ]),
     );
+  }
+
+  Future<void> _abrirEditarVelocidad(int index) async {
+    final actual = _velocidades[index];
+    final perfil = _perfiles[actual];
+    final p = actual.split('/');
+    final cSub = TextEditingController(text: p.isNotEmpty ? p[0].trim() : '');
+    final cBaj = TextEditingController(text: p.length > 1 ? p[1].trim() : '');
+    final cBlS = TextEditingController(text: perfil?['burstSubida'] ?? _kBlSubida);
+    final cBlB = TextEditingController(text: perfil?['burstBajada'] ?? _kBlBajada);
+    final cUbS = TextEditingController(text: perfil?['umbralSubida'] ?? _kUbSubida);
+    final cUbB = TextEditingController(text: perfil?['umbralBajada'] ?? _kUbBajada);
+    final cT = TextEditingController(text: perfil?['tiempo'] ?? _kTiempo);
+    final fk = GlobalKey<FormState>();
+    bool aplicar = perfil != null && _aplicarBurst;
+    void disposeC() {
+      cSub.dispose();
+      cBaj.dispose();
+      cBlS.dispose();
+      cBlB.dispose();
+      cUbS.dispose();
+      cUbB.dispose();
+      cT.dispose();
+    }
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSt) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Text('Editar velocidad', style: GoogleFonts.spaceGrotesk(fontSize: 16, fontWeight: FontWeight.w700)),
+          content: SingleChildScrollView(
+            child: Form(
+              key: fk,
+              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Expanded(
+                      child: _velocityField(
+                          controller: cSub, label: 'SUBIDA', hint: '2M', icon: Icons.arrow_upward_rounded, color: _C.primary)),
+                  const SizedBox(width: 10),
+                  Expanded(
+                      child: _velocityField(
+                          controller: cBaj, label: 'BAJADA', hint: '6M', icon: Icons.arrow_downward_rounded, color: _C.accent)),
+                ]),
+                const SizedBox(height: 12),
+                Row(children: [
+                  const Icon(Icons.bolt_rounded, color: Color(0xFF22C55E), size: 18),
+                  const SizedBox(width: 6),
+                  Expanded(
+                      child: Text('Ráfaga de esta velocidad',
+                          style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 12.5, fontWeight: FontWeight.w700))),
+                  Switch(
+                      value: _aplicarBurst && aplicar,
+                      onChanged: _aplicarBurst ? (v) => setSt(() => aplicar = v) : null,
+                      activeTrackColor: _C.accent),
+                ]),
+                if (!_aplicarBurst)
+                  Text('El switch general de ráfagas está apagado.', style: GoogleFonts.spaceGrotesk(color: _C.warning, fontSize: 10.5)),
+                if (aplicar) ...[
+                  const SizedBox(height: 8),
+                  Row(children: [
+                    Expanded(child: _burstField(cBlS, 'BURST SUBIDA ↑ (máx)', '2M', Icons.arrow_upward_rounded, _C.primary)),
+                    const SizedBox(width: 10),
+                    Expanded(child: _burstField(cBlB, 'BURST BAJADA ↓ (máx)', '6M', Icons.arrow_downward_rounded, _C.accent)),
+                  ]),
+                  const SizedBox(height: 8),
+                  Row(children: [
+                    Expanded(child: _burstField(cUbS, 'UMBRAL SUBIDA ↑', '768k', Icons.trending_up_rounded, _C.primary)),
+                    const SizedBox(width: 10),
+                    Expanded(child: _burstField(cUbB, 'UMBRAL BAJADA ↓', '1.5M', Icons.trending_down_rounded, _C.accent)),
+                  ]),
+                  const SizedBox(height: 8),
+                  _burstField(cT, 'TIEMPO DE RÁFAGA (segundos)', '8', Icons.timer_outlined, _C.warning, esTiempo: true),
+                ],
+              ]),
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text('Cancelar')),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: _C.primary, elevation: 0),
+              onPressed: () {
+                if (fk.currentState!.validate()) Navigator.pop(ctx, true);
+              },
+              child: const Text('Guardar'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (ok != true) {
+      disposeC();
+      return;
+    }
+
+    final nS = cSub.text.trim().toUpperCase();
+    final nB = cBaj.text.trim().toUpperCase();
+    final nueva = '$nS/$nB';
+    if (nS.isEmpty || nB.isEmpty) {
+      _snack('Completa SUBIDA y BAJADA', _C.warning);
+      disposeC();
+      return;
+    }
+    if (nueva != actual && _velocidades.contains(nueva)) {
+      _snack('Esa velocidad ya existe', _C.warning);
+      disposeC();
+      return;
+    }
+
+    setState(() {
+      _velocidades[index] = nueva;
+      _perfiles.remove(actual);
+      if (aplicar) {
+        _perfiles[nueva] = {
+          'burstSubida': cBlS.text.trim().toUpperCase().isEmpty ? _kBlSubida : cBlS.text.trim().toUpperCase(),
+          'burstBajada': cBlB.text.trim().toUpperCase().isEmpty ? _kBlBajada : cBlB.text.trim().toUpperCase(),
+          'umbralSubida': cUbS.text.trim().toUpperCase().isEmpty ? _kUbSubida : cUbS.text.trim().toUpperCase(),
+          'umbralBajada': cUbB.text.trim().toUpperCase().isEmpty ? _kUbBajada : cUbB.text.trim().toUpperCase(),
+          'tiempo': cT.text.trim().isEmpty ? _kTiempo : cT.text.trim(),
+        };
+      }
+    });
+    disposeC();
+    _snack('Velocidad actualizada', _C.success);
   }
 
   void _confirmarEliminar(int index, String velocidad) {

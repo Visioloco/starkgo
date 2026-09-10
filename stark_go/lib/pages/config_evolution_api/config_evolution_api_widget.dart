@@ -167,6 +167,7 @@ class _ConfigEvolutionApiWidgetState extends State<ConfigEvolutionApiWidget> wit
   String? _instanceName;
   String? _errorMsg;
   bool _conectado = false;
+  bool _mensajesAutomaticos = true;
 
   Map<String, dynamic>? _configExistente;
   String? _docId;
@@ -203,9 +204,20 @@ class _ConfigEvolutionApiWidgetState extends State<ConfigEvolutionApiWidget> wit
 
   // ── Cargar / verificar config existente ──────────────────
   Future<void> _cargarConfigExistente() async {
+    // Cargar preferencia de mensajes automáticos (config_empresa/<uid>).
+    try {
+      final cfgDoc = await FirebaseFirestore.instance.collection('config_empresa').doc(_uid).get();
+      if (cfgDoc.exists && cfgDoc.data()?['mensajesAutomaticos'] is bool) {
+        _mensajesAutomaticos = cfgDoc.data()!['mensajesAutomaticos'] as bool;
+      }
+    } catch (_) {}
+
     final snap = await FirebaseFirestore.instance.collection(_kFirebaseCollection).where('uid', isEqualTo: _uid).limit(1).get();
 
-    if (snap.docs.isEmpty) return;
+    if (snap.docs.isEmpty) {
+      if (mounted) setState(() {});
+      return;
+    }
 
     final doc = snap.docs.first;
     final data = doc.data();
@@ -431,6 +443,8 @@ class _ConfigEvolutionApiWidgetState extends State<ConfigEvolutionApiWidget> wit
                 _buildBanner(),
                 const SizedBox(height: 16),
                 _buildMainCard(),
+                const SizedBox(height: 16),
+                _buildMensajesAutomaticosCard(),
               ]),
             ),
           ),
@@ -581,6 +595,71 @@ class _ConfigEvolutionApiWidgetState extends State<ConfigEvolutionApiWidget> wit
         ),
       ]),
     );
+  }
+
+  Widget _buildMensajesAutomaticosCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _C.surface,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 16, offset: const Offset(0, 4))],
+        border: Border.all(color: _C.border, width: 1),
+      ),
+      child: Row(children: [
+        Container(
+          width: 44,
+          height: 44,
+          decoration: BoxDecoration(
+            color: (_mensajesAutomaticos ? _C.success : _C.textSec).withOpacity(0.1),
+            borderRadius: BorderRadius.circular(13),
+          ),
+          child: Icon(
+            _mensajesAutomaticos ? Icons.notifications_active_rounded : Icons.notifications_off_rounded,
+            color: _mensajesAutomaticos ? _C.success : _C.textSec,
+            size: 22,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Mensajes automáticos',
+                style: GoogleFonts.dmSans(color: _C.textPri, fontSize: 14, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 2),
+            Text(
+              _mensajesAutomaticos
+                  ? 'Activados: recordatorios, mora, cortes y cobros Starlink se envían solos.'
+                  : 'Desactivados: los mensajes se envían manualmente.',
+              style: GoogleFonts.dmSans(color: _C.textSec, fontSize: 10.5, height: 1.4),
+            ),
+          ]),
+        ),
+        Switch(
+          value: _mensajesAutomaticos,
+          onChanged: _cambiarMensajesAutomaticos,
+          activeTrackColor: _C.success,
+          thumbColor: const WidgetStatePropertyAll(Colors.white),
+        ),
+      ]),
+    );
+  }
+
+  Future<void> _cambiarMensajesAutomaticos(bool value) async {
+    setState(() => _mensajesAutomaticos = value);
+    try {
+      await FirebaseFirestore.instance.collection('config_empresa').doc(_uid).set(
+        {'uid': _uid, 'mensajesAutomaticos': value},
+        SetOptions(merge: true),
+      );
+      _snack(
+        value ? 'Mensajes automáticos activados' : 'Mensajes automáticos desactivados',
+        value ? _C.success : _C.warning,
+        value ? Icons.notifications_active_rounded : Icons.notifications_off_rounded,
+      );
+    } catch (e) {
+      setState(() => _mensajesAutomaticos = !value);
+      _snack('Error al guardar: $e', _C.danger, Icons.error_rounded);
+    }
   }
 
   Widget _buildContenidoEstado() {

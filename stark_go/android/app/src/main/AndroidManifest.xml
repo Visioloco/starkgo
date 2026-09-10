@@ -14,6 +14,11 @@
     <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <!-- Servicio en primer plano con la notificación persistente del túnel
+         WireGuard. Tipo specialUse (no hay un tipo FGS "vpn" en Android 14+).
+         Requiere FOREGROUND_SERVICE_SPECIAL_USE a partir de targetSdk 34. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
 <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
@@ -31,10 +36,11 @@
 
     <application
         android:label="StarkGo"
-        tools:replace="android:label"
+        tools:replace="android:label,android:extractNativeLibs"
         android:icon="@mipmap/launcher_icon"
         android:requestLegacyExternalStorage="true"
-        android:usesCleartextTraffic="true">
+        android:usesCleartextTraffic="true"
+        android:extractNativeLibs="false">
 
         <!-- Receptor para reiniciar alarmas al arrancar el dispositivo -->
         <receiver
@@ -85,6 +91,42 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2"/>
+
+        <!-- ──────────────────────────────────────────────────────────
+             Notificación de servicio en primer plano + Tile de Ajustes
+             Rápidos para el túnel WireGuard (ver vpn/ en Kotlin).
+             El propio VpnService del backend wireguard-android NO muestra
+             notificación; este servicio acompañante la publica y mantiene
+             el proceso en prioridad "foreground" mientras el túnel existe.
+             ────────────────────────────────────────────────────────── -->
+
+        <!-- Servicio en primer plano con la notificación persistente. -->
+        <service
+            android:name=".vpn.VpnForegroundService"
+            android:exported="false"
+            android:stopWithTask="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Servicio que mantiene viva la conexión VPN WireGuard (VpnService) y publica su notificación persistente de estado con boton Desconectar." />
+        </service>
+
+        <!-- Receptor de las acciones de la notificación ("Apagar VPN"). -->
+        <receiver
+            android:name=".vpn.VpnActionReceiver"
+            android:exported="false"/>
+
+        <!-- Tile de Ajustes Rápidos para encender/apagar la VPN. -->
+        <service
+            android:name=".vpn.VpnTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_vpn_tile"
+            android:label="@string/vpn_tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE"/>
+            </intent-filter>
+        </service>
 
     </application>
 </manifest>

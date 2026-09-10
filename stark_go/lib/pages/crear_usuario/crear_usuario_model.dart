@@ -37,10 +37,7 @@ class CrearUsuarioModel extends FlutterFlowModel<CrearUsuarioWidget> {
   TextEditingController? textController3;
   String? Function(BuildContext, String?)? textController3Validator;
   String? _textController3Validator(BuildContext context, String? val) {
-    if (val == null || val.isEmpty) {
-      return 'Teléfono is required';
-    }
-
+    // Cédula opcional: no es un dato indispensable
     return null;
   }
 
@@ -48,15 +45,23 @@ class CrearUsuarioModel extends FlutterFlowModel<CrearUsuarioWidget> {
   FocusNode? textFieldFocusNode4;
   TextEditingController? textController4;
   String? Function(BuildContext, String?)? textController4Validator;
+  String? _textController4Validator(BuildContext context, String? val) {
+    // El WhatsApp es el dato más importante del cliente
+    if (val == null || val.trim().isEmpty) {
+      return 'El WhatsApp es obligatorio';
+    }
+    if (val.trim().length < 7) {
+      return 'Ingresa un número de WhatsApp válido';
+    }
+
+    return null;
+  }
   // State field(s) for TextField widget.
   FocusNode? textFieldFocusNode5;
   TextEditingController? textController5;
   String? Function(BuildContext, String?)? textController5Validator;
   String? _textController5Validator(BuildContext context, String? val) {
-    if (val == null || val.isEmpty) {
-      return 'Nombre de la Finca is required';
-    }
-
+    // Finca opcional: no es un dato indispensable
     return null;
   }
 
@@ -65,10 +70,7 @@ class CrearUsuarioModel extends FlutterFlowModel<CrearUsuarioWidget> {
   TextEditingController? textController6;
   String? Function(BuildContext, String?)? textController6Validator;
   String? _textController6Validator(BuildContext context, String? val) {
-    if (val == null || val.isEmpty) {
-      return 'Vereda is required';
-    }
-
+    // Vereda opcional: no es un dato indispensable
     return null;
   }
 
@@ -86,6 +88,7 @@ class CrearUsuarioModel extends FlutterFlowModel<CrearUsuarioWidget> {
     textController1Validator = _textController1Validator;
     textController2Validator = _textController2Validator;
     textController3Validator = _textController3Validator;
+    textController4Validator = _textController4Validator;
     textController5Validator = _textController5Validator;
     textController6Validator = _textController6Validator;
   }

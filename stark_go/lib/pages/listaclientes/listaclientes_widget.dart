@@ -621,6 +621,16 @@ class _ListaclientesWidgetState extends State<ListaclientesWidget> {
       if (!mounted) return;
 
       if (response.statusCode == 200 || response.statusCode == 201) {
+        // Al enviar el recordatorio, el cliente pasa a rojo (mora).
+        // El pago (registrar pago) lo devuelve a verde (activo).
+        try {
+          await c.reference.update({
+            'status': 'mora',
+            'fechaPasoMora': FieldValue.serverTimestamp(),
+          });
+        } catch (e) {
+          debugPrint('[StarkGo] Error marcando cliente en mora: $e');
+        }
         _showSuccessDialog(c.nombre, numeroDestino);
       } else {
         String detalle = '';
