@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import 'package:stark_go/services/antenas_service.dart';
 import 'package:stark_go/services/vps_service.dart';
 
 // ══════════════════════════════════════════════════════════════
@@ -47,6 +48,15 @@ class _GuiaVpnPageState extends State<GuiaVpnPage> {
   /// IP del túnel del MikroTik (config_mikrotik.mikrotikTunelIp).
   String _mikrotikTunelIp = '';
 
+  /// Red local real del operador (config_mikrotik.subredLocal).
+  String _subredLocal = '';
+
+  /// Puerta de enlace real (config_mikrotik.ipLocal).
+  String _ipLocal = '';
+
+  /// true si el MikroTik usa NAT (netmap) para traducir la subred del túnel.
+  bool _usarNetmap = false;
+
   @override
   void initState() {
     super.initState();
@@ -79,6 +89,9 @@ class _GuiaVpnPageState extends State<GuiaVpnPage> {
         final d = cfg.data() as Map<String, dynamic>;
         setState(() {
           _mikrotikTunelIp = (d['mikrotikTunelIp'] ?? '').toString().trim();
+          _subredLocal = (d['subredLocal'] ?? '').toString().trim();
+          _ipLocal = (d['ipLocal'] ?? '').toString().trim();
+          _usarNetmap = (d['usarNetmap'] ?? false) == true;
         });
       }
     } catch (_) {}
@@ -177,18 +190,44 @@ class _GuiaVpnPageState extends State<GuiaVpnPage> {
                     _paso(
                         context,
                         4,
-                        'Ruta hacia tu subred de antenas (IP → Routes)',
-                        'Le dice al MikroTik hacia dónde mandar el tráfico de tus antenas por el túnel.\n'
-                            '1) Menú izquierdo → IP → Routes.\n'
-                            '2) Clic en (+) → New Route.\n'
-                            '3) Dst. Address: pegá tu SUBRED DE ANTENAS (está en Tus datos, ej: '
-                            '${_redAntenas.isEmpty ? '10.10.15.0/24' : _redAntenas}).\n'
-                            '4) Gateway: seleccioná wg1.\n'
-                            '5) Clic en OK.\n\n'
-                            '💡 Si tus antenas NO están en 10.10.x sino en tu red local '
-                            '(ej: 192.168.88.x), NO agregues esta ruta. En su lugar hacé NAT '
-                            '(IP → Firewall → NAT → +): Chain: srcnat · Out. Interface: tu bridge · Action: masquerade.',
-                        null),
+                        _usarNetmap
+                            ? 'Traducir tu red con netmap (IP → Firewall → NAT) ⭐'
+                            : 'Ruta hacia tu subred de antenas (IP → Routes) ⭐',
+                        _usarNetmap
+                            ? 'Estás en MODO NETMAP ✅ — tu red local '
+                                '(${_subredLocal.isEmpty ? 'ej. 192.168.1.0/24' : _subredLocal}) puede ser igual '
+                                'a la de otra empresa, así que NO se agrega ninguna ruta: se traduce la subred del túnel.\n'
+                                '1) En Winbox: New Terminal (ícono de consola, arriba a la derecha).\n'
+                                '2) Pegá el comando de abajo (es el tuyo, ya completado) y dale Enter.\n'
+                                '3) Andá a IP → Firewall → pestaña NAT y comprobá que la regla esté ahí (y arriba de todo).\n'
+                                '4) Probá con el botón "Probar la regla netmap" en Config. MikroTik.\n\n'
+                                '⚠️ Este comando se pega UNA sola vez. No lo repitas: si lo pegás dos veces '
+                                'vas a tener dos reglas iguales.\n\n'
+                                '👉 Traduce así: la antena real ${_ipLocal.isEmpty ? '192.168.1.20' : '${_ipLocal.split('.').take(3).join('.')}.20'} '
+                                'se abre por el túnel como '
+                                '${_redAntenas.isEmpty ? '10.10.15' : _redAntenas.split('/').first.split('.').take(3).join('.')}.20'
+                                ' — misma última octeta, todos los puertos (http, https, ssh).'
+                            : 'Le dice al MikroTik hacia dónde mandar el tráfico de tus antenas por el túnel.\n'
+                                '1) Menú izquierdo → IP → Routes.\n'
+                                '2) Clic en (+) → New Route.\n'
+                                '3) Dst. Address: pegá tu SUBRED DE ANTENAS (está en Tus datos, ej: '
+                                '${_redAntenas.isEmpty ? '10.10.15.0/24' : _redAntenas}).\n'
+                                '4) Gateway: seleccioná wg1.\n'
+                                '5) Clic en OK.\n\n'
+                                '💡 ¿Tus antenas están en tu propia red (ej: 192.168.x.x) y otra empresa usa '
+                                'la misma? Entonces NO uses esta ruta: en Config. MikroTik → "Tu red local" '
+                                'activá el switch "Uso NAT (netmap)" y volvé a esta guía: te va a dar el '
+                                'comando netmap exacto (así varias empresas pueden repetir 192.168.1.1).',
+                        _usarNetmap
+                            ? AntenasService.comandoNetmap(
+                                redTunel: _redAntenas.isEmpty
+                                    ? '10.10.15.0/24'
+                                    : _redAntenas,
+                                redLocal: _subredLocal.isEmpty
+                                    ? '192.168.1.0/24'
+                                    : _subredLocal,
+                              )
+                            : null),
                     _paso(
                         context,
                         5,
@@ -253,6 +292,18 @@ class _GuiaVpnPageState extends State<GuiaVpnPage> {
                             '/ip firewall filter add chain=input protocol=udp dst-port=1234 action=accept\n'
                             '/ip firewall filter add chain=input connection-state=established,related action=accept\n'
                             '/ip firewall filter add chain=input in-interface=wg1 action=accept'),
+                    _paso(
+                        context,
+                        9,
+                        'Probar que todo funcione (recomendado)',
+                        '1) En la app: VPN · Antenas → activá el switch del túnel (debe quedar Conectado).\n'
+                            '2) Tocá una antena: si abre la pantalla de airOS, ya está todo bien.\n'
+                            '3) ¿No abre? Tocá el botón azul de "probar" que está en la tarjeta de la antena: '
+                            'te dice si responde o no (y por http o https).\n'
+                            '4) ¿Usás netmap? En Config. MikroTik → "Tu red local" tocá '
+                            '"Probar la regla netmap": si sale ✅ la traducción está bien.\n\n'
+                            '❌ Si dice que no responde, mirá la tarjeta "Errores comunes" del final.',
+                        null),
                     const SizedBox(height: 6),
                     _banner(
                       icon: Icons.language_rounded,
@@ -289,13 +340,31 @@ class _GuiaVpnPageState extends State<GuiaVpnPage> {
                     ),
                     const SizedBox(height: 10),
                     _banner(
+                      icon: Icons.build_circle_outlined,
+                      color: _C.warning,
+                      title: 'Errores comunes (y cómo salir)',
+                      subtitle:
+                          '• "No responde" en una antena usando netmap → falta pegar la regla netmap, '
+                          'o el túnel está caído, o la antena no tiene esa IP real.\n'
+                          '• El peer del MikroTik no queda en running → revisá la Public Key del servidor '
+                          'y el Endpoint (paso 3).\n'
+                          '• Te olvidaste la IP en IP → Addresses (paso 2) → el túnel nunca levanta.\n'
+                          '• El VPS te dice «esa subred ya está en uso por otra empresa» → es que otra '
+                          'empresa declaró tu misma subred: activá el modo netmap (paso 4) y listo.\n'
+                          '• Tus antenas están en 192.168.x.x (tu red real) → activá el modo netmap; '
+                          'no agregues la ruta del paso 4.\n'
+                          '• Abre la antena de OTRO cliente → nunca puentees capa 2 entre sitios ni metas '
+                          'un 192.168.1.0/24 en las rutas del VPS.',
+                    ),
+                    _banner(
                       icon: Icons.check_circle_outline_rounded,
                       color: _C.accent,
                       title: 'Ya está ✅',
                       subtitle:
                           'Túnel conectado + MikroTik dado de alta + antenas en tu subred. '
-                          'Si algo no funciona, revisá los pasos 2 (IP Address) y 4 (Ruta): son los '
-                          'que más se olvidan. Cualquier duda, contactá al administrador.',
+                          'Antes de dar por cerrado el trabajo, tocá el botón de "probar" en una antena '
+                          '(paso 9): si dice ✅ podés abrir todas. Los pasos que más se olvidan son el 2 '
+                          '(IP en Addresses) y el 4 (ruta o regla netmap). Cualquier duda, contactá al administrador.',
                     ),
                     const SizedBox(height: 24),
                   ],
@@ -412,9 +481,23 @@ class _GuiaVpnPageState extends State<GuiaVpnPage> {
             color: _C.primary,
           ),
           _datoCopiable(
-            'Subred de antenas → va en IP → Routes (paso 4)',
+            'Subred de antenas que expone el túnel (va en IP → Routes, paso 4)',
             _redAntenas.isEmpty ? '10.10.15.0/24' : _redAntenas,
             color: _C.accent,
+          ),
+          _datoCopiable(
+            'Tu red local (donde están tus antenas y tu MikroTik)',
+            _subredLocal.isEmpty
+                ? 'Ponela en Config. MikroTik → "Tu red local"'
+                : _subredLocal,
+            color: _C.accent,
+          ),
+          _datoCopiable(
+            'Modo de entrada de tus antenas (paso 4)',
+            _usarNetmap
+                ? 'NETMAP: tu red se traduce a ${_redAntenas.isEmpty ? '10.10.15.0/24' : _redAntenas}'
+                : 'RUTA: ${_redAntenas.isEmpty ? '10.10.15.0/24' : _redAntenas} por wg1',
+            color: _C.primary,
           ),
           _datoCopiable(
             'Public key del servidor → va en el Peer (paso 3)',

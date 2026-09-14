@@ -12,8 +12,21 @@ import '/auth/firebase_auth/auth_util.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 import '/index.dart';
 import '../../plan_model.dart';
+import '../../services/precios_service.dart';
 
 import '../Pago/pago_webview_page.dart';
+
+/// Métodos de pago disponibles.
+enum MetodoPago { mercadoPago, rapid, paypal }
+
+/// Rapid (antes Rapyd): cobra con tarjeta / efectivo en el checkout
+/// hospedado. Las credenciales (rak_/rsk_) y el modo sandbox|live viven en
+/// el VPS, en el módulo `/rapid/*`.
+const bool _kRapidHabilitado = true;
+
+/// PayPal DESACTIVADO por ahora (se usará más adelante).
+/// Poné en `true` cuando quieras volver a mostrar el botón.
+const bool _kPayPalHabilitado = false;
 
 class _C {
   static const Color primary = Color(0xFF1A73E8);
@@ -45,10 +58,24 @@ class _ActivarMembresiaWidgetState extends State<ActivarMembresiaWidget> with Ti
   bool _isLoading = false;
   String _nombreUsuario = '';
 
+  /// Método de pago que se está procesando (para mostrar el spinner correcto).
+  MetodoPago? _metodoCargando;
+
   late AnimationController _pulseController;
   late AnimationController _shimmerController;
 
   static const String _vpsUrl = 'http://5.161.88.42:3000';
+
+  /// El botón de Rapid se muestra SOLO si el VPS informa que está en
+  /// PRODUCCIÓN (`config_pagos/rapid.produccion` = true en Firestore).
+  /// Si todavía no llegó el dato, se usa el valor compilado como respaldo.
+  bool get _rapidVisible => PreciosService.rapidProduccion ?? _kRapidHabilitado;
+
+  /// Reconstruye la pantalla cuando cambia el estado de Rapid en Firestore
+  /// (tiempo real: el botón aparece/desaparece sin reiniciar la app).
+  void _onPasarelas() {
+    if (mounted) setState(() {});
+  }
 
   @override
   void initState() {
@@ -62,6 +89,13 @@ class _ActivarMembresiaWidgetState extends State<ActivarMembresiaWidget> with Ti
       duration: const Duration(milliseconds: 2000),
     )..repeat();
     _cargarNombre();
+    // Tasa USD→COP del VPS: para mostrar el precio también en pesos.
+    PreciosService.cargar().then((_) {
+      if (mounted) setState(() {});
+    });
+    // Tiempo real: si cambiás `produccion` en Firestore, el botón cambia solo.
+    PreciosService.escucharPasarelas();
+    PreciosService.rapidProduccionNotifier.addListener(_onPasarelas);
     SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
       statusBarIconBrightness: Brightness.light,
@@ -70,6 +104,7 @@ class _ActivarMembresiaWidgetState extends State<ActivarMembresiaWidget> with Ti
 
   @override
   void dispose() {
+    PreciosService.rapidProduccionNotifier.removeListener(_onPasarelas);
     _pulseController.dispose();
     _shimmerController.dispose();
     super.dispose();
@@ -100,12 +135,15 @@ class _ActivarMembresiaWidgetState extends State<ActivarMembresiaWidget> with Ti
     return DateTime(hoy.year, hoy.month + (_planSel?.meses ?? 0), hoy.day);
   }
 
-  Future<void> _activar() async {
+  Future<void> _activar(MetodoPago metodo) async {
     if (_planSel == null) {
       _showError('Selecciona un plan para continuar');
       return;
     }
-    setState(() => _isLoading = true);
+    setState(() {
+      _isLoading = true;
+      _metodoCargando = metodo;
+    });
     try {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) {
@@ -115,9 +153,17 @@ class _ActivarMembresiaWidgetState extends State<ActivarMembresiaWidget> with Ti
 
       final token = await user.getIdToken(true);
 
+      // Endpoint según el botón de pago pulsado. Los tres responden
+      // { initPoint } con la URL del checkout hospedado.
+      final endpoint = switch (metodo) {
+        MetodoPago.rapid => '/rapid/crear-orden',
+        MetodoPago.paypal => '/paypal/crear-orden',
+        MetodoPago.mercadoPago => '/mp/crear-preferencia',
+      };
+
       final response = await http
           .post(
-            Uri.parse('$_vpsUrl/mp/crear-preferencia'),
+            Uri.parse('$_vpsUrl$endpoint'),
             headers: {
               'Content-Type': 'application/json',
               'Authorization': 'Bearer $token',
@@ -137,7 +183,12 @@ class _ActivarMembresiaWidgetState extends State<ActivarMembresiaWidget> with Ti
       }
 
       final data = jsonDecode(response.body) as Map<String, dynamic>;
-      final url = data['initPoint'] as String;
+      // Ambos endpoints devuelven la URL de pago en 'initPoint'.
+      final url = (data['initPoint'] ?? data['approveUrl']) as String?;
+      if (url == null || url.isEmpty) {
+        _showError('No se pudo obtener el enlace de pago');
+        return;
+      }
 
       if (mounted) {
         Navigator.of(context).push(
@@ -151,7 +202,12 @@ class _ActivarMembresiaWidgetState extends State<ActivarMembresiaWidget> with Ti
     } catch (e) {
       _showError('Error al iniciar el pago: $e');
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _metodoCargando = null;
+        });
+      }
     }
   }
 
@@ -240,7 +296,7 @@ class _ActivarMembresiaWidgetState extends State<ActivarMembresiaWidget> with Ti
                     _buildResumen().animate().fadeIn(duration: 300.ms).slideY(begin: 0.04, end: 0, duration: 300.ms),
                   ],
                   const SizedBox(height: 20),
-                  _buildBoton()
+                  _buildBotones()
                       .animate()
                       .fadeIn(duration: 400.ms, delay: 240.ms)
                       .slideY(begin: 0.06, end: 0, duration: 400.ms, delay: 240.ms),
@@ -658,12 +714,25 @@ class _ActivarMembresiaWidgetState extends State<ActivarMembresiaWidget> with Ti
                         )),
                     const SizedBox(width: 8),
                   ],
-                  Text('\$${_planSel!.precio} USD',
-                      style: GoogleFonts.dmSans(
-                        color: Colors.white,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w800,
-                      )),
+                  Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                    Text('\$${_planSel!.precio} USD',
+                        style: GoogleFonts.dmSans(
+                          color: Colors.white,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w800,
+                        )),
+                    Text('= ${_planSel!.precioCopTexto}',
+                        style: GoogleFonts.dmSans(
+                          color: Colors.white54,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w600,
+                        )),
+                    Text('tasa del día: ${PreciosService.tasaTexto} COP/USD',
+                        style: GoogleFonts.dmSans(
+                          color: Colors.white30,
+                          fontSize: 9.5,
+                        )),
+                  ]),
                 ]),
               ]),
             ),
@@ -694,61 +763,84 @@ class _ActivarMembresiaWidgetState extends State<ActivarMembresiaWidget> with Ti
     );
   }
 
-  // ── Botón principal ──
-  Widget _buildBoton() {
+  // ── Botones de pago (Mercado Pago · Rapid; PayPal opcional) ──
+  Widget _buildBotones() {
+    return Column(children: [
+      _buildBotonPago(
+        MetodoPago.mercadoPago,
+        'Pagar con Mercado Pago',
+        Icons.account_balance_wallet_rounded,
+        const [Color(0xFF00B1EA), Color(0xFF1A73E8)],
+        const Color(0xFF00B1EA),
+      ),
+      if (_rapidVisible) ...[
+        const SizedBox(height: 12),
+        _buildBotonPago(
+          MetodoPago.rapid,
+          'Pagar con Rapid (PayU)',
+          Icons.credit_card_rounded,
+          const [Color(0xFF00C6AE), Color(0xFF0F766E)],
+          const Color(0xFF00C6AE),
+        ),
+      ],
+      // PayPal desactivado por ahora (_kPayPalHabilitado = false).
+      if (_kPayPalHabilitado) ...[
+        const SizedBox(height: 12),
+        _buildBotonPago(
+          MetodoPago.paypal,
+          'Pagar con PayPal',
+          Icons.payments_rounded,
+          const [Color(0xFF0070BA), Color(0xFF003087)],
+          const Color(0xFF0070BA),
+        ),
+      ],
+    ]);
+  }
+
+  Widget _buildBotonPago(
+    MetodoPago metodo,
+    String label,
+    IconData icon,
+    List<Color> gradiente,
+    Color shadow,
+  ) {
+    final cargando = _metodoCargando == metodo;
+    final activo = _planSel != null && !_isLoading;
     return SizedBox(
       width: double.infinity,
-      height: 58,
+      height: 56,
       child: DecoratedBox(
         decoration: BoxDecoration(
-          gradient: _isLoading
-              ? null
-              : LinearGradient(
-                  colors: _planSel != null ? [_planSel!.color, _C.primary] : [_C.purple, _C.primary],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-          color: _isLoading ? Colors.white.withOpacity(0.08) : null,
+          gradient: activo ? LinearGradient(colors: gradiente, begin: Alignment.topLeft, end: Alignment.bottomRight) : null,
+          color: activo ? null : Colors.white.withOpacity(0.08),
           borderRadius: BorderRadius.circular(16),
-          boxShadow: _isLoading || _planSel == null
-              ? []
-              : [
-                  BoxShadow(
-                    color: (_planSel?.color ?? _C.primary).withOpacity(0.45),
-                    blurRadius: 20,
-                    offset: const Offset(0, 8),
-                  ),
-                ],
+          boxShadow: activo ? [BoxShadow(color: shadow.withOpacity(0.4), blurRadius: 18, offset: const Offset(0, 8))] : [],
         ),
         child: Material(
           color: Colors.transparent,
           child: InkWell(
-            onTap: _isLoading ? null : _activar,
+            onTap: activo ? () => _activar(metodo) : null,
             borderRadius: BorderRadius.circular(16),
             splashColor: Colors.white.withOpacity(0.1),
             child: Center(
-              child: _isLoading
-                  ? Row(mainAxisSize: MainAxisSize.min, children: [
-                      SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation(Colors.white.withOpacity(0.5)),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Text('Procesando pago...',
-                          style: GoogleFonts.dmSans(color: Colors.white60, fontSize: 15, fontWeight: FontWeight.w600)),
-                    ])
-                  : Row(mainAxisSize: MainAxisSize.min, children: [
-                      const Icon(Icons.bolt_rounded, color: Colors.white, size: 20),
-                      const SizedBox(width: 10),
-                      Text(
-                        _planSel != null ? 'Activar por \$${_planSel!.precio} USD' : 'Selecciona un plan',
-                        style: GoogleFonts.dmSans(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700),
-                      ),
-                    ]),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                if (cargando)
+                  SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation(Colors.white.withOpacity(0.6)),
+                    ),
+                  )
+                else
+                  Icon(icon, color: Colors.white, size: 20),
+                const SizedBox(width: 10),
+                Text(
+                  _planSel != null ? '$label · \$${_planSel!.precio} USD' : 'Selecciona un plan',
+                  style: GoogleFonts.dmSans(color: Colors.white, fontSize: 14.5, fontWeight: FontWeight.w700),
+                ),
+              ]),
             ),
           ),
         ),
@@ -862,6 +954,12 @@ class _PlanCard extends StatelessWidget {
                         color: selected ? plan.color : Colors.white38,
                         fontSize: 13,
                         fontWeight: FontWeight.w700,
+                      )),
+                  Text('= ${plan.precioCopTexto}',
+                      style: GoogleFonts.dmSans(
+                        color: Colors.white30,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
                       )),
                   if (plan.ahorro > 0)
                     Text('Ahorras \$${plan.ahorro}',

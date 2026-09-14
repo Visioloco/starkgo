@@ -598,11 +598,13 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
             icon: Icons.account_tree_rounded,
             color: _C.accent,
             title: _redAntenas != null
-                ? 'Subred de antenas asignada: $_redAntenas'
+                ? 'Subred de gestión/antenas: $_redAntenas'
                 : 'Subred de antenas: se asigna al registrar en el VPS',
             subtitle:
-                'Cada empresa/técnico tiene su propia subred 10.10.x.0/24 '
-                '(asignada por el VPS, no editable) para que las antenas nunca choquen.',
+                'Si declarás tu red local en Config. MikroTik (ej. 192.168.10.0/24), '
+                'se usa ESA subred: así las antenas y tu MikroTik coinciden con tu red '
+                'real. Si no, el VPS te asigna una 10.10.x.0/24 libre — nunca choca con '
+                'otra empresa.',
           ),
           const SizedBox(height: 10),
           _campo(

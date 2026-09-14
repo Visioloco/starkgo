@@ -204,6 +204,85 @@ class NotificacionesService {
     debugPrint('🔔 Notificación inmediata mostrada → id=$id | $titulo');
   }
 
+  // ══════════════════════════════════════════════════════════
+  //  NOTIFICACIONES DE PAGO (éxito / fallo / en revisión)
+  //  ids fijos: si llega otra igual, se reemplaza (no se acumulan)
+  // ══════════════════════════════════════════════════════════
+  static const int _idPagoExitoso = 4001;
+  static const int _idPagoFallido = 4002;
+  static const int _idPagoPendiente = 4003;
+
+  /// Avisa que el pago se acreditó y la membresía quedó activa.
+  Future<void> notificarPagoExitoso({
+    required String titulo,
+    required String detalle,
+  }) =>
+      _notificarPago(
+        id: _idPagoExitoso,
+        titulo: titulo,
+        cuerpo: detalle,
+        color: const Color(0xFF22C55E),
+        payload: 'pago_exitoso',
+      );
+
+  /// Avisa que el pago fue rechazado.
+  Future<void> notificarPagoFallido({
+    required String titulo,
+    required String detalle,
+  }) =>
+      _notificarPago(
+        id: _idPagoFallido,
+        titulo: titulo,
+        cuerpo: detalle,
+        color: const Color(0xFFE53935),
+        payload: 'pago_fallido',
+      );
+
+  /// Avisa que el pago quedó en revisión (banco / pasarela).
+  Future<void> notificarPagoPendiente({
+    required String titulo,
+    required String detalle,
+  }) =>
+      _notificarPago(
+        id: _idPagoPendiente,
+        titulo: titulo,
+        cuerpo: detalle,
+        color: const Color(0xFFF59E0B),
+        payload: 'pago_pendiente',
+      );
+
+  /// Base común de las notificaciones de pago.
+  Future<void> _notificarPago({
+    required int id,
+    required String titulo,
+    required String cuerpo,
+    required Color color,
+    required String payload,
+  }) async {
+    await init();
+    final androidDetails = AndroidNotificationDetails(
+      'pagos',
+      'Pagos y membresías',
+      channelDescription: 'Confirmación y avisos de los pagos de tu membresía',
+      importance: Importance.max,
+      priority: Priority.high,
+      icon: '@mipmap/launcher_icon',
+      color: color,
+      playSound: true,
+      category: AndroidNotificationCategory.status,
+      styleInformation: BigTextStyleInformation(cuerpo),
+    );
+    const iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+    );
+    final details =
+        NotificationDetails(android: androidDetails, iOS: iosDetails);
+    await _plugin.show(id, titulo, cuerpo, details, payload: payload);
+    debugPrint('🔔 Notificación de pago → id=$id | $titulo');
+  }
+
   /// Notificación persistente (no se puede deslizar) mientras el túnel
   /// WireGuard está activo. Incluye acción "Apagar túnel".
   Future<void> mostrarTunelActivo() async {

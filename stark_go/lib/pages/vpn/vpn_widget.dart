@@ -66,6 +66,24 @@ class _VpnWidgetState extends State<VpnWidget> {
   /// Subred de antenas del usuario (asignada por el VPS, 10.10.x.0/24).
   String _redAntenas = '10.10.15.0/24';
 
+  /// Modo **netmap**: el MikroTik traduce la subred del túnel a tu red local.
+  /// Permite que varias empresas compartan la misma red (ej. 192.168.1.x).
+  bool _usarNetmap = false;
+
+  /// IP que se está probando ahora mismo (para el spinner del botón de prueba).
+  String? _probandoIp;
+
+  /// Tu red local real (ej. 192.168.1.0/24). Puede repetirse entre empresas.
+  String _subredLocal = '';
+
+  /// Subred donde viven las IPs **reales** de las antenas:
+  ///  · netmap ON  → tu red local (ej. 192.168.1.0/24)
+  ///  · netmap OFF → la subred del túnel (10.10.15.0/24 o 192.168.10.0/24)
+  String get _redReal =>
+      (_usarNetmap && AntenasService.cidrValido(_subredLocal))
+          ? _subredLocal
+          : _redAntenas;
+
   /// IP del MikroTik para abrir su panel web (desde config_mikrotik).
   String _mikrotikIp = '';
   String _mikrotikUser = '';
@@ -169,6 +187,8 @@ class _VpnWidgetState extends State<VpnWidget> {
           _mikrotikIp = (d['mikrotikIp'] ?? '').toString().trim();
           _mikrotikUser = (d['mikrotikUser'] ?? '').toString().trim();
           _mikrotikPass = (d['mikrotikPass'] ?? '').toString().trim();
+          _usarNetmap = (d['usarNetmap'] ?? false) == true;
+          _subredLocal = (d['subredLocal'] ?? '').toString().trim();
         });
       }
     } catch (_) {
@@ -668,7 +688,11 @@ class _VpnWidgetState extends State<VpnWidget> {
 
   // ── Acceso al panel del MikroTik (WebFig) ─────────────────
   Widget _buildMikrotik() {
-    final ip = _mikrotikIp.trim();
+    // Con netmap, el panel del MikroTik se abre por su IP virtual del túnel
+    // (ej. 192.168.1.1 → 10.10.15.1). Es idempotente si ya es virtual.
+    final ip = _usarNetmap
+        ? AntenasService.ipVirtual(_mikrotikIp.trim(), _redAntenas)
+        : _mikrotikIp.trim();
     final configurado = ip.isNotEmpty;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -859,7 +883,7 @@ class _VpnWidgetState extends State<VpnWidget> {
         builder: (ctx) => StatefulBuilder(
           builder: (ctx, setDialogState) {
             Future<void> sugerirIp() async {
-              final ip = await AntenasService.siguienteIpLibre(uid: uid, cidr: _redAntenas);
+              final ip = await AntenasService.siguienteIpLibre(uid: uid, cidr: _redReal);
               setDialogState(() {});
               if (ip != null) {
                 ctrlIp.text = ip;
@@ -872,7 +896,7 @@ class _VpnWidgetState extends State<VpnWidget> {
                 }
               } else if (ctx.mounted) {
                 ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
-                  content: Text('No hay IPs libres en $_redAntenas'),
+                  content: Text('No hay IPs libres en $_redReal'),
                   behavior: SnackBarBehavior.floating,
                 ));
               }
@@ -902,9 +926,13 @@ class _VpnWidgetState extends State<VpnWidget> {
                         child: TextField(
                           controller: ctrlIp,
                           keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(
-                            labelText: 'IP (en la subred de antenas)',
-                            hintText: 'Ej: 10.10.15.20',
+                          decoration: InputDecoration(
+                            labelText: _usarNetmap
+                                ? 'IP real (en tu red local)'
+                                : 'IP (en la subred de antenas)',
+                            hintText: _usarNetmap
+                                ? 'Ej: 192.168.1.20'
+                                : 'Ej: 10.10.15.20',
                           ),
                         ),
                       ),
@@ -943,7 +971,10 @@ class _VpnWidgetState extends State<VpnWidget> {
                       decoration: const InputDecoration(labelText: 'Clave airOS (opcional)'),
                     ),
                     const SizedBox(height: 6),
-                    Text('El sectorial debe estar en el mismo segmento $_redAntenas.',
+                    Text(
+                        _usarNetmap
+                            ? 'Poné la IP REAL del equipo en tu red local ($_redReal). La app lo abre por el túnel con la IP virtual equivalente (misma última octeta).'
+                            : 'El sectorial debe estar en el mismo segmento $_redAntenas.',
                         style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10)),
                   ],
                 ),
@@ -1134,8 +1165,40 @@ class _VpnWidgetState extends State<VpnWidget> {
     );
   }
 
+  /// Prueba si la antena responde por el túnel (http/https) y explica el fallo.
+  Future<void> _probarAntena(AntenaModel antena, String ipAbrir) async {
+    if (_status != VpnStatus.connected) {
+      _snack('Activá el túnel para poder probar la antena', _C.warning,
+          Icons.warning_rounded);
+      return;
+    }
+    if (_probandoIp != null) return;
+    setState(() => _probandoIp = ipAbrir);
+    final r = await AntenasService.probarIp(ipAbrir);
+    if (!mounted) return;
+    setState(() => _probandoIp = null);
+    if (r.ok) {
+      _snack('✅ ${antena.nombre} respondió en $ipAbrir (${r.detalle})',
+          _C.success, Icons.check_circle_rounded);
+      return;
+    }
+    _snack(
+      _usarNetmap
+          ? '❌ ${antena.nombre} no respondió en $ipAbrir.\n'
+              'Revisá: (1) la regla netmap en el MikroTik, (2) que la antena real '
+              '(${antena.ip}) conteste desde tu red, (3) que el túnel siga conectado.'
+          : '❌ ${antena.nombre} no respondió en $ipAbrir.\n'
+              'Revisá que la antena esté encendida con esa IP y que el túnel siga conectado.',
+      _C.danger,
+      Icons.error_rounded,
+    );
+  }
+
   Widget _buildAntenaTile(AntenaModel antena) {
-    final abierta = antena.esAccesible && antena.ipValida(_redAntenas);
+    final abierta = antena.esAccesible &&
+        antena.ipValidaVpn(redTunel: _redAntenas, netmap: _usarNetmap);
+    // IP con la que se abre el equipo (virtual si el MikroTik usa netmap).
+    final ipAbrir = antena.ipParaVpn(redTunel: _redAntenas, netmap: _usarNetmap);
     final estadoColor = antena.esAccesible ? _C.success : _C.danger;
     final esSectorial = antena.esSectorial;
 
@@ -1173,7 +1236,7 @@ class _VpnWidgetState extends State<VpnWidget> {
               ? () {
                   Navigator.of(context).push(
                     MaterialPageRoute(
-                      builder: (_) => AntenaWebViewPage(antena: antena),
+                      builder: (_) => AntenaWebViewPage(antena: antena, ipAbrir: ipAbrir),
                     ),
                   );
                 }
@@ -1233,12 +1296,14 @@ class _VpnWidgetState extends State<VpnWidget> {
                               color: _C.textSec.withOpacity(0.6), size: 12),
                           const SizedBox(width: 4),
                           Flexible(
-                            child: Text(antena.ip,
+                            child: Text(
+                                _usarNetmap ? '${antena.ip} → $ipAbrir' : antena.ip,
                                 overflow: TextOverflow.ellipsis,
                                 style: GoogleFonts.spaceGrotesk(
                                     color: _C.textSec, fontSize: 11.5)),
                           ),
-                          if (!antena.ipValida(_redAntenas)) ...[
+                          if (!antena.ipValidaVpn(
+                              redTunel: _redAntenas, netmap: _usarNetmap)) ...[
                             const SizedBox(width: 6),
                             Container(
                               padding: const EdgeInsets.symmetric(
@@ -1250,6 +1315,31 @@ class _VpnWidgetState extends State<VpnWidget> {
                               child: Text('fuera de rango',
                                   style: GoogleFonts.spaceGrotesk(
                                       color: _C.warning, fontSize: 9)),
+                            ),
+                          ],
+                          // ── Probar conexión con esta antena (por el túnel) ──
+                          if (abierta) ...[
+                            const SizedBox(width: 6),
+                            InkWell(
+                              onTap: _probandoIp == null
+                                  ? () => _probarAntena(antena, ipAbrir)
+                                  : null,
+                              borderRadius: BorderRadius.circular(6),
+                              child: Container(
+                                padding: const EdgeInsets.all(4),
+                                decoration: BoxDecoration(
+                                  color: _C.primary.withOpacity(0.08),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: _probandoIp == ipAbrir
+                                    ? const SizedBox(
+                                        width: 12,
+                                        height: 12,
+                                        child: CircularProgressIndicator(
+                                            strokeWidth: 1.6))
+                                    : const Icon(Icons.network_check_rounded,
+                                        size: 13, color: _C.primary),
+                              ),
                             ),
                           ],
                         ],

@@ -132,14 +132,22 @@ class MikrotikLocalApi {
   Future<void> crearFicha({
     required String codigo,
     required String perfil,
+    String? limitUptime,
   }) async {
+    final atributos = <String>[
+      '=name=$codigo',
+      '=password=$codigo',
+      '=profile=$perfil',
+    ];
+    // 'limit-uptime' = tiempo TOTAL acumulado permitido para la ficha.
+    // Sin esto la ficha NUNCA se acaba (el 'session-timeout' del perfil solo
+    // limita cada sesión y se reinicia al volver a entrar).
+    if (limitUptime != null && limitUptime.isNotEmpty && limitUptime != '0s' && limitUptime != '0') {
+      atributos.add('=limit-uptime=$limitUptime');
+    }
     await _ejecutar(
       '/ip/hotspot/user/add',
-      atributos: [
-        '=name=$codigo',
-        '=password=$codigo',
-        '=profile=$perfil',
-      ],
+      atributos: atributos,
     );
   }
 
@@ -147,6 +155,17 @@ class MikrotikLocalApi {
     await _ejecutar(
       '/ip/hotspot/user/remove',
       atributos: ['=.id=$id'],
+    );
+  }
+
+  /// Aplica/actualiza el 'limit-uptime' (tiempo TOTAL) de una ficha existente.
+  Future<void> aplicarLimitUptime({
+    required String id,
+    required String limitUptime,
+  }) async {
+    await _ejecutar(
+      '/ip/hotspot/user/set',
+      atributos: ['=.id=$id', '=limit-uptime=$limitUptime'],
     );
   }
 

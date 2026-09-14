@@ -9,7 +9,20 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import '../../plan_model.dart';
+import '../../services/precios_service.dart';
 import '../Pago/pago_webview_page.dart';
+
+/// Métodos de pago disponibles para renovar la membresía.
+enum MetodoPago { mercadoPago, rapid, paypal }
+
+/// Rapid (antes Rapyd): cobra con tarjeta / efectivo en el checkout
+/// hospedado. Las credenciales (rak_/rsk_) y el modo sandbox|live viven en
+/// el VPS, en el módulo `/rapid/*`.
+const bool _kRapidHabilitado = true;
+
+/// PayPal DESACTIVADO por ahora (se usará más adelante).
+/// Poné en `true` cuando quieras volver a mostrar el botón.
+const bool _kPayPalHabilitado = false;
 
 class _C {
   static const Color primary = Color(0xFF1A73E8);
@@ -41,6 +54,9 @@ class RenovarMembresiaWidget extends StatefulWidget {
 class _RenovarMembresiaWidgetState extends State<RenovarMembresiaWidget> with TickerProviderStateMixin {
   Plan? _planSel;
   bool _isLoading = false;
+
+  /// Método de pago que se está procesando (para mostrar el spinner correcto).
+  MetodoPago? _metodoCargando;
   DateTime? _fechaActualVencimiento;
   String _nombreUsuario = '';
   late AnimationController _pulseController;
@@ -48,6 +64,17 @@ class _RenovarMembresiaWidgetState extends State<RenovarMembresiaWidget> with Ti
 
   // ── URL del VPS ──
   static const String _vpsUrl = 'http://5.161.88.42:3000';
+
+  /// El botón de Rapid se muestra SOLO si el VPS informa que está en
+  /// PRODUCCIÓN (`config_pagos/rapid.produccion` = true en Firestore).
+  /// Si todavía no llegó el dato, se usa el valor compilado como respaldo.
+  bool get _rapidVisible => PreciosService.rapidProduccion ?? _kRapidHabilitado;
+
+  /// Reconstruye la pantalla cuando cambia el estado de Rapid en Firestore
+  /// (tiempo real: el botón aparece/desaparece sin reiniciar la app).
+  void _onPasarelas() {
+    if (mounted) setState(() {});
+  }
 
   @override
   void initState() {
@@ -61,6 +88,13 @@ class _RenovarMembresiaWidgetState extends State<RenovarMembresiaWidget> with Ti
       duration: const Duration(milliseconds: 2000),
     )..repeat();
     _cargarDatosUsuario();
+    // Tasa USD→COP del VPS: para mostrar el precio también en pesos.
+    PreciosService.cargar().then((_) {
+      if (mounted) setState(() {});
+    });
+    // Tiempo real: si cambiás `produccion` en Firestore, el botón cambia solo.
+    PreciosService.escucharPasarelas();
+    PreciosService.rapidProduccionNotifier.addListener(_onPasarelas);
     SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
       statusBarIconBrightness: Brightness.light,
@@ -69,6 +103,7 @@ class _RenovarMembresiaWidgetState extends State<RenovarMembresiaWidget> with Ti
 
   @override
   void dispose() {
+    PreciosService.rapidProduccionNotifier.removeListener(_onPasarelas);
     _pulseController.dispose();
     _shimmerController.dispose();
     super.dispose();
@@ -104,16 +139,43 @@ class _RenovarMembresiaWidgetState extends State<RenovarMembresiaWidget> with Ti
     return DateTime(base.year, base.month + (_planSel?.meses ?? 0), base.day);
   }
 
+  // ══════════════════════════════════════════════════════════
+  //  ESTADO REAL DE LA MEMBRESÍA
+  //  (antes esta pantalla mostraba "Vencida / Inactivo" fijo,
+  //   aunque la membresía estuviera vigente)
+  // ══════════════════════════════════════════════════════════
+
+  /// true si la membresía está VIGENTE (vence en el futuro).
+  bool get _membresiaActiva => _fechaActualVencimiento != null && _fechaActualVencimiento!.isAfter(DateTime.now());
+
+  /// Color del estado: verde si está activa, rojo si venció.
+  Color get _estadoColor => _membresiaActiva ? _C.success : _C.danger;
+
+  /// Días que le quedan (0 si ya venció o no hay fecha).
+  int get _diasRestantes {
+    if (!_membresiaActiva) return 0;
+    return _fechaActualVencimiento!.difference(DateTime.now()).inDays;
+  }
+
+  /// Días transcurridos desde el vencimiento (0 si está activa).
+  int get _diasVencida {
+    if (_membresiaActiva || _fechaActualVencimiento == null) return 0;
+    return DateTime.now().difference(_fechaActualVencimiento!).inDays;
+  }
+
   // ══════════════════════════════════════════
   //  _renovar — llama al VPS en lugar de
   //  Firebase Functions
   // ══════════════════════════════════════════
-  Future<void> _renovar() async {
+  Future<void> _renovar(MetodoPago metodo) async {
     if (_planSel == null) {
       _showError('Selecciona un plan para continuar');
       return;
     }
-    setState(() => _isLoading = true);
+    setState(() {
+      _isLoading = true;
+      _metodoCargando = metodo;
+    });
     try {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) {
@@ -124,9 +186,17 @@ class _RenovarMembresiaWidgetState extends State<RenovarMembresiaWidget> with Ti
       // Obtener token Firebase para autenticar con el VPS
       final token = await user.getIdToken(true);
 
+      // Endpoint según el botón de pago pulsado. Los tres responden
+      // { initPoint } con la URL del checkout hospedado.
+      final endpoint = switch (metodo) {
+        MetodoPago.rapid => '/rapid/crear-orden',
+        MetodoPago.paypal => '/paypal/crear-orden',
+        MetodoPago.mercadoPago => '/mp/crear-preferencia',
+      };
+
       final response = await http
           .post(
-            Uri.parse('$_vpsUrl/mp/crear-preferencia'),
+            Uri.parse('$_vpsUrl$endpoint'),
             headers: {
               'Content-Type': 'application/json',
               'Authorization': 'Bearer $token',
@@ -146,7 +216,12 @@ class _RenovarMembresiaWidgetState extends State<RenovarMembresiaWidget> with Ti
       }
 
       final data = jsonDecode(response.body) as Map<String, dynamic>;
-      final url = data['initPoint'] as String;
+      // Ambos endpoints devuelven la URL de pago en 'initPoint'.
+      final url = (data['initPoint'] ?? data['approveUrl']) as String?;
+      if (url == null || url.isEmpty) {
+        _showError('No se pudo obtener el enlace de pago');
+        return;
+      }
 
       if (mounted) {
         Navigator.of(context).push(
@@ -163,7 +238,12 @@ class _RenovarMembresiaWidgetState extends State<RenovarMembresiaWidget> with Ti
     } catch (e) {
       _showError('Error al iniciar el pago: $e');
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _metodoCargando = null;
+        });
+      }
     }
   }
 
@@ -220,11 +300,11 @@ class _RenovarMembresiaWidgetState extends State<RenovarMembresiaWidget> with Ti
                     const SizedBox(height: 16),
                     _buildResumenPlan().animate().fadeIn(duration: 300.ms).slideY(begin: 0.04, end: 0, duration: 300.ms),
                   ],
-                  const SizedBox(height: 20),
-                  _buildBoton()
+                  const SizedBox(height: 18),
+                  _buildBotones()
                       .animate()
-                      .fadeIn(duration: 400.ms, delay: 240.ms)
-                      .slideY(begin: 0.06, end: 0, duration: 400.ms, delay: 240.ms),
+                      .fadeIn(duration: 400.ms, delay: 200.ms)
+                      .slideY(begin: 0.06, end: 0, duration: 400.ms, delay: 200.ms),
                   const SizedBox(height: 14),
                   _buildNotaSeguridad().animate().fadeIn(duration: 400.ms, delay: 320.ms),
                 ]),
@@ -273,21 +353,22 @@ class _RenovarMembresiaWidgetState extends State<RenovarMembresiaWidget> with Ti
             return Container(
               padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
               decoration: BoxDecoration(
-                color: _C.danger.withOpacity(0.12 + pulse * 0.06),
+                color: _estadoColor.withOpacity(0.12 + pulse * 0.06),
                 borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: _C.danger.withOpacity(0.4 + pulse * 0.2)),
+                border: Border.all(color: _estadoColor.withOpacity(0.4 + pulse * 0.2)),
               ),
               child: Row(mainAxisSize: MainAxisSize.min, children: [
                 Container(
                   width: 7,
                   height: 7,
                   decoration: BoxDecoration(
-                    color: _C.danger.withOpacity(pulse),
+                    color: _estadoColor.withOpacity(pulse),
                     shape: BoxShape.circle,
                   ),
                 ),
                 const SizedBox(width: 6),
-                Text('Vencida', style: GoogleFonts.dmSans(color: _C.danger, fontSize: 11.5, fontWeight: FontWeight.w700)),
+                Text(_membresiaActiva ? 'Activa' : 'Vencida',
+                    style: GoogleFonts.dmSans(color: _estadoColor, fontSize: 11.5, fontWeight: FontWeight.w700)),
               ]),
             );
           },
@@ -300,15 +381,15 @@ class _RenovarMembresiaWidgetState extends State<RenovarMembresiaWidget> with Ti
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFF1E1B4B), Color(0xFF312E81)],
+        gradient: LinearGradient(
+          colors: _membresiaActiva ? const [Color(0xFF064E3B), Color(0xFF065F46)] : const [Color(0xFF1E1B4B), Color(0xFF312E81)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: _C.purple.withOpacity(0.4), width: 1),
+        border: Border.all(color: _estadoColor.withOpacity(0.4), width: 1),
         boxShadow: [
-          BoxShadow(color: _C.purple.withOpacity(0.25), blurRadius: 24, offset: const Offset(0, 10)),
+          BoxShadow(color: _estadoColor.withOpacity(0.25), blurRadius: 24, offset: const Offset(0, 10)),
         ],
       ),
       child: Stack(children: [
@@ -344,24 +425,28 @@ class _RenovarMembresiaWidgetState extends State<RenovarMembresiaWidget> with Ti
                 width: 52,
                 height: 52,
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [_C.danger, Color(0xFFFF6B6B)],
+                  gradient: LinearGradient(
+                    colors: _membresiaActiva ? [_C.success, const Color(0xFF4ADE80)] : [_C.danger, const Color(0xFFFF6B6B)],
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                   ),
                   borderRadius: BorderRadius.circular(16),
                   boxShadow: [
-                    BoxShadow(color: _C.danger.withOpacity(0.4), blurRadius: 12, offset: const Offset(0, 4)),
+                    BoxShadow(color: _estadoColor.withOpacity(0.4), blurRadius: 12, offset: const Offset(0, 4)),
                   ],
                 ),
-                child: const Icon(Icons.lock_clock_rounded, color: Colors.white, size: 26),
+                child: Icon(_membresiaActiva ? Icons.verified_rounded : Icons.lock_clock_rounded, color: Colors.white, size: 26),
               ),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('Acceso suspendido', style: GoogleFonts.dmSans(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
+                  Text(_membresiaActiva ? 'Membresía activa' : 'Acceso suspendido',
+                      style: GoogleFonts.dmSans(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 3),
-                  Text(_nombreUsuario.isNotEmpty ? 'Hola, $_nombreUsuario' : 'Tu membresía ha vencido',
+                  Text(
+                      _nombreUsuario.isNotEmpty
+                          ? 'Hola, $_nombreUsuario'
+                          : (_membresiaActiva ? 'Tu membresía está vigente' : 'Tu membresía ha vencido'),
                       style: GoogleFonts.dmSans(color: Colors.white54, fontSize: 12)),
                 ]),
               ),
@@ -377,24 +462,33 @@ class _RenovarMembresiaWidgetState extends State<RenovarMembresiaWidget> with Ti
               child: Row(children: [
                 Expanded(
                   child: _heroStat(
-                    'Venció el',
+                    _membresiaActiva ? 'Vence el' : 'Venció el',
                     _fechaActualVencimiento != null ? _formatFecha(_fechaActualVencimiento!) : '—',
-                    _C.danger,
-                    Icons.event_busy_rounded,
+                    _estadoColor,
+                    _membresiaActiva ? Icons.event_available_rounded : Icons.event_busy_rounded,
                   ),
                 ),
                 Container(width: 1, height: 40, color: Colors.white.withOpacity(0.08)),
                 Expanded(
                   child: _heroStat(
-                    'Días vencida',
-                    _fechaActualVencimiento != null ? '${DateTime.now().difference(_fechaActualVencimiento!).inDays}d' : '—',
-                    _C.warning,
-                    Icons.timer_off_rounded,
+                    _membresiaActiva ? 'Días restantes' : 'Días vencida',
+                    _fechaActualVencimiento == null
+                        ? '—'
+                        : _membresiaActiva
+                            ? '${_diasRestantes}d'
+                            : '${_diasVencida}d',
+                    _membresiaActiva ? _C.success : _C.warning,
+                    _membresiaActiva ? Icons.timer_rounded : Icons.timer_off_rounded,
                   ),
                 ),
                 Container(width: 1, height: 40, color: Colors.white.withOpacity(0.08)),
                 Expanded(
-                  child: _heroStat('Estado', 'Inactivo', _C.danger, Icons.block_rounded),
+                  child: _heroStat(
+                    'Estado',
+                    _membresiaActiva ? 'Activo' : 'Inactivo',
+                    _estadoColor,
+                    _membresiaActiva ? Icons.verified_user_rounded : Icons.block_rounded,
+                  ),
                 ),
               ]),
             ),
@@ -402,17 +496,20 @@ class _RenovarMembresiaWidgetState extends State<RenovarMembresiaWidget> with Ti
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(
-                color: _C.warning.withOpacity(0.1),
+                color: (_membresiaActiva ? _C.success : _C.warning).withOpacity(0.1),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: _C.warning.withOpacity(0.25)),
+                border: Border.all(color: (_membresiaActiva ? _C.success : _C.warning).withOpacity(0.25)),
               ),
               child: Row(children: [
-                Icon(Icons.info_outline_rounded, color: _C.warning, size: 15),
+                Icon(_membresiaActiva ? Icons.check_circle_outline_rounded : Icons.info_outline_rounded,
+                    color: _membresiaActiva ? _C.success : _C.warning, size: 15),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Para recuperar el acceso completo a StarkGo, selecciona un plan y completa el pago.',
-                    style: GoogleFonts.dmSans(color: _C.warning, fontSize: 11.5),
+                    _membresiaActiva
+                        ? 'Tu membresía está ACTIVA. Si renovás ahora, el tiempo se SUMA a tu vencimiento actual.'
+                        : 'Para recuperar el acceso completo a StarkGo, selecciona un plan y completa el pago.',
+                    style: GoogleFonts.dmSans(color: _membresiaActiva ? _C.success : _C.warning, fontSize: 11.5),
                   ),
                 ),
               ]),
@@ -634,12 +731,25 @@ class _RenovarMembresiaWidgetState extends State<RenovarMembresiaWidget> with Ti
                         )),
                     const SizedBox(width: 8),
                   ],
-                  Text('\$${_planSel!.precio} USD',
-                      style: GoogleFonts.dmSans(
-                        color: Colors.white,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w800,
-                      )),
+                  Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                    Text('\$${_planSel!.precio} USD',
+                        style: GoogleFonts.dmSans(
+                          color: Colors.white,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w800,
+                        )),
+                    Text('= ${_planSel!.precioCopTexto}',
+                        style: GoogleFonts.dmSans(
+                          color: Colors.white54,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w600,
+                        )),
+                    Text('tasa del día: ${PreciosService.tasaTexto} COP/USD',
+                        style: GoogleFonts.dmSans(
+                          color: Colors.white30,
+                          fontSize: 9.5,
+                        )),
+                  ]),
                 ]),
               ]),
             ),
@@ -670,58 +780,84 @@ class _RenovarMembresiaWidgetState extends State<RenovarMembresiaWidget> with Ti
     );
   }
 
-  Widget _buildBoton() {
+  // ── Botones de pago (Mercado Pago · Rapid; PayPal opcional) ──
+  Widget _buildBotones() {
+    return Column(children: [
+      _buildBotonPago(
+        MetodoPago.mercadoPago,
+        'Pagar con Mercado Pago',
+        Icons.account_balance_wallet_rounded,
+        const [Color(0xFF00B1EA), Color(0xFF1A73E8)],
+        const Color(0xFF00B1EA),
+      ),
+      if (_rapidVisible) ...[
+        const SizedBox(height: 12),
+        _buildBotonPago(
+          MetodoPago.rapid,
+          'Pagar con Rapid (PayU)',
+          Icons.credit_card_rounded,
+          const [Color(0xFF00C6AE), Color(0xFF0F766E)],
+          const Color(0xFF00C6AE),
+        ),
+      ],
+      // PayPal desactivado por ahora (_kPayPalHabilitado = false).
+      if (_kPayPalHabilitado) ...[
+        const SizedBox(height: 12),
+        _buildBotonPago(
+          MetodoPago.paypal,
+          'Pagar con PayPal',
+          Icons.payments_rounded,
+          const [Color(0xFF0070BA), Color(0xFF003087)],
+          const Color(0xFF0070BA),
+        ),
+      ],
+    ]);
+  }
+
+  Widget _buildBotonPago(
+    MetodoPago metodo,
+    String label,
+    IconData icon,
+    List<Color> gradiente,
+    Color shadow,
+  ) {
+    final cargando = _metodoCargando == metodo;
+    final activo = _planSel != null && !_isLoading;
     return SizedBox(
       width: double.infinity,
-      height: 58,
+      height: 56,
       child: DecoratedBox(
         decoration: BoxDecoration(
-          gradient: _isLoading
-              ? null
-              : LinearGradient(
-                  colors: _planSel != null ? [_planSel!.color, _C.primary] : [_C.purple, _C.primary],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-          color: _isLoading ? Colors.white.withOpacity(0.08) : null,
+          gradient: activo ? LinearGradient(colors: gradiente, begin: Alignment.topLeft, end: Alignment.bottomRight) : null,
+          color: activo ? null : Colors.white.withOpacity(0.08),
           borderRadius: BorderRadius.circular(16),
-          boxShadow: _isLoading || _planSel == null
-              ? []
-              : [
-                  BoxShadow(
-                    color: (_planSel?.color ?? _C.primary).withOpacity(0.45),
-                    blurRadius: 20,
-                    offset: const Offset(0, 8),
-                  ),
-                ],
+          boxShadow: activo ? [BoxShadow(color: shadow.withOpacity(0.4), blurRadius: 18, offset: const Offset(0, 8))] : [],
         ),
         child: Material(
           color: Colors.transparent,
           child: InkWell(
-            onTap: _isLoading ? null : _renovar,
+            onTap: activo ? () => _renovar(metodo) : null,
             borderRadius: BorderRadius.circular(16),
             splashColor: Colors.white.withOpacity(0.1),
             child: Center(
-              child: _isLoading
-                  ? Row(mainAxisSize: MainAxisSize.min, children: [
-                      SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation(Colors.white.withOpacity(0.5)),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Text('Procesando renovación...',
-                          style: GoogleFonts.dmSans(color: Colors.white60, fontSize: 15, fontWeight: FontWeight.w600)),
-                    ])
-                  : Row(mainAxisSize: MainAxisSize.min, children: [
-                      const Icon(Icons.rocket_launch_rounded, color: Colors.white, size: 20),
-                      const SizedBox(width: 10),
-                      Text(_planSel != null ? 'Pagar \$${_planSel!.precio} USD' : 'Selecciona un plan',
-                          style: GoogleFonts.dmSans(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
-                    ]),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                if (cargando)
+                  SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation(Colors.white.withOpacity(0.6)),
+                    ),
+                  )
+                else
+                  Icon(icon, color: Colors.white, size: 20),
+                const SizedBox(width: 10),
+                Text(
+                  _planSel != null ? '$label · \$${_planSel!.precio} USD' : 'Selecciona un plan',
+                  style: GoogleFonts.dmSans(color: Colors.white, fontSize: 14.5, fontWeight: FontWeight.w700),
+                ),
+              ]),
             ),
           ),
         ),
@@ -838,6 +974,12 @@ class _PlanCard extends StatelessWidget {
                         color: selected ? plan.color : Colors.white38,
                         fontSize: 13,
                         fontWeight: FontWeight.w700,
+                      )),
+                  Text('= ${plan.precioCopTexto}',
+                      style: GoogleFonts.dmSans(
+                        color: Colors.white30,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
                       )),
                   if (plan.ahorro > 0)
                     Text('Ahorras \$${plan.ahorro}',

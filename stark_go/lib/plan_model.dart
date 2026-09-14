@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'services/precios_service.dart';
+
 /// Tipo de plan de membresía.
 enum TipoPlan {
   /// Acceso completo a toda la app (clientes, planes, informes, etc.)
@@ -39,6 +41,17 @@ class Plan {
     this.destacado = false,
     this.tipo = TipoPlan.completo,
   });
+}
+
+/// Precio en pesos (COP) equivalente al USD del plan.
+/// La tasa sale del VPS (`GET /precios` → USD_A_COP), así el precio que el
+/// cliente VE y el que se le COBRA nunca se desincronizan.
+extension PlanPrecios on Plan {
+  /// Precio en COP (el que calculó el VPS con la tasa del día).
+  int get precioCop => PreciosService.copDePlan(id, precio);
+
+  /// Texto listo para mostrar: "$369.000 COP".
+  String get precioCopTexto => '\$${PreciosService.formatoCop(precioCop)} COP';
 }
 
 /// Planes de acceso completo a toda la app.

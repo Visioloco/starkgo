@@ -14,14 +14,47 @@ import 'package:google_fonts/google_fonts.dart';
 class _C {
   static const Color primary = Color(0xFF1A73E8);
   static const Color accent = Color(0xFF00C6AE);
-  static const Color danger = Color(0xFFE53935);
+  static const Color danger = Color(0xFFEF4444);
   static const Color dark = Color(0xFF0F172A);
-  static const Color surface = Color(0xFFFFFFFF);
+  static const Color bg1 = Color(0xFF13233F);
+  static const Color bg2 = Color(0xFF0B1526);
+  static const Color card = Color(0xFF111C33);
+  static const Color cardBorder = Color(0xFF243049);
+  static const Color inputBg = Color(0xFF0B1526);
   static const Color textPri = Color(0xFF0F172A);
-  static const Color textSec = Color(0xFF64748B);
   static const Color border = Color(0xFFE2E8F0);
-  static const Color surfaceDim = Color(0xFFF1F5F9);
+  static const Color onDark = Color(0xFFF1F5F9);
+  static const Color onDarkSec = Color(0xFF94A3B8);
 }
+
+// ─────────────────────────────────────────────
+//  LISTA DE PAÍSES (indicativos)
+// ─────────────────────────────────────────────
+const _paises = [
+  {'flag': '🇨🇴', 'nombre': 'Colombia', 'codigo': '+57'},
+  {'flag': '🇻🇪', 'nombre': 'Venezuela', 'codigo': '+58'},
+  {'flag': '🇲🇽', 'nombre': 'México', 'codigo': '+52'},
+  {'flag': '🇺🇸', 'nombre': 'Estados Unidos', 'codigo': '+1'},
+  {'flag': '🇦🇷', 'nombre': 'Argentina', 'codigo': '+54'},
+  {'flag': '🇨🇱', 'nombre': 'Chile', 'codigo': '+56'},
+  {'flag': '🇵🇪', 'nombre': 'Perú', 'codigo': '+51'},
+  {'flag': '🇪🇨', 'nombre': 'Ecuador', 'codigo': '+593'},
+  {'flag': '🇧🇴', 'nombre': 'Bolivia', 'codigo': '+591'},
+  {'flag': '🇵🇾', 'nombre': 'Paraguay', 'codigo': '+595'},
+  {'flag': '🇺🇾', 'nombre': 'Uruguay', 'codigo': '+598'},
+  {'flag': '🇧🇷', 'nombre': 'Brasil', 'codigo': '+55'},
+  {'flag': '🇵🇦', 'nombre': 'Panamá', 'codigo': '+507'},
+  {'flag': '🇨🇷', 'nombre': 'Costa Rica', 'codigo': '+506'},
+  {'flag': '🇩🇴', 'nombre': 'Rep. Dominicana', 'codigo': '+1809'},
+  {'flag': '🇬🇹', 'nombre': 'Guatemala', 'codigo': '+502'},
+  {'flag': '🇭🇳', 'nombre': 'Honduras', 'codigo': '+504'},
+  {'flag': '🇸🇻', 'nombre': 'El Salvador', 'codigo': '+503'},
+  {'flag': '🇳🇮', 'nombre': 'Nicaragua', 'codigo': '+505'},
+  {'flag': '🇪🇸', 'nombre': 'España', 'codigo': '+34'},
+  {'flag': '🇨🇦', 'nombre': 'Canadá', 'codigo': '+1'},
+  {'flag': '🇬🇧', 'nombre': 'Reino Unido', 'codigo': '+44'},
+  {'flag': '🇨🇺', 'nombre': 'Cuba', 'codigo': '+53'},
+];
 
 // ─────────────────────────────────────────────
 //  CAMPO REUTILIZABLE
@@ -58,7 +91,7 @@ class _AuthField extends StatelessWidget {
         child: Text(
           label,
           style: GoogleFonts.spaceGrotesk(
-            color: _C.textSec,
+            color: _C.onDarkSec,
             fontSize: 11,
             fontWeight: FontWeight.w700,
             letterSpacing: 0.8,
@@ -71,19 +104,19 @@ class _AuthField extends StatelessWidget {
         obscureText: isPassword && !passwordVisible,
         keyboardType: keyboardType,
         validator: validator,
-        style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 14, fontWeight: FontWeight.w500),
+        style: GoogleFonts.spaceGrotesk(color: _C.onDark, fontSize: 14, fontWeight: FontWeight.w500),
         decoration: InputDecoration(
           hintText: hint,
-          hintStyle: GoogleFonts.spaceGrotesk(color: _C.textSec.withOpacity(0.5), fontSize: 13),
+          hintStyle: GoogleFonts.spaceGrotesk(color: _C.onDarkSec.withOpacity(0.6), fontSize: 13),
           prefixIcon: Container(
             margin: const EdgeInsets.fromLTRB(14, 9, 10, 9),
             width: 34,
             height: 34,
             decoration: BoxDecoration(
-              color: _C.primary.withOpacity(0.1),
+              color: _C.accent.withOpacity(0.14),
               borderRadius: BorderRadius.circular(9),
             ),
-            child: Icon(icon, color: _C.primary, size: 16),
+            child: Icon(icon, color: _C.accent, size: 16),
           ),
           suffixIcon: isPassword
               ? GestureDetector(
@@ -92,33 +125,146 @@ class _AuthField extends StatelessWidget {
                     padding: const EdgeInsets.only(right: 14),
                     child: Icon(
                       passwordVisible ? Icons.visibility_rounded : Icons.visibility_off_rounded,
-                      color: _C.textSec,
+                      color: _C.onDarkSec,
                       size: 20,
                     ),
                   ),
                 )
               : null,
           filled: true,
-          fillColor: _C.surfaceDim,
+          fillColor: _C.inputBg,
           contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
           enabledBorder: OutlineInputBorder(
-            borderSide: BorderSide(color: _C.border, width: 1.2),
+            borderSide: const BorderSide(color: _C.cardBorder, width: 1.2),
             borderRadius: BorderRadius.circular(14),
           ),
           focusedBorder: OutlineInputBorder(
-            borderSide: BorderSide(color: _C.primary, width: 2),
+            borderSide: const BorderSide(color: _C.accent, width: 1.8),
             borderRadius: BorderRadius.circular(14),
           ),
           errorBorder: OutlineInputBorder(
-            borderSide: BorderSide(color: _C.danger, width: 1.5),
+            borderSide: BorderSide(color: _C.danger, width: 1.4),
             borderRadius: BorderRadius.circular(14),
           ),
           focusedErrorBorder: OutlineInputBorder(
-            borderSide: BorderSide(color: _C.danger, width: 2),
+            borderSide: BorderSide(color: _C.danger, width: 1.8),
             borderRadius: BorderRadius.circular(14),
           ),
           errorStyle: GoogleFonts.spaceGrotesk(color: _C.danger, fontSize: 11),
         ),
+      ),
+    ]);
+  }
+}
+
+// ─────────────────────────────────────────────
+//  CAMPO DE TELÉFONO CON INDICATIVO
+// ─────────────────────────────────────────────
+class _PhoneField extends StatelessWidget {
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final String label;
+  final String indicativo;
+  final String flag;
+  final VoidCallback onSelectIndicativo;
+  final String? Function(String?)? validator;
+
+  const _PhoneField({
+    required this.controller,
+    required this.focusNode,
+    required this.label,
+    required this.indicativo,
+    required this.flag,
+    required this.onSelectIndicativo,
+    this.validator,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Padding(
+        padding: const EdgeInsets.only(left: 2, bottom: 7),
+        child: Text(
+          label,
+          style: GoogleFonts.spaceGrotesk(
+            color: _C.onDarkSec,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.8,
+          ),
+        ),
+      ),
+      IntrinsicHeight(
+        child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          // ── Selector de indicativo ──
+          GestureDetector(
+            onTap: onSelectIndicativo,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: _C.inputBg,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: _C.cardBorder, width: 1.2),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Text(flag, style: const TextStyle(fontSize: 18)),
+                const SizedBox(width: 7),
+                Text(
+                  indicativo,
+                  style: GoogleFonts.spaceGrotesk(color: _C.onDark, fontSize: 14, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(width: 3),
+                const Icon(Icons.expand_more_rounded, color: _C.onDarkSec, size: 18),
+              ]),
+            ),
+          ),
+          const SizedBox(width: 10),
+          // ── Número ──
+          Expanded(
+            child: TextFormField(
+              controller: controller,
+              focusNode: focusNode,
+              keyboardType: TextInputType.phone,
+              validator: validator,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              style: GoogleFonts.spaceGrotesk(color: _C.onDark, fontSize: 14, fontWeight: FontWeight.w500),
+              decoration: InputDecoration(
+                hintText: '412 000 0000',
+                hintStyle: GoogleFonts.spaceGrotesk(color: _C.onDarkSec.withOpacity(0.6), fontSize: 13),
+                prefixIcon: Container(
+                  margin: const EdgeInsets.fromLTRB(14, 9, 10, 9),
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    color: _C.accent.withOpacity(0.14),
+                    borderRadius: BorderRadius.circular(9),
+                  ),
+                  child: const Icon(Icons.phone_rounded, color: _C.accent, size: 16),
+                ),
+                filled: true,
+                fillColor: _C.inputBg,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                enabledBorder: OutlineInputBorder(
+                  borderSide: const BorderSide(color: _C.cardBorder, width: 1.2),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderSide: const BorderSide(color: _C.accent, width: 1.8),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                errorBorder: OutlineInputBorder(
+                  borderSide: BorderSide(color: _C.danger, width: 1.4),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                focusedErrorBorder: OutlineInputBorder(
+                  borderSide: BorderSide(color: _C.danger, width: 1.8),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                errorStyle: GoogleFonts.spaceGrotesk(color: _C.danger, fontSize: 11),
+              ),
+            ),
+          ),
+        ]),
       ),
     ]);
   }
@@ -148,6 +294,14 @@ class _RegistroWidgetState extends State<RegistroWidget> with SingleTickerProvid
   final _emailCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
   final _confirmPassCtrl = TextEditingController();
+
+  // ── Indicativo de país (teléfono WhatsApp) ──
+  String _indicativoPais = '+57';
+
+  Map<String, String> get _paisSel => _paises.firstWhere(
+        (p) => p['codigo'] == _indicativoPais,
+        orElse: () => {'flag': '🌍', 'nombre': '', 'codigo': _indicativoPais},
+      );
 
   // ── FocusNodes ──
   final _nombreFocus = FocusNode();
@@ -217,7 +371,8 @@ class _RegistroWidgetState extends State<RegistroWidget> with SingleTickerProvid
         'uid': user.uid,
         'nombre': _nombreCtrl.text.trim(),
         'apellido': _apellidoCtrl.text.trim(),
-        'telefono': _telefonoCtrl.text.trim(),
+        'telefono': '$_indicativoPais${_telefonoCtrl.text.trim().replaceAll(RegExp(r'[^0-9]'), '')}',
+        'indicativoPais': _indicativoPais,
         'email': _emailCtrl.text.trim(),
         'activo': false, // se activa al pagar
         'rol': 'operador',
@@ -267,8 +422,8 @@ class _RegistroWidgetState extends State<RegistroWidget> with SingleTickerProvid
       if (!mounted) return;
       SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
         statusBarColor: Colors.transparent,
-        statusBarIconBrightness: Brightness.dark,
-        statusBarBrightness: Brightness.light,
+        statusBarIconBrightness: Brightness.light,
+        statusBarBrightness: Brightness.dark,
       ));
 
       // Verificar si el usuario ya existe en Firestore
@@ -384,7 +539,7 @@ class _RegistroWidgetState extends State<RegistroWidget> with SingleTickerProvid
       onTap: () => FocusScope.of(context).unfocus(),
       child: Scaffold(
         key: scaffoldKey,
-        backgroundColor: _C.surface,
+        backgroundColor: _C.dark,
         body: SafeArea(
           child: SingleChildScrollView(
             physics: const BouncingScrollPhysics(),
@@ -436,13 +591,13 @@ class _RegistroWidgetState extends State<RegistroWidget> with SingleTickerProvid
 
                     const SizedBox(height: 16),
 
-                    _AuthField(
+                    _PhoneField(
                       controller: _telefonoCtrl,
                       focusNode: _telefonoFocus,
                       label: 'TELÉFONO (WhatsApp)',
-                      hint: '+58 412 0000000',
-                      icon: Icons.phone_rounded,
-                      keyboardType: TextInputType.phone,
+                      indicativo: _indicativoPais,
+                      flag: _paisSel['flag'] ?? '🌍',
+                      onSelectIndicativo: _seleccionarPais,
                       validator: (v) {
                         if (v == null || v.trim().isEmpty) return 'Requerido';
                         if (v.trim().length < 7) return 'Número muy corto';
@@ -519,12 +674,12 @@ class _RegistroWidgetState extends State<RegistroWidget> with SingleTickerProvid
 
                     // ── Separador "o" ──
                     Row(children: [
-                      Expanded(child: Divider(color: _C.border, thickness: 1)),
+                      Expanded(child: Divider(color: _C.cardBorder, thickness: 1)),
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 12),
-                        child: Text('o', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 12)),
+                        child: Text('o', style: GoogleFonts.spaceGrotesk(color: _C.onDarkSec, fontSize: 12)),
                       ),
-                      Expanded(child: Divider(color: _C.border, thickness: 1)),
+                      Expanded(child: Divider(color: _C.cardBorder, thickness: 1)),
                     ]).animate().fadeIn(duration: 400.ms, delay: 420.ms),
 
                     const SizedBox(height: 18),
@@ -546,14 +701,129 @@ class _RegistroWidgetState extends State<RegistroWidget> with SingleTickerProvid
     );
   }
 
-  // ── Header azul con logo ──
+  // ── Modal selector de indicativo / país ──
+  Future<void> _seleccionarPais() async {
+    final busquedaCtrl = TextEditingController();
+    List<Map<String, String>> filtrados = _paises.map((p) => Map<String, String>.from(p)).toList();
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setModalState) {
+            return Container(
+              height: MediaQuery.of(context).size.height * 0.7,
+              decoration: const BoxDecoration(
+                color: _C.card,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              child: Column(children: [
+                const SizedBox(height: 12),
+                Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: _C.cardBorder,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('Selecciona tu país',
+                        style: GoogleFonts.spaceGrotesk(
+                          color: _C.onDark,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        )),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: TextField(
+                    controller: busquedaCtrl,
+                    style: GoogleFonts.spaceGrotesk(color: _C.onDark, fontSize: 14),
+                    decoration: InputDecoration(
+                      hintText: 'Buscar país o código...',
+                      hintStyle: GoogleFonts.spaceGrotesk(color: _C.onDarkSec.withOpacity(0.6), fontSize: 13),
+                      prefixIcon: const Icon(Icons.search_rounded, color: _C.onDarkSec, size: 18),
+                      filled: true,
+                      fillColor: _C.inputBg,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      enabledBorder: OutlineInputBorder(
+                        borderSide: const BorderSide(color: _C.cardBorder),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderSide: const BorderSide(color: _C.accent, width: 1.5),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    onChanged: (v) {
+                      setModalState(() {
+                        filtrados = _paises
+                            .where((p) => p['nombre']!.toLowerCase().contains(v.toLowerCase()) || p['codigo']!.contains(v))
+                            .map((p) => Map<String, String>.from(p))
+                            .toList();
+                      });
+                    },
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: ListView.builder(
+                    itemCount: filtrados.length,
+                    itemBuilder: (_, i) {
+                      final p = filtrados[i];
+                      final seleccionado = _indicativoPais == p['codigo'];
+                      return ListTile(
+                        onTap: () {
+                          setState(() => _indicativoPais = p['codigo']!);
+                          Navigator.pop(ctx);
+                        },
+                        leading: Text(p['flag'] ?? '', style: const TextStyle(fontSize: 22)),
+                        title: Text(
+                          p['nombre'] ?? '',
+                          style: GoogleFonts.spaceGrotesk(
+                            color: _C.onDark,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        trailing: Text(
+                          p['codigo'] ?? '',
+                          style: GoogleFonts.spaceGrotesk(
+                            color: seleccionado ? _C.accent : _C.onDarkSec,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ]),
+            );
+          },
+        );
+      },
+    );
+    busquedaCtrl.dispose();
+  }
+
+  // ── Header de marca (oscuro, estilo de la app) ──
   Widget _buildHeader() {
     return Container(
       width: double.infinity,
-      height: 180,
+      padding: const EdgeInsets.fromLTRB(24, 30, 24, 26),
       decoration: const BoxDecoration(
         gradient: LinearGradient(
-          colors: [Color(0xFF0F172A), Color(0xFF1A73E8)],
+          colors: [_C.bg1, _C.bg2],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
@@ -563,16 +833,21 @@ class _RegistroWidgetState extends State<RegistroWidget> with SingleTickerProvid
         ),
       ),
       child: Stack(children: [
-        // Círculos decorativos
         Positioned(
           right: -30,
           top: -30,
-          child: Container(
-            width: 140,
-            height: 140,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: Colors.white.withOpacity(0.05),
+          child: AnimatedBuilder(
+            animation: _pulseAnim,
+            builder: (_, __) => Transform.scale(
+              scale: _pulseAnim.value,
+              child: Container(
+                width: 140,
+                height: 140,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _C.primary.withOpacity(0.10),
+                ),
+              ),
             ),
           ),
         ),
@@ -584,41 +859,45 @@ class _RegistroWidgetState extends State<RegistroWidget> with SingleTickerProvid
             height: 100,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: _C.accent.withOpacity(0.08),
+              color: _C.accent.withOpacity(0.10),
             ),
           ),
         ),
-        // Contenido
-        Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 60,
-                height: 60,
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: Colors.white.withOpacity(0.2), width: 1.5),
-                ),
-                child: const Icon(Icons.wifi_rounded, color: Colors.white, size: 30),
+        Column(children: [
+          Container(
+            width: 66,
+            height: 66,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [_C.primary, _C.accent],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
               ),
-              const SizedBox(height: 10),
-              Text('StarkGo',
-                  style: GoogleFonts.spaceGrotesk(
-                    color: Colors.white,
-                    fontSize: 22,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 0.5,
-                  )),
-              Text('Crea tu cuenta',
-                  style: GoogleFonts.spaceGrotesk(
-                    color: Colors.white60,
-                    fontSize: 12,
-                  )),
-            ],
+              borderRadius: BorderRadius.circular(20),
+              boxShadow: [
+                BoxShadow(color: _C.primary.withOpacity(0.4), blurRadius: 22, offset: const Offset(0, 8)),
+                BoxShadow(color: _C.accent.withOpacity(0.2), blurRadius: 36, spreadRadius: 2),
+              ],
+            ),
+            child: const Icon(Icons.wifi_tethering_rounded, color: Colors.white, size: 32),
           ),
-        ),
+          const SizedBox(height: 12),
+          Text('StarkGo',
+              style: GoogleFonts.spaceGrotesk(
+                color: Colors.white,
+                fontSize: 24,
+                fontWeight: FontWeight.w800,
+                letterSpacing: -0.5,
+              )),
+          const SizedBox(height: 4),
+          Row(mainAxisSize: MainAxisSize.min, children: [
+            Container(width: 6, height: 6, decoration: const BoxDecoration(color: _C.accent, shape: BoxShape.circle)),
+            const SizedBox(width: 8),
+            Text('Crea tu cuenta', style: GoogleFonts.spaceGrotesk(color: _C.onDarkSec, fontSize: 12.5)),
+            const SizedBox(width: 8),
+            Container(width: 6, height: 6, decoration: const BoxDecoration(color: _C.primary, shape: BoxShape.circle)),
+          ]),
+        ]),
       ]),
     );
   }
@@ -628,14 +907,14 @@ class _RegistroWidgetState extends State<RegistroWidget> with SingleTickerProvid
       const SizedBox(height: 24),
       Text('Registro',
           style: GoogleFonts.spaceGrotesk(
-            color: _C.textPri,
+            color: _C.onDark,
             fontSize: 26,
             fontWeight: FontWeight.w800,
           )),
       const SizedBox(height: 4),
       Text('Completa tus datos para crear tu cuenta',
           style: GoogleFonts.spaceGrotesk(
-            color: _C.textSec,
+            color: _C.onDarkSec,
             fontSize: 13,
           )),
     ]);
@@ -647,23 +926,23 @@ class _RegistroWidgetState extends State<RegistroWidget> with SingleTickerProvid
         width: 28,
         height: 28,
         decoration: BoxDecoration(
-          color: _C.primary.withOpacity(0.1),
+          color: _C.accent.withOpacity(0.14),
           borderRadius: BorderRadius.circular(8),
         ),
-        child: Icon(icon, color: _C.primary, size: 14),
+        child: Icon(icon, color: _C.accent, size: 14),
       ),
       const SizedBox(width: 8),
       Text(
         label,
         style: GoogleFonts.spaceGrotesk(
-          color: _C.textSec,
+          color: _C.onDarkSec,
           fontSize: 10.5,
           fontWeight: FontWeight.w700,
           letterSpacing: 1.0,
         ),
       ),
       const SizedBox(width: 8),
-      Expanded(child: Divider(color: _C.border, thickness: 1)),
+      Expanded(child: Divider(color: _C.cardBorder, thickness: 1)),
     ]);
   }
 
@@ -676,11 +955,11 @@ class _RegistroWidgetState extends State<RegistroWidget> with SingleTickerProvid
           gradient: _isLoading
               ? null
               : const LinearGradient(
-                  colors: [Color(0xFF0F172A), Color(0xFF1A73E8)],
+                  colors: [_C.primary, _C.accent],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
-          color: _isLoading ? _C.surfaceDim : null,
+          color: _isLoading ? _C.cardBorder : null,
           borderRadius: BorderRadius.circular(16),
           boxShadow: _isLoading
               ? []
@@ -705,13 +984,13 @@ class _RegistroWidgetState extends State<RegistroWidget> with SingleTickerProvid
                         height: 18,
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation(_C.textSec.withOpacity(0.6)),
+                          valueColor: AlwaysStoppedAnimation(_C.onDarkSec.withOpacity(0.6)),
                         ),
                       ),
                       const SizedBox(width: 12),
                       Text('Creando cuenta...',
                           style: GoogleFonts.spaceGrotesk(
-                            color: _C.textSec,
+                            color: _C.onDarkSec,
                             fontSize: 15,
                             fontWeight: FontWeight.w600,
                           )),
@@ -797,13 +1076,13 @@ class _RegistroWidgetState extends State<RegistroWidget> with SingleTickerProvid
 
   Widget _buildLoginLink() {
     return Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-      Text('¿Ya tienes cuenta? ', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 13)),
+      Text('¿Ya tienes cuenta? ', style: GoogleFonts.spaceGrotesk(color: _C.onDarkSec, fontSize: 13)),
       GestureDetector(
         onTap: () => context.pushNamed('login'),
         child: Text(
           'Inicia sesión',
           style: GoogleFonts.spaceGrotesk(
-            color: _C.primary,
+            color: _C.accent,
             fontSize: 13,
             fontWeight: FontWeight.w700,
           ),

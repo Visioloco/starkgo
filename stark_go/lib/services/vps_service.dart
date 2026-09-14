@@ -388,28 +388,72 @@ class VpsService {
   }
 
   /// POST /wg/register-mikrotik — da de alta el MikroTik como peer estático
-  /// (AllowedIPs = ip del MikroTik/32 + subred de antenas, automático).
-  static Future<bool> registrarMikrotikVps({required String publicKey}) async {
+  /// (AllowedIPs = ip del MikroTik/32 + subred de gestión/antenas).
+  ///
+  /// [subred]  → red local declarada por el usuario (ej. "192.168.10.0/24").
+  ///             El VPS la usa como subred de antenas y valida que sea única
+  ///             entre empresas. Vacío → el VPS asigna una 10.10.X.0/24 libre.
+  /// [ipLocal] → puerta de enlace del MikroTik en su red local (se guarda).
+  static Future<WgMikrotikVps> registrarMikrotikVps({
+    required String publicKey,
+    String? subred,
+    String? ipLocal,
+  }) async {
     final key = await obtenerApikey();
-    if (key == null) return false;
+    if (key == null) {
+      return const WgMikrotikVps(
+        ok: false,
+        error: 'Sin apikey: guardá la configuración del VPS primero.',
+      );
+    }
     try {
       final resp = await http
           .post(
             Uri.parse('$_baseUrl/wg/register-mikrotik'),
             headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'apikey': key, 'publicKey': publicKey}),
+            body: jsonEncode({
+              'apikey': key,
+              'publicKey': publicKey,
+              if (subred != null && subred.trim().isNotEmpty)
+                'subred': subred.trim(),
+              if (ipLocal != null && ipLocal.trim().isNotEmpty)
+                'ipLocal': ipLocal.trim(),
+            }),
           )
           .timeout(const Duration(seconds: 15));
-      if (resp.statusCode == 200) {
-        final j = jsonDecode(resp.body) as Map<String, dynamic>;
-        return j['ok'] == true;
+      Map<String, dynamic> j = const {};
+      try {
+        final decoded = jsonDecode(resp.body);
+        if (decoded is Map<String, dynamic>) j = decoded;
+      } catch (_) {
+        // El VPS no devolvió JSON (p. ej. versión vieja sin el endpoint).
       }
+      if (resp.statusCode == 200 && j['ok'] == true) {
+        final red = (j['redAntenas'] ?? '').toString().trim();
+        final ip = (j['ip'] ?? '').toString().trim();
+        return WgMikrotikVps(
+          ok: true,
+          ip: ip.isEmpty ? null : ip,
+          ipReasignada: j['ipReasignada'] == true,
+          redAntenas: red.isEmpty ? null : red,
+        );
+      }
+      final msg = (j['error'] ?? '').toString().trim();
       debugPrint(
           '[VpsService] /wg/register-mikrotik error ${resp.statusCode}: ${resp.body}');
-      return false;
+      return WgMikrotikVps(
+        ok: false,
+        error: msg.isNotEmpty
+            ? msg
+            : 'El VPS rechazó el registro (${resp.statusCode}). '
+                'Verificá que el VPS esté actualizado.',
+      );
     } catch (e) {
       debugPrint('[VpsService] /wg/register-mikrotik no disponible: $e');
-      return false;
+      return const WgMikrotikVps(
+        ok: false,
+        error: 'No se pudo contactar al VPS.',
+      );
     }
   }
 
@@ -489,4 +533,31 @@ class WgRegistroVps {
 
   /// Subred de antenas asignada al usuario (10.10.x.0/24, no editable).
   final String? redAntenas;
+}
+
+/// Respuesta de POST /wg/register-mikrotik.
+class WgMikrotikVps {
+  const WgMikrotikVps({
+    required this.ok,
+    this.ip,
+    this.ipReasignada = false,
+    this.redAntenas,
+    this.error,
+  });
+
+  /// true si el VPS registró el peer del MikroTik.
+  final bool ok;
+
+  /// IP del túnel que quedó efectivamente asignada (10.50.50.x).
+  /// Puede diferir de la generada en la app si el VPS la encontró ocupada.
+  final String? ip;
+
+  /// true si el VPS tuvo que reasignar la IP del túnel (ya estaba en uso).
+  final bool ipReasignada;
+
+  /// Subred de gestión/antenas que quedó activa (ej. "192.168.10.0/24").
+  final String? redAntenas;
+
+  /// Mensaje de error del VPS (ej. subred ya en uso por otra empresa).
+  final String? error;
 }

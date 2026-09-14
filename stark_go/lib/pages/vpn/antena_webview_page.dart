@@ -27,9 +27,14 @@ import 'package:webview_flutter_android/webview_flutter_android.dart';
 // ══════════════════════════════════════════════════════════════
 
 class AntenaWebViewPage extends StatefulWidget {
-  const AntenaWebViewPage({super.key, required this.antena});
+  const AntenaWebViewPage({super.key, required this.antena, this.ipAbrir});
 
   final AntenaModel antena;
+
+  /// IP con la que se abre la interfaz. Si es null/vacía se usa `antena.ip`.
+  /// Con **netmap** llega la IP virtual del túnel (ej. 10.10.15.10), que el
+  /// MikroTik traduce a la IP real (ej. 192.168.1.10).
+  final String? ipAbrir;
 
   @override
   State<AntenaWebViewPage> createState() => _AntenaWebViewPageState();
@@ -49,8 +54,14 @@ class _AntenaWebViewPageState extends State<AntenaWebViewPage> {
 
   late final StreamSubscription<VpnStatus> _sub;
 
+  /// IP efectiva con la que se abre el equipo (real, o virtual si usa netmap).
+  String get _ipAbrir {
+    final v = (widget.ipAbrir ?? '').trim();
+    return v.isEmpty ? widget.antena.ip : v;
+  }
+
   /// URL según el esquema en uso: primero http y, tras el fallo, https.
-  String get _urlInterfaz => '${_probadoHttps ? 'https' : 'http'}://${widget.antena.ip}';
+  String get _urlInterfaz => '${_probadoHttps ? 'https' : 'http'}://$_ipAbrir';
 
   @override
   void initState() {
@@ -113,7 +124,7 @@ class _AntenaWebViewPageState extends State<AntenaWebViewPage> {
             }
             setState(() {
               _cargando = false;
-              _error = 'No se pudo cargar la interfaz de ${widget.antena.ip} '
+              _error = 'No se pudo cargar la interfaz de $_ipAbrir '
                   '(probamos http y https).';
             });
           },
@@ -188,7 +199,8 @@ class _AntenaWebViewPageState extends State<AntenaWebViewPage> {
                     ),
                   ),
                   Text(
-                    '${widget.antena.ip}  ·  ${widget.antena.esSectorial ? 'Sectorial' : 'Cliente'}',
+                    '${widget.antena.ip}${_ipAbrir == widget.antena.ip ? '' : ' → $_ipAbrir'}'
+                    '  ·  ${widget.antena.esSectorial ? 'Sectorial' : 'Cliente'}',
                     style: GoogleFonts.dmSans(color: Colors.white54, fontSize: 11),
                   ),
                 ],

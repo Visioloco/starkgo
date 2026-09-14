@@ -66,6 +66,9 @@ class _FichasLocalWidgetState extends State<FichasLocalWidget> {
   bool _limpiandoUsadas = false;
   bool _autoLimpiarUsadas = false;
 
+  // Aplicar 'limit-uptime' a fichas viejas
+  bool _aplicandoLimite = false;
+
   @override
   void initState() {
     super.initState();
@@ -212,6 +215,63 @@ class _FichasLocalWidgetState extends State<FichasLocalWidget> {
     }
   }
 
+  /// Aplica el 'limit-uptime' (tiempo total acumulado) a las fichas que NO lo
+  /// tienen, copiando la duración del perfil de cada una. Arregla las fichas
+  /// viejas creadas antes de este cambio.
+  Future<void> _aplicarLimiteFichas() async {
+    // perfil -> duración (ej. "1h")
+    final porPerfil = <String, String>{};
+    for (final p in perfiles) {
+      final n = (p['name'] ?? '').toString();
+      final st = (p['session-timeout'] ?? '').toString().trim();
+      if (n.isNotEmpty && st.isNotEmpty && st != '0s' && st != '0') {
+        porPerfil[n] = st;
+      }
+    }
+
+    final pendientes = fichas.where((f) {
+      final lu = (f['limit-uptime'] ?? '').toString().trim();
+      return lu.isEmpty || lu == '0s' || lu == '0';
+    }).toList();
+
+    if (pendientes.isEmpty) {
+      _snack('Todas las fichas ya tienen su límite de tiempo', _C.textPri);
+      return;
+    }
+
+    setState(() => _aplicandoLimite = true);
+    var aplicadas = 0;
+    var sinPerfil = 0;
+    try {
+      for (final f in pendientes) {
+        final id = f['.id']?.toString();
+        final perfil = (f['profile'] ?? '').toString();
+        final limite = porPerfil[perfil];
+        if (id == null || id.isEmpty) continue;
+        if (limite == null) {
+          sinPerfil++;
+          continue;
+        }
+        try {
+          await widget.api.aplicarLimitUptime(id: id, limitUptime: limite);
+          aplicadas++;
+        } catch (_) {
+          // si una falla, seguimos con las demás
+        }
+      }
+      await _cargarDatos();
+      final partes = <String>[];
+      if (aplicadas > 0) partes.add('$aplicadas actualizada(s)');
+      if (sinPerfil > 0) partes.add('$sinPerfil sin perfil con duración');
+      _snack(
+        'Límite de tiempo: ${partes.isEmpty ? 'no se pudo actualizar ninguna' : partes.join(', ')}',
+        aplicadas > 0 ? _C.success : _C.warning,
+      );
+    } finally {
+      if (mounted) setState(() => _aplicandoLimite = false);
+    }
+  }
+
   Future<void> _cargarPdfs() async {
     if (mounted) setState(() => _cargandoPdfs = true);
     try {
@@ -263,6 +323,19 @@ class _FichasLocalWidgetState extends State<FichasLocalWidget> {
 
     setState(() => _generando = true);
 
+    // Duración del perfil seleccionado (MikroTik la devuelve como "1h", "1d"…).
+    // Se copia como 'limit-uptime' en cada ficha: ESO es lo que hace que la
+    // ficha se ACABE (tiempo total acumulado). El 'session-timeout' del perfil
+    // solo limita cada sesión y se reinicia al volver a entrar.
+    String? limitUptime;
+    for (final p in perfiles) {
+      if ((p['name']?.toString() ?? '') == _perfilSeleccionado) {
+        final st = (p['session-timeout'] ?? '').toString().trim();
+        if (st.isNotEmpty && st != '0s' && st != '0') limitUptime = st;
+        break;
+      }
+    }
+
     final codigosCreados = <String>[];
     final existentes = fichas.map((f) => (f['name']?.toString() ?? '').toLowerCase()).toSet();
 
@@ -270,7 +343,11 @@ class _FichasLocalWidgetState extends State<FichasLocalWidget> {
       for (int i = 0; i < _cantidadFichas; i++) {
         final codigo = _generarCodigoUnico(existentes);
         // El mismo código se usa como usuario y como clave del ticket.
-        await widget.api.crearFicha(codigo: codigo, perfil: _perfilSeleccionado!);
+        await widget.api.crearFicha(
+          codigo: codigo,
+          perfil: _perfilSeleccionado!,
+          limitUptime: limitUptime,
+        );
         codigosCreados.add(codigo);
         if (i < _cantidadFichas - 1) await Future.delayed(const Duration(milliseconds: 100));
       }
@@ -972,38 +1049,59 @@ class _FichasLocalWidgetState extends State<FichasLocalWidget> {
         // Lista de fichas
         if (fichas.isNotEmpty)
           Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: Row(children: [
-              Expanded(
-                child: Text('Fichas en el router (${fichas.length})',
-                    style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 13.5, fontWeight: FontWeight.w700)),
-              ),
-              GestureDetector(
-                onTap: () => setState(() => _autoLimpiarUsadas = !_autoLimpiarUsadas),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Icon(_autoLimpiarUsadas ? Icons.toggle_on_rounded : Icons.toggle_off_rounded,
-                      color: _autoLimpiarUsadas ? _C.success : _C.textSec, size: 22),
-                  const SizedBox(width: 3),
-                  Text('Auto', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10.5)),
-                ]),
-              ),
-              const SizedBox(width: 6),
-              if (_fichasUsadas.isNotEmpty)
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Expanded(
+                  child: Text('Fichas en el router (${fichas.length})',
+                      style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 13.5, fontWeight: FontWeight.w700)),
+                ),
                 GestureDetector(
-                  onTap: _limpiandoUsadas ? null : () => _limpiarFichasUsadas(),
+                  onTap: () => setState(() => _autoLimpiarUsadas = !_autoLimpiarUsadas),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(_autoLimpiarUsadas ? Icons.toggle_on_rounded : Icons.toggle_off_rounded,
+                        color: _autoLimpiarUsadas ? _C.success : _C.textSec, size: 22),
+                    const SizedBox(width: 3),
+                    Text('Auto', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10.5)),
+                  ]),
+                ),
+              ]),
+              const SizedBox(height: 10),
+              Row(children: [
+                // Aplica 'limit-uptime' a las fichas viejas que no lo tienen.
+                GestureDetector(
+                  onTap: (_aplicandoLimite || _generando) ? null : _aplicarLimiteFichas,
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-                    decoration: BoxDecoration(color: _C.warning.withOpacity(0.12), borderRadius: BorderRadius.circular(10)),
-                    child: _limpiandoUsadas
-                        ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 2, color: _C.warning))
+                    decoration: BoxDecoration(color: _C.primary.withOpacity(0.12), borderRadius: BorderRadius.circular(10)),
+                    child: _aplicandoLimite
+                        ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 2, color: _C.primary))
                         : Row(mainAxisSize: MainAxisSize.min, children: [
-                            const Icon(Icons.cleaning_services_rounded, size: 13, color: _C.warning),
+                            const Icon(Icons.timer_rounded, size: 13, color: _C.primary),
                             const SizedBox(width: 5),
-                            Text('Usadas (${_fichasUsadas.length})',
-                                style: GoogleFonts.spaceGrotesk(color: _C.warning, fontSize: 11, fontWeight: FontWeight.w700)),
+                            Text('Aplicar tiempo a viejas',
+                                style: GoogleFonts.spaceGrotesk(color: _C.primary, fontSize: 11, fontWeight: FontWeight.w700)),
                           ]),
                   ),
                 ),
+                const Spacer(),
+                if (_fichasUsadas.isNotEmpty)
+                  GestureDetector(
+                    onTap: _limpiandoUsadas ? null : () => _limpiarFichasUsadas(),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                      decoration: BoxDecoration(color: _C.warning.withOpacity(0.12), borderRadius: BorderRadius.circular(10)),
+                      child: _limpiandoUsadas
+                          ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 2, color: _C.warning))
+                          : Row(mainAxisSize: MainAxisSize.min, children: [
+                              const Icon(Icons.cleaning_services_rounded, size: 13, color: _C.warning),
+                              const SizedBox(width: 5),
+                              Text('Usadas (${_fichasUsadas.length})',
+                                  style: GoogleFonts.spaceGrotesk(color: _C.warning, fontSize: 11, fontWeight: FontWeight.w700)),
+                            ]),
+                    ),
+                  ),
+              ]),
             ]),
           ),
         if (fichas.isEmpty)

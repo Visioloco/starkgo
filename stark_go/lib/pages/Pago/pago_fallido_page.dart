@@ -1,11 +1,16 @@
+import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:http/http.dart' as http;
 
 import '../../plan_model.dart';
+import '../../services/notificaciones_service.dart';
 import '../renovar_membresia/renovar_membresia_widget.dart';
+import 'pago_exitoso_page.dart';
 
 class PagoFallidoPage extends StatefulWidget {
   final Plan plan;
@@ -25,10 +30,33 @@ class _PagoFallidoPageState extends State<PagoFallidoPage> with TickerProviderSt
   late AnimationController _bgController;
   late AnimationController _shakeController;
 
+  /// URL del VPS (mismo que usan los botones de pago).
+  static const String _vpsUrl = 'http://5.161.88.42:3000';
+
+  /// true mientras se consulta al VPS si el pago ya se acreditó.
+  bool _verificando = false;
+
   @override
   void initState() {
     super.initState();
     HapticFeedback.vibrate();
+
+    // 🔔 Notificación local del resultado del pago.
+    if (widget.esPendiente) {
+      NotificacionesService.instance.notificarPagoPendiente(
+        titulo: '⏳ Pago en revisión · ${widget.plan.duracion}',
+        detalle: 'El pago de ${widget.plan.precioCopTexto} quedó en revisión '
+            '(banco/pasarela). Se activa solo cuando se apruebe: '
+            'tocá "Verificar estado".',
+      );
+    } else {
+      NotificacionesService.instance.notificarPagoFallido(
+        titulo: '❌ Pago rechazado · ${widget.plan.duracion}',
+        detalle: 'No se pudo procesar el pago de '
+            '${widget.plan.precioCopTexto}. Probá con otra tarjeta '
+            'o con Mercado Pago.',
+      );
+    }
     _bgController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 4),
@@ -57,8 +85,70 @@ class _PagoFallidoPageState extends State<PagoFallidoPage> with TickerProviderSt
   String get _titulo => widget.esPendiente ? 'Pago pendiente' : 'Pago rechazado';
 
   String get _subtitulo => widget.esPendiente
-      ? 'Tu pago está siendo procesado.\nTe notificaremos cuando se confirme.'
+      ? 'Tu pago está siendo procesado.\nTocá "Verificar estado": si ya se acreditó, se activa al instante.'
       : 'No pudimos procesar tu pago.\nPor favor intenta con otro método.';
+
+  // ══════════════════════════════════════════════════════════
+  //  Verificar el pago contra el VPS (Rapid)
+  //  El VPS consulta los pagos acreditados del usuario y, si encuentra
+  //  alguno, activa la membresía y acá mostramos la pantalla de éxito.
+  // ══════════════════════════════════════════════════════════
+  Future<void> _verificarPago() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      _snack('Sesión expirada. Volvé a iniciar sesión.', const Color(0xFFE53935));
+      return;
+    }
+    setState(() => _verificando = true);
+    try {
+      final token = await user.getIdToken(true);
+      final resp = await http
+          .post(
+            Uri.parse('$_vpsUrl/rapid/verificar'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+            body: jsonEncode({'planId': widget.plan.id}),
+          )
+          .timeout(const Duration(seconds: 25));
+
+      if (!mounted) return;
+      Map<String, dynamic> data = const {};
+      try {
+        final dec = jsonDecode(resp.body);
+        if (dec is Map<String, dynamic>) data = dec;
+      } catch (_) {}
+
+      if (resp.statusCode == 200 && data['pagado'] == true) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => PagoExitosoPage(plan: widget.plan)),
+        );
+        return;
+      }
+      _snack(
+        'Todavía no figura el pago acreditado.\n'
+        'Si ya pagaste, esperá un minuto y tocá de nuevo.',
+        const Color(0xFFF59E0B),
+      );
+    } catch (e) {
+      if (mounted) {
+        _snack('No se pudo verificar el pago: $e', const Color(0xFFE53935));
+      }
+    } finally {
+      if (mounted) setState(() => _verificando = false);
+    }
+  }
+
+  void _snack(String msg, Color color) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg, style: GoogleFonts.dmSans(color: Colors.white, fontSize: 13)),
+      backgroundColor: color,
+      behavior: SnackBarBehavior.floating,
+      duration: const Duration(seconds: 5),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    ));
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -216,14 +306,29 @@ class _PagoFallidoPageState extends State<PagoFallidoPage> with TickerProviderSt
                     color: Colors.transparent,
                     child: InkWell(
                       borderRadius: BorderRadius.circular(16),
-                      onTap: () => Navigator.of(context).pushAndRemoveUntil(
-                        MaterialPageRoute(builder: (_) => const RenovarMembresiaWidget()),
-                        (route) => route.isFirst,
-                      ),
+                      onTap: _verificando
+                          ? null
+                          : () => widget.esPendiente
+                              ? _verificarPago()
+                              : Navigator.of(context).pushAndRemoveUntil(
+                                  MaterialPageRoute(builder: (_) => const RenovarMembresiaWidget()),
+                                  (route) => route.isFirst,
+                                ),
                       child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                        Icon(widget.esPendiente ? Icons.refresh_rounded : Icons.replay_rounded, color: Colors.white, size: 20),
+                        if (_verificando)
+                          const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation(Colors.white)),
+                          )
+                        else
+                          Icon(widget.esPendiente ? Icons.refresh_rounded : Icons.replay_rounded,
+                              color: Colors.white, size: 20),
                         const SizedBox(width: 10),
-                        Text(widget.esPendiente ? 'Verificar estado' : 'Intentar de nuevo',
+                        Text(
+                            _verificando
+                                ? 'Verificando…'
+                                : (widget.esPendiente ? 'Verificar estado' : 'Intentar de nuevo'),
                             style: GoogleFonts.dmSans(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
                       ]),
                     ),

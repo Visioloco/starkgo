@@ -66,6 +66,29 @@ class ConfigMikroTikModel extends FlutterFlowModel<ConfigMikroTikWidget> {
     return null;
   }
 
+  // ── Red local del operador (tu red real, no la del túnel) ──
+  // IP local / puerta de enlace del MikroTik (ej. "192.168.10.1").
+  FocusNode? ipLocalFocusNode;
+  TextEditingController? ipLocalController;
+  String? Function(BuildContext, String?)? ipLocalControllerValidator;
+  String? _ipLocalControllerValidator(BuildContext context, String? val) {
+    if (val == null || val.trim().isEmpty) {
+      return 'IP local is required';
+    }
+    return null;
+  }
+
+  // Subred local declarada por el operador (ej. "192.168.10.0/24").
+  FocusNode? subredLocalFocusNode;
+  TextEditingController? subredLocalController;
+  String? Function(BuildContext, String?)? subredLocalControllerValidator;
+  String? _subredLocalControllerValidator(BuildContext context, String? val) {
+    if (val == null || val.trim().isEmpty) {
+      return 'Subred local is required';
+    }
+    return null;
+  }
+
   // ── Public Key WireGuard del MikroTik (para registrar en el VPS) ──
   FocusNode? mikrotikPubKeyFocusNode;
   TextEditingController? mikrotikPubKeyController;
@@ -86,6 +109,8 @@ class ConfigMikroTikModel extends FlutterFlowModel<ConfigMikroTikWidget> {
     mikrotikIpControllerValidator = _mikrotikIpControllerValidator;
     mikrotikUserControllerValidator = _mikrotikUserControllerValidator;
     mikrotikPassControllerValidator = _mikrotikPassControllerValidator;
+    ipLocalControllerValidator = _ipLocalControllerValidator;
+    subredLocalControllerValidator = _subredLocalControllerValidator;
   }
 
   @override
@@ -107,5 +132,11 @@ class ConfigMikroTikModel extends FlutterFlowModel<ConfigMikroTikWidget> {
 
     mikrotikPubKeyFocusNode?.dispose();
     mikrotikPubKeyController?.dispose();
+
+    ipLocalFocusNode?.dispose();
+    ipLocalController?.dispose();
+
+    subredLocalFocusNode?.dispose();
+    subredLocalController?.dispose();
   }
 }

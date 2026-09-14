@@ -8,6 +8,7 @@ import '/index.dart';
 
 import '../../plan_model.dart';
 import '../../services/bienvenida_service.dart';
+import '../../services/notificaciones_service.dart';
 
 class PagoExitosoPage extends StatefulWidget {
   final Plan plan;
@@ -28,6 +29,14 @@ class _PagoExitosoPageState extends State<PagoExitosoPage> with TickerProviderSt
     // Se mostrará UNA sola vez cuando navegue al Home.
     BienvenidaService.marcarBienvenidaPendiente(widget.plan);
     HapticFeedback.heavyImpact();
+
+    // 🔔 Notificación local: el pago se acreditó y la membresía quedó activa.
+    NotificacionesService.instance.notificarPagoExitoso(
+      titulo: '✅ Pago confirmado · ${widget.plan.duracion}',
+      detalle: 'Tu membresía quedó ACTIVA. '
+          'Pagaste ${widget.plan.precioCopTexto} (US\$${widget.plan.precio}). '
+          '¡Gracias!',
+    );
 
     _particleController = AnimationController(
       vsync: this,

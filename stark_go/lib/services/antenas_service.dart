@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:http/http.dart' as http;
 import 'package:rxdart/rxdart.dart';
 
 // ══════════════════════════════════════════════════════════════
@@ -56,6 +57,22 @@ class AntenaModel {
 
   /// URL de la interfaz airOS nativa.
   String get urlAirOs => 'http://$ip';
+
+  /// IP con la que se abre la interfaz desde la VPN:
+  ///  · [netmap] = false → la IP real (`ipatn` / `sectoriales.ip`).
+  ///  · [netmap] = true  → la IP **virtual** equivalente dentro de la subred
+  ///    del túnel (misma última octeta), que el MikroTik traduce con netmap.
+  String ipParaVpn({required String redTunel, required bool netmap}) =>
+      netmap ? AntenasService.ipVirtual(ip, redTunel) : ip;
+
+  /// true si la antena es alcanzable por el túnel con el modo actual.
+  bool ipValidaVpn({required String redTunel, required bool netmap}) =>
+      AntenasService.ipEnSubred(
+          ipParaVpn(redTunel: redTunel, netmap: netmap), redTunel);
+
+  /// URL airOS considerando el modo (real o virtual por netmap).
+  String urlAirOsVpn({required String redTunel, required bool netmap}) =>
+      'http://${ipParaVpn(redTunel: redTunel, netmap: netmap)}';
 
   /// Copia con campos editables (para editar un sectorial).
   AntenaModel copyWith({
@@ -129,6 +146,20 @@ class AntenaModel {
   }
 }
 
+/// Resultado de una prueba de conexión (HTTP/HTTPS) a una IP del túnel.
+class PruebaConexion {
+  const PruebaConexion({required this.ok, required this.detalle, this.http});
+
+  /// true si el equipo **respondió** (aunque sea con 401/403/302).
+  final bool ok;
+
+  /// Explicación corta para mostrar al usuario.
+  final String detalle;
+
+  /// Código HTTP, si hubo respuesta.
+  final int? http;
+}
+
 class AntenasService {
   static const String _coleccionClientes = 'clientes';
   static const String _coleccionSectoriales = 'sectoriales';
@@ -163,6 +194,131 @@ class AntenasService {
     if (a == null || b == null) return false;
     final mask = prefix == 0 ? 0 : (0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF;
     return (a & mask) == (b & mask);
+  }
+
+  /// true si `cidr` tiene forma de subred válida (IP + prefijo 16..30).
+  static bool cidrValido(String cidr) {
+    final c = cidr.trim();
+    final slash = c.indexOf('/');
+    if (slash <= 0) return false;
+    final prefix = int.tryParse(c.substring(slash + 1).trim());
+    return _ipToInt(c.substring(0, slash).trim()) != null &&
+        prefix != null &&
+        prefix >= 16 &&
+        prefix <= 30;
+  }
+
+  /// IP "virtual" que expone el túnel cuando el MikroTik usa **netmap**:
+  /// conserva la última octeta de la IP real y le pone el prefijo de la
+  /// subred del túnel. Es la clave para que dos empresas con la misma red
+  /// local (ej. 192.168.1.x) puedan tener antenas distintas por el túnel:
+  ///
+  ///   `192.168.1.10` + `10.10.15.0/24`  →  `10.10.15.10`
+  ///   `192.168.1.20` + `10.10.15.0/24`  →  `10.10.15.20`
+  ///
+  /// La regla del MikroTik que lo hace real:
+  /// ```routeros
+  /// /ip firewall nat add chain=dstnat in-interface=wg1 \
+  ///   dst-address=10.10.15.1-10.10.15.254 action=netmap \
+  ///   to-addresses=192.168.1.1-192.168.1.254 place-before=0
+  /// ```
+  static String ipVirtual(String ipReal, String redTunel) {
+    final o = ipReal.trim().split('.');
+    final p = redTunel.split('/').first.trim().split('.');
+    if (o.length != 4 || p.length != 4) return ipReal.trim();
+    final ultima = int.tryParse(o[3]);
+    if (ultima == null || ultima < 0 || ultima > 255) return ipReal.trim();
+    return '${p[0]}.${p[1]}.${p[2]}.$ultima';
+  }
+
+  /// Comando RouterOS listo para pegar en el MikroTik cuando se usa netmap.
+  /// Mapea 1:1 la subred del túnel con tu red local (misma última octeta).
+  static String comandoNetmap({
+    required String redTunel,
+    required String redLocal,
+    String interfaz = 'wg1',
+  }) {
+    final t = redTunel.split('/').first.trim().split('.');
+    final l = redLocal.split('/').first.trim().split('.');
+    if (t.length != 4 || l.length != 4) return '';
+    final tBase = '${t[0]}.${t[1]}.${t[2]}';
+    final lBase = '${l[0]}.${l[1]}.${l[2]}';
+    return '/ip firewall nat add chain=dstnat in-interface=$interfaz '
+        'dst-address=$tBase.1-$tBase.254 action=netmap '
+        'to-addresses=$lBase.1-$lBase.254 place-before=0 '
+        'comment="StarkGo netmap"';
+  }
+
+  /// Prueba si un equipo responde por HTTP/HTTPS (se usa con el túnel arriba).
+  ///
+  /// Es la forma de comprobar la **regla netmap**: si la IP virtual responde,
+  /// la traducción está bien hecha. No sigue redirecciones a propósito: un
+  /// `301`/`302` ya demuestra que el equipo contestó.
+  static Future<PruebaConexion> probarIp(
+    String ip, {
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    final host = ip.trim();
+    if (host.isEmpty) {
+      return const PruebaConexion(ok: false, detalle: 'IP vacía');
+    }
+
+    // 1) Web normal: http:// y https:// (sin seguir redirecciones: un
+    //    301/302 ya demuestra que el equipo contestó).
+    for (final url in ['http://$host/', 'https://$host/']) {
+      try {
+        final code = await _getSimple(url, timeout);
+        return PruebaConexion(
+            ok: true, detalle: 'respondió en ${Uri.parse(url).host}:${Uri.parse(url).port}', http: code);
+      } catch (e) {
+        // Certificado autofirmado (típico airOS): respondió a nivel TLS.
+        if (_esErrorTls(e)) {
+          return const PruebaConexion(
+              ok: true,
+              detalle: 'respondió por HTTPS (certificado autofirmado)');
+        }
+      }
+    }
+
+    // 2) Puertos típicos de WebFig/airOS en modo seguro (8085, 8080).
+    for (final url in ['http://$host:8085/', 'http://$host:8080/']) {
+      try {
+        final code = await _getSimple(url, const Duration(seconds: 3));
+        return PruebaConexion(
+            ok: true, detalle: 'respondió en $host:${Uri.parse(url).port}', http: code);
+      } catch (e) {
+        if (_esErrorTls(e)) {
+          return const PruebaConexion(
+              ok: true, detalle: 'respondió por HTTPS (certificado autofirmado)');
+        }
+      }
+    }
+
+    return PruebaConexion(
+        ok: false,
+        detalle:
+            'no respondió en ${timeout.inSeconds}s (probé http, https, :8085 y :8080)');
+  }
+
+  /// GET que acepta cualquier respuesta (incluso error) y no sigue redirects.
+  static Future<int> _getSimple(String url, Duration timeout) async {
+    final client = http.Client();
+    try {
+      final req = http.Request('GET', Uri.parse(url))..followRedirects = false;
+      final resp = await client.send(req).timeout(timeout);
+      return resp.statusCode;
+    } finally {
+      client.close();
+    }
+  }
+
+  /// true si la excepción es de TLS/certificado (el equipo SÍ contestó).
+  static bool _esErrorTls(Object e) {
+    final s = e.toString().toLowerCase();
+    return s.contains('handshake') ||
+        s.contains('certificate') ||
+        s.contains('tls') ||
+        s.contains('ssl');
   }
 
   /// Stream en tiempo real de las antenas del usuario/técnico autenticado:
