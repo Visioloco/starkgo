@@ -9,6 +9,22 @@ import 'package:flutter/foundation.dart';
 ///
 /// IMPORTANTE: SOLO cambia el color/estado del cliente. NO corta el acceso
 /// ni envía la cola a MikroTik. Eso se hace manualmente con los botones.
+/// Convierte cualquier valor de fecha de Firestore a DateTime.
+///
+/// OJO: en Firestore `DateTime.now()` se guarda como `Timestamp`, así que al
+/// leerlo crudo (sin pasar por `mapFromFirestore`) llega un `Timestamp` y el
+/// cast `as DateTime?` reventaba con:
+///   "type 'Timestamp' is not a subtype of type 'DateTime?' in type cast"
+/// Ese error abortaba toda la mora automática.
+DateTime? _aFecha(dynamic v) {
+  if (v == null) return null;
+  if (v is DateTime) return v;
+  if (v is Timestamp) return v.toDate();
+  if (v is int) return DateTime.fromMillisecondsSinceEpoch(v);
+  if (v is String) return DateTime.tryParse(v);
+  return null;
+}
+
 class MoraAutomaticaService {
   /// Ejecuta la marcación automática de mora.
   ///
@@ -29,7 +45,8 @@ class MoraAutomaticaService {
 
       // 2. Evitar repetir la marcación el mismo día
       final now = DateTime.now();
-      final ultimaEjecucion = config['ultimaMoraAutomatica'] as DateTime?;
+      // OJO: leer SIEMPRE con _aFecha (el valor es un Timestamp de Firestore).
+      final ultimaEjecucion = _aFecha(config['ultimaMoraAutomatica']);
       if (ultimaEjecucion != null &&
           ultimaEjecucion.year == now.year &&
           ultimaEjecucion.month == now.month &&
@@ -55,7 +72,7 @@ class MoraAutomaticaService {
         // Solo marcar a los que están activos
         if (status != 'activo') continue;
 
-        final DateTime? ultimoPago = data['ultimoPago'] as DateTime?;
+        final DateTime? ultimoPago = _aFecha(data['ultimoPago']);
 
         // Si no tiene registro de último pago → está en mora
         // Si su último pago fue ANTES del día de vencimiento de este mes → está en mora

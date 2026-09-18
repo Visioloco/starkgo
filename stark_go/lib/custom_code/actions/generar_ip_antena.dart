@@ -99,7 +99,7 @@ Future<String> generarIpAntena() async {
   throw Exception(
     'No hay IPs disponibles en el rango $base$rangoInicio - $base$rangoFin. '
     'Todas las ${rangoFin - rangoInicio + 1} IPs están en uso. '
-    'Declará tu subred local en Config. MikroTik para ampliar el rango.',
+    'Declará tu subred local en Configurar VPN para ampliar el rango.',
   );
 }
 

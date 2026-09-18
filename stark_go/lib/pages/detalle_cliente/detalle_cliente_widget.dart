@@ -575,6 +575,9 @@ class _DetalleClienteWidgetState extends State<DetalleClienteWidget> {
 
   Future<void> _guardarTodo(ClientesRecord c, Map<String, dynamic> raw) async {
     setState(() => _guardando = true);
+    // false = el VPS no aceptó la Simple Queue / el blindaje del hotspot.
+    bool colaOk = true;
+    String ipCola = '';
     try {
       final updates = <String, dynamic>{};
       final nombre = _ctrlNombre.text.trim();
@@ -630,7 +633,8 @@ class _DetalleClienteWidgetState extends State<DetalleClienteWidget> {
         if (velNueva != null && velNueva != velAnterior) {
           final nombre = '${_ctrlNombre.text.trim()} ${_ctrlApellido.text.trim()}'.trim();
           final ip = _ctrlIpAtn.text.trim().isNotEmpty ? _ctrlIpAtn.text.trim() : c.ipatn;
-          await VpsService.clienteCreado(
+          ipCola = ip;
+          colaOk = await VpsService.clienteCreado(
             nombre: nombre,
             ip: ip,
             velocidad: velNueva,
@@ -661,6 +665,26 @@ class _DetalleClienteWidgetState extends State<DetalleClienteWidget> {
           behavior: SnackBarBehavior.floating,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ));
+        if (!colaOk) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Icon(Icons.warning_amber_rounded, color: Colors.white, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Se guardó la velocidad, pero el VPS no aceptó la Simple Queue / '
+                  'el blindaje de $ipCola. Revisá la API Key en Config. MikroTik '
+                  'y que el VPS esté en línea.',
+                  style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 12.5),
+                ),
+              ),
+            ]),
+            backgroundColor: _C.warning,
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 8),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ));
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -738,7 +762,10 @@ class _DetalleClienteWidgetState extends State<DetalleClienteWidget> {
     final nombre = '${cliente.nombre} ${cliente.apellido ?? ''}'.trim();
 
     // ── VpsService lee el apikey de Firestore automáticamente ──
-    await VpsService.cambiarStatus(status: nuevoStatus, ip: ip, nombre: nombre);
+    // Devuelve false si el VPS no aceptó el comando (API Key distinta o VPS
+    // caído): el estado cambió en la app pero el router sigue igual.
+    final bool statusOk =
+        await VpsService.cambiarStatus(status: nuevoStatus, ip: ip, nombre: nombre);
 
     if (nuevoStatus == 'mora') {
       final numero = cliente.numero.toString().trim();
@@ -776,6 +803,26 @@ class _DetalleClienteWidgetState extends State<DetalleClienteWidget> {
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ));
+      if (!statusOk) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Icon(Icons.warning_amber_rounded, color: Colors.white, size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'El estado se guardó en la app, pero el VPS no aceptó el comando '
+                'para la IP $ip. Revisá la API Key en Config. MikroTik y que el '
+                'VPS esté en línea.',
+                style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 12.5),
+              ),
+            ),
+          ]),
+          backgroundColor: _C.warning,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 8),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ));
+      }
     }
   }
 

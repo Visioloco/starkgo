@@ -65,5 +65,10 @@ node_modules/
 # dotenv environment variables file
 .env
 
+# Artefactos locales (no van al repo)
+mojibake_detalle.txt
+.continue/
+
+
 # dataconnect generated files
 .dataconnect

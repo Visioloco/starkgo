@@ -1,39 +1,57 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /user/{document} {
-      allow create: if true;
-      allow read: if true;
-      allow write: if true;
-      allow delete: if true;
-    }
 
-    match /clientes/{document} {
-      allow create: if true;
-      allow read: if true;
-      allow write: if true;
-      allow delete: if true;
-    }
+    // ══════════════════════════════════════════════════════════════════
+    //  IMPORTANTE: las reglas de Firestore son ADITIVAS. Si existe una
+    //  regla comodín `match /{document=**} { allow ... }`, NO se puede
+    //  "quitar" el acceso a una colección con otra regla `if false`:
+    //  alcanza con que UNA regla permita para que el acceso se conceda.
+    //  Por eso acá se listan las colecciones de la app y NO hay comodín:
+    //  lo que no está listado (config_pagos, portal_vps, etc.) queda
+    //  DENEGADO para la app. El VPS usa el Admin SDK (ignora las reglas).
+    // ══════════════════════════════════════════════════════════════════
 
-    match /reportepago/{document} {
-      allow create: if true;
-      allow read: if true;
-      allow write: if true;
-      allow delete: if true;
-    }
+    // ── Espejo PÚBLICO de pasarelas (sin secretos) ──
+    match /config_publica/{doc} { allow read: if true; allow write: if false; }
 
-    match /finanzas/{document} {
-      allow create: if true;
-      allow read: if true;
-      allow write: if true;
-      allow delete: if true;
-    }
+    // ── Registro de usuarios (no se puede bloquear) ──
+    match /user/{doc} { allow create: if true; allow read, write: if request.auth != null; }
 
-    match /sectoriales/{document} {
-      allow create: if true;
-      allow read: if true;
-      allow write: if true;
-      allow delete: if true;
-    }
+    // ══ Datos de la app: solo usuarios logueados ══
+    match /clientes/{doc}                { allow read, write: if request.auth != null; }
+    match /equipos/{doc}                 { allow read, write: if request.auth != null; }
+    match /reportepago/{doc}             { allow read, write: if request.auth != null; }
+    match /starlinks/{doc}               { allow read, write: if request.auth != null; }
+    match /starlink_clientes_pago/{doc}  { allow read, write: if request.auth != null; }
+    match /finanzas/{doc}                { allow read, write: if request.auth != null; }
+    match /sectoriales/{doc}             { allow read, write: if request.auth != null; }
+    match /planes/{doc}                  { allow read, write: if request.auth != null; }
+    match /velocidades/{doc}             { allow read, write: if request.auth != null; }
+    match /pppoe_clientes/{doc}          { allow read, write: if request.auth != null; }
+    match /fichas_generadas/{doc}        { allow read, write: if request.auth != null; }
+    match /fichas_vauches/{doc}          { allow read, write: if request.auth != null; }
+    match /hotspot_design/{doc}          { allow read, write: if request.auth != null; }
+    match /bienvenida/{doc}              { allow read, write: if request.auth != null; }
+    match /tutorial/{doc}                { allow read, write: if request.auth != null; }
+    match /usuarios/{doc}                { allow read, write: if request.auth != null; }
+    match /consumo_diario/{doc}          { allow read, write: if request.auth != null; }
+    match /consumo_mensual/{doc}         { allow read, write: if request.auth != null; }
+    match /consumo_snapshots/{doc}       { allow read, write: if request.auth != null; }
+    match /wg_peers/{doc}                { allow read, write: if request.auth != null; }
+
+    // ══ Configuración del operador (la app las lee/edita) ══
+    match /config_empresa/{doc}          { allow read, write: if request.auth != null; }
+    match /config_mikrotik/{doc}         { allow read, write: if request.auth != null; }
+    match /config_ultramsg/{doc}         { allow read, write: if request.auth != null; }
+    match /config_evolution_api/{doc}    { allow read, write: if request.auth != null; }
+    match /configuracion_local/{doc}     { allow read, write: if request.auth != null; }
+    match /configuracion_vps/{doc}       { allow read, write: if request.auth != null; }
+    match /vpn_config/{doc}              { allow read, write: if request.auth != null; }
+    match /whatsapp_instances/{doc}      { allow read, write: if request.auth != null; }
+
+    // ── config_pagos/{...}, portal_vps/{...} y todo lo demás: SOLO el VPS ──
   }
 }
+
+

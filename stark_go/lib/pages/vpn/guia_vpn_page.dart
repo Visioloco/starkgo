@@ -200,7 +200,7 @@ class _GuiaVpnPageState extends State<GuiaVpnPage> {
                                 '1) En Winbox: New Terminal (ícono de consola, arriba a la derecha).\n'
                                 '2) Pegá el comando de abajo (es el tuyo, ya completado) y dale Enter.\n'
                                 '3) Andá a IP → Firewall → pestaña NAT y comprobá que la regla esté ahí (y arriba de todo).\n'
-                                '4) Probá con el botón "Probar la regla netmap" en Config. MikroTik.\n\n'
+                                '4) Probá con el botón "Probar la regla netmap" en Configurar VPN.\n\n'
                                 '⚠️ Este comando se pega UNA sola vez. No lo repitas: si lo pegás dos veces '
                                 'vas a tener dos reglas iguales.\n\n'
                                 '👉 Traduce así: la antena real ${_ipLocal.isEmpty ? '192.168.1.20' : '${_ipLocal.split('.').take(3).join('.')}.20'} '
@@ -215,7 +215,7 @@ class _GuiaVpnPageState extends State<GuiaVpnPage> {
                                 '4) Gateway: seleccioná wg1.\n'
                                 '5) Clic en OK.\n\n'
                                 '💡 ¿Tus antenas están en tu propia red (ej: 192.168.x.x) y otra empresa usa '
-                                'la misma? Entonces NO uses esta ruta: en Config. MikroTik → "Tu red local" '
+                                'la misma? Entonces NO uses esta ruta: en Configurar VPN → "Tu red local" '
                                 'activá el switch "Uso NAT (netmap)" y volvé a esta guía: te va a dar el '
                                 'comando netmap exacto (así varias empresas pueden repetir 192.168.1.1).',
                         _usarNetmap
@@ -258,9 +258,9 @@ class _GuiaVpnPageState extends State<GuiaVpnPage> {
                         'Registrar la Public Key del MikroTik (ya es automático)',
                         'Con esta key ya NO tenés que tocar el servidor: la app la registra sola en el VPS.\n'
                             '1) Copiá la Public Key de TU MikroTik: Winbox → WireGuard → doble clic sobre wg1 → campo Public Key.\n'
-                            '2) En la app abrí el menú lateral → Config. MikroTik.\n'
-                            '3) Bajá hasta la tarjeta "Peer del MikroTik en el VPS".\n'
-                            '4) Pegá la Public Key en el campo y tocá "Registrar en el VPS".\n'
+                            '2) En la app abrí el menú lateral → VPN · Antenas → ⚙️ Configurar (Configurar VPN).\n'
+                            '3) Bajá hasta la tarjeta "MikroTik (lado del túnel)".\n'
+                            '4) Pegá la Public Key en el campo y tocá "Registrar peer del MikroTik en el VPS".\n'
                             '5) Debe quedar el chip verde "Registrado en el VPS".\n\n'
                             '👉 Si el servidor lo administra OTRA persona (no vos), pasale esa key '
                             'junto con tu IP del túnel y tu subred de antenas.',
@@ -282,7 +282,7 @@ class _GuiaVpnPageState extends State<GuiaVpnPage> {
                         'Si usás New Terminal en vez de Winbox, pegá todo el script de una vez. '
                             'Tus datos ya están completados abajo:',
                         '/interface wireguard add name=wg1 listen-port=13231\n'
-                            '# IP del túnel de TU MikroTik (la generó la app en Configuración MikroTik)\n'
+                            '# IP del túnel de TU MikroTik (la generó la app en Configurar VPN)\n'
                             '/ip address add address=${_mikrotikTunelIp.isEmpty ? '10.50.50.X/24' : '${_mikrotikTunelIp}/24'} interface=wg1\n'
                             '/interface wireguard peers add interface=wg1 \\\n'
                             '  public-key="${_serverPubKey.isEmpty ? '<PUBLIC_KEY_DEL_VPS>' : _serverPubKey}" \\\n'
@@ -300,7 +300,7 @@ class _GuiaVpnPageState extends State<GuiaVpnPage> {
                             '2) Tocá una antena: si abre la pantalla de airOS, ya está todo bien.\n'
                             '3) ¿No abre? Tocá el botón azul de "probar" que está en la tarjeta de la antena: '
                             'te dice si responde o no (y por http o https).\n'
-                            '4) ¿Usás netmap? En Config. MikroTik → "Tu red local" tocá '
+                            '4) ¿Usás netmap? En Configurar VPN → "Tu red local" tocá '
                             '"Probar la regla netmap": si sale ✅ la traducción está bien.\n\n'
                             '❌ Si dice que no responde, mirá la tarjeta "Errores comunes" del final.',
                         null),
@@ -488,7 +488,7 @@ class _GuiaVpnPageState extends State<GuiaVpnPage> {
           _datoCopiable(
             'Tu red local (donde están tus antenas y tu MikroTik)',
             _subredLocal.isEmpty
-                ? 'Ponela en Config. MikroTik → "Tu red local"'
+                ? 'Ponela en Configurar VPN → "Tu red local"'
                 : _subredLocal,
             color: _C.accent,
           ),

@@ -242,12 +242,16 @@ class _CrearPppoeWidgetState extends State<CrearPppoeWidget> {
     }
   }
 
-  // Parsea "bajada/subida" y rellena los campos
+  // Parsea "SUBIDA/BAJADA" y rellena los campos.
+  // OJO: las velocidades guardadas en `velocidades/{uid}.lista` se arman en
+  // Config. Velocidades como "$subida/$bajada" (igual que en Crear Cliente),
+  // así que el PRIMER valor es la SUBIDA y el segundo la BAJADA. Antes estaban
+  // invertidos y el PPPoE quedaba con subida/bajada cambiadas.
   void _aplicarVelocidad(String v) {
     setState(() => _velocidadSel = v);
     final p = v.split('/');
-    _ctrlBajada.text = p.isNotEmpty ? p[0].trim() : '';
-    _ctrlSubida.text = p.length > 1 ? p[1].trim() : '';
+    _ctrlSubida.text = p.isNotEmpty ? p[0].trim() : '';
+    _ctrlBajada.text = p.length > 1 ? p[1].trim() : '';
   }
 
   // Valida formato MikroTik: numero + sufijo (M, K, G) ej: "10M"
@@ -586,7 +590,7 @@ class _CrearPppoeWidgetState extends State<CrearPppoeWidget> {
                     Expanded(
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
                         Text(v, style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 13, fontWeight: FontWeight.w600)),
-                        Text('Bajada ${p[0]}  ·  Subida ${p.length > 1 ? p[1] : '?'}',
+                        Text('Subida ${p[0]}  ·  Bajada ${p.length > 1 ? p[1] : '?'}',
                             style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11)),
                       ]),
                     ),

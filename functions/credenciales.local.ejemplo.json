@@ -1,0 +1,8 @@
+{
+  "_como_usarlo": "Copiá este archivo como 'credenciales.local.json' en la MISMA carpeta (functions/) y reemplazá los valores por tus claves reales. El archivo 'credenciales.local.json' está en .gitignore: NUNCA se sube a git.",
+  "_prioridad": "1) variables de entorno del proceso  2) este archivo  3) Firestore config_pagos/rapid (solo Rapid)",
+  "RAPID_ACCESS_KEY": "rak_TU_ACCESS_KEY",
+  "RAPID_SECRET_KEY": "rsk_TU_SECRET_KEY",
+  "PAYPAL_CLIENT_ID": "TU_PAYPAL_CLIENT_ID",
+  "PAYPAL_CLIENT_SECRET": "TU_PAYPAL_CLIENT_SECRET"
+}

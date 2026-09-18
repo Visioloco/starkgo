@@ -5,7 +5,9 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import 'package:stark_go/services/vps_service.dart';
+import 'package:stark_go/services/antenas_service.dart';
 import 'package:stark_go/services/wireguard_keygen.dart';
+import 'package:stark_go/pages/ConfigMikroTik/config_mikro_tik_widget.dart';
 
 // ══════════════════════════════════════════════════════════════
 //  ConfigVpnWidget — crea/edita la configuración del túnel en
@@ -34,6 +36,9 @@ class _C {
   static String mask(String s) => s.length < 8
       ? '***'
       : '${s.substring(0, 4)}…${s.substring(s.length - 4)}';
+
+  /// Verde de confirmación (mismo tono que el resto de la app).
+  static const Color success = Color(0xFF22C55E);
 }
 
 class ConfigVpnWidget extends StatefulWidget {
@@ -80,6 +85,46 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
   /// Subred de antenas asignada por el VPS (10.10.x.0/24). No editable.
   String? _redAntenas;
 
+  // ══════════════════════════════════════════════════════════════
+  //  LADO MIKROTIK DEL TÚNEL  (colección `config_mikrotik/{uid}`)
+  //
+  //  Todo lo que tiene que ver con el túnel vive ACÁ: la IP del
+  //  MikroTik en el túnel, su Public Key (peer estático), tu red
+  //  local y el modo netmap. En "Config. MikroTik" queda solo la
+  //  configuración del router (datos, scheduler, portal y mora).
+  // ══════════════════════════════════════════════════════════════
+  static const String _colMikrotik = 'config_mikrotik';
+
+  late final TextEditingController _subredLocalCtrl =
+      TextEditingController();
+  late final TextEditingController _ipLocalCtrl = TextEditingController();
+  late final TextEditingController _mikrotikPubKeyCtrl =
+      TextEditingController();
+
+  /// IP del MikroTik dentro del túnel (10.50.50.x).
+  String _mikrotikTunelIp = '';
+  bool _generandoIpTunel = false;
+
+  /// Subred de gestión/antenas activa en el túnel (10.10.x.0/24 o la declarada).
+  String _subredAsignada = '';
+
+  /// Modo **netmap**: el MikroTik traduce la subred del túnel ⇄ tu red local.
+  bool _usarNetmap = false;
+
+  /// IP (real o virtual) del router y API Key del VPS — solo lectura acá.
+  String _mikrotikIp = '';
+  String _vpsApiKey = '';
+
+  /// Peer del MikroTik en el VPS.
+  bool _mikrotikRegistrado = false;
+  bool _registrandoMikrotik = false;
+  String? _errorRegistro;
+  bool _guardandoRedLocal = false;
+
+  /// Prueba de la regla netmap.
+  bool _probandoNetmap = false;
+  String? _testNetmap;
+
   String? get _uid => FirebaseAuth.instance.currentUser?.uid;
 
   /// Enmascara una clave: muestra los primeros 8 caracteres y el resto como ***.
@@ -100,6 +145,8 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
   void initState() {
     super.initState();
     _cargar();
+    // Lado MikroTik del túnel (IP del túnel, peer, red local y netmap).
+    _cargarMikrotik();
   }
 
   @override
@@ -112,8 +159,288 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
     _allowedCtrl.dispose();
     _dnsCtrl.dispose();
     _keepaliveCtrl.dispose();
+    _subredLocalCtrl.dispose();
+    _ipLocalCtrl.dispose();
+    _mikrotikPubKeyCtrl.dispose();
     super.dispose();
   }
+
+  void _snack(String msg, Color color) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg, style: GoogleFonts.spaceGrotesk(color: Colors.white)),
+      backgroundColor: color,
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    ));
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  //  MIKROTIK (lado del túnel) — lectura y guardado
+  // ══════════════════════════════════════════════════════════════
+
+  /// Lee `config_mikrotik/{uid}` (IP del túnel, peer, red local, netmap)
+  /// y la subred REAL del túnel desde `vpn_config/{uid}.redAntenas`.
+  Future<void> _cargarMikrotik() async {
+    final uid = _uid;
+    if (uid == null) return;
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection(_colMikrotik)
+          .doc(uid)
+          .get();
+      if (doc.exists) {
+        final d = doc.data()!;
+        _mikrotikTunelIp = (d['mikrotikTunelIp'] ?? '').toString().trim();
+        _mikrotikIp = (d['mikrotikIp'] ?? '').toString().trim();
+        _subredLocalCtrl.text = (d['subredLocal'] ?? '').toString();
+        _ipLocalCtrl.text = (d['ipLocal'] ?? '').toString();
+        _usarNetmap = (d['usarNetmap'] ?? false) == true;
+        _subredAsignada = _subredLocalCtrl.text.trim();
+        _vpsApiKey = (d['vpsApiKey'] ?? '').toString().trim();
+        final pub = (d['mikrotikPublicKey'] ?? '').toString().trim();
+        _mikrotikPubKeyCtrl.text = pub;
+        _mikrotikRegistrado = pub.isNotEmpty && d['mikrotikRegistradoEn'] != null;
+      }
+      // La subred del TÚNEL manda: con netmap es distinta de tu red local.
+      final vpn = await FirebaseFirestore.instance
+          .collection('vpn_config')
+          .doc(uid)
+          .get();
+      final redTunel = (vpn.data()?['redAntenas'] ?? '').toString().trim();
+      if (redTunel.isNotEmpty) _subredAsignada = redTunel;
+    } catch (e) {
+      debugPrint('[ConfigVpn] Error leyendo config_mikrotik: $e');
+    }
+    if (mounted) setState(() {});
+  }
+
+  /// Guarda tu red local + el switch netmap (lado MikroTik del túnel).
+  Future<void> _guardarRedLocal() async {
+    final uid = _uid;
+    if (uid == null) return;
+    final subred = _subredLocalCtrl.text.trim();
+    final ipLocal = _ipLocalCtrl.text.trim();
+    if (subred.isNotEmpty && !AntenasService.cidrValido(subred)) {
+      _snack('Formato esperado: 192.168.10.0/24', _C.danger);
+      return;
+    }
+    if (_usarNetmap && !AntenasService.cidrValido(subred)) {
+      _snack(
+          'En modo NAT (netmap) necesito tu subred local real (ej. 192.168.1.0/24)',
+          _C.danger);
+      return;
+    }
+    if (ipLocal.isNotEmpty && !_esIpv4(ipLocal)) {
+      _snack('IP local inválida (ej. 192.168.1.1)', _C.danger);
+      return;
+    }
+    setState(() => _guardandoRedLocal = true);
+    try {
+      await FirebaseFirestore.instance
+          .collection(_colMikrotik)
+          .doc(uid)
+          .set({
+        'propietarioUid': uid,
+        'subredLocal': subred.isEmpty ? null : subred,
+        'ipLocal': ipLocal.isEmpty ? null : ipLocal,
+        'usarNetmap': _usarNetmap,
+        'actualizadoEn': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      if (mounted) _snack('Red local del túnel guardada ✓', _C.success);
+    } catch (e) {
+      if (mounted) _snack('No se pudo guardar: $e', _C.danger);
+    } finally {
+      if (mounted) setState(() => _guardandoRedLocal = false);
+    }
+  }
+
+  // ── Generar la IP del túnel del MikroTik (10.50.50.x) ──
+  Future<void> _generarIpTunel() async {
+    final uid = _uid;
+    if (uid == null) return;
+    setState(() => _generandoIpTunel = true);
+    try {
+      final ip = await VpsService.generarIpTunelMikrotik();
+      if (ip == null) {
+        _snack('No hay IPs libres del túnel (2-250)', _C.danger);
+        return;
+      }
+      setState(() => _mikrotikTunelIp = ip);
+      await FirebaseFirestore.instance
+          .collection(_colMikrotik)
+          .doc(uid)
+          .set({'mikrotikTunelIp': ip}, SetOptions(merge: true));
+      _snack('IP del túnel del MikroTik: $ip', _C.primary);
+    } catch (e) {
+      _snack('Error: $e', _C.danger);
+    } finally {
+      if (mounted) setState(() => _generandoIpTunel = false);
+    }
+  }
+
+  // ── Registrar el PEER del MikroTik en el VPS ──
+  // Da de alta el MikroTik como peer estático (IP del túnel + subred de
+  // antenas) y persiste lo que el VPS confirma.
+  Future<void> _registrarMikrotik() async {
+    final pk = _mikrotikPubKeyCtrl.text.trim();
+    if (pk.isEmpty) {
+      _snack('Pegá primero la Public Key de tu wg1', _C.warning);
+      return;
+    }
+    if (!RegExp(r'^[A-Za-z0-9+/]{43}=$').hasMatch(pk)) {
+      _snack('La Public Key no es válida (debe tener 44 caracteres)', _C.danger);
+      return;
+    }
+    if (_mikrotikTunelIp.isEmpty) {
+      _snack('Primero generá la IP del túnel del MikroTik (10.50.50.x)',
+          _C.danger);
+      return;
+    }
+    final subred = _subredLocalCtrl.text.trim();
+    if (subred.isNotEmpty && !AntenasService.cidrValido(subred)) {
+      _snack('Formato esperado: 192.168.10.0/24', _C.danger);
+      return;
+    }
+    if (_usarNetmap && !AntenasService.cidrValido(subred)) {
+      _snack(
+          'En modo NAT (netmap) necesito tu subred local real (ej. 192.168.1.0/24)',
+          _C.danger);
+      return;
+    }
+    if (_vpsApiKey.isEmpty) {
+      _snack(
+          'Falta la API Key del VPS: abrí Config. MikroTik → "Tu clave de acceso" '
+          '(se genera sola) y tocá Guardar',
+          _C.warning);
+      return;
+    }
+    setState(() {
+      _registrandoMikrotik = true;
+      _errorRegistro = null;
+    });
+    // En modo netmap la red local NO se declara (puede repetirse entre
+    // empresas): el túnel usa la subred que asigna el VPS (10.10.X.0/24).
+    final res = await VpsService.registrarMikrotikVps(
+      publicKey: pk,
+      subred: _usarNetmap ? '' : subred,
+      ipLocal: _ipLocalCtrl.text.trim(),
+    );
+    if (!mounted) return;
+    setState(() {
+      _registrandoMikrotik = false;
+      if (res.ok) {
+        _mikrotikRegistrado = true;
+        final red = res.redAntenas;
+        if (red != null && red.isNotEmpty) {
+          _subredAsignada = red;
+          if (_usarNetmap) {
+            // El panel del router se abre por su IP virtual del túnel.
+            final base = _ipLocalCtrl.text.trim().isNotEmpty
+                ? _ipLocalCtrl.text.trim()
+                : _mikrotikIp;
+            final virtual = AntenasService.ipVirtual(base, red);
+            if (virtual != base) _mikrotikIp = virtual;
+          } else {
+            _subredLocalCtrl.text = red;
+          }
+        }
+        final ipOk = res.ip;
+        if (ipOk != null && ipOk.isNotEmpty) _mikrotikTunelIp = ipOk;
+      } else {
+        _errorRegistro = res.error;
+      }
+    });
+    if (!res.ok) {
+      _snack(res.error ?? 'No se pudo registrar en el VPS.', _C.danger);
+      return;
+    }
+    // Persistimos lo que el VPS confirmó (lo usa el generador de IPs de antena).
+    final uid = _uid;
+    if (uid != null) {
+      await FirebaseFirestore.instance.collection(_colMikrotik).doc(uid).set({
+        'mikrotikTunelIp': _mikrotikTunelIp.isEmpty ? null : _mikrotikTunelIp,
+        'mikrotikIp': _mikrotikIp.isEmpty ? null : _mikrotikIp,
+        'subredLocal': _subredLocalCtrl.text.trim().isEmpty
+            ? null
+            : _subredLocalCtrl.text.trim(),
+        'ipLocal':
+            _ipLocalCtrl.text.trim().isEmpty ? null : _ipLocalCtrl.text.trim(),
+        'usarNetmap': _usarNetmap,
+      }, SetOptions(merge: true));
+    }
+    if (!mounted) return;
+    if (res.ipReasignada) {
+      _snack(
+        '⚠️ Esa IP del túnel ya la tenía otro equipo. El VPS te asignó '
+        '$_mikrotikTunelIp — actualizala en tu MikroTik (wg1).',
+        _C.warning,
+      );
+    } else {
+      _snack(
+        '✅ Peer del MikroTik registrado · '
+        '${_mikrotikTunelIp.isEmpty ? '' : '$_mikrotikTunelIp · '}'
+        'subred ${_subredAsignada.isEmpty ? 'asignada por el VPS' : _subredAsignada}',
+        _C.success,
+      );
+    }
+  }
+
+  /// Prueba real: HTTP/HTTPS a la IP virtual del router por el túnel.
+  Future<void> _probarNetmap() async {
+    final redTunel = _subredAsignada.trim();
+    final base = _ipLocalCtrl.text.trim().isNotEmpty
+        ? _ipLocalCtrl.text.trim()
+        : _mikrotikIp;
+    if (!_tunelAsignado) {
+      setState(() => _testNetmap =
+          '❌ Todavía no tengo la subred del túnel: registrá el peer del '
+          'MikroTik en el VPS y volvé a probar.');
+      return;
+    }
+    if (!_esIpv4(base)) {
+      setState(() => _testNetmap = '❌ Poné tu IP local o la IP del MikroTik '
+          '(ej. 192.168.1.1) para saber qué probar.');
+      return;
+    }
+    final virtual = AntenasService.ipVirtual(base, redTunel);
+    setState(() {
+      _probandoNetmap = true;
+      _testNetmap = null;
+    });
+    final r = await AntenasService.probarIp(virtual);
+    if (!mounted) return;
+    setState(() {
+      _probandoNetmap = false;
+      _testNetmap = r.ok
+          ? '✅ El router respondió en $virtual (${r.detalle}). '
+              'La regla netmap está funcionando.'
+          : '❌ No hubo respuesta en $virtual.\n'
+              '• ¿Pegaste la regla netmap en el MikroTik? (paso 3)\n'
+              '• ¿El túnel está conectado? (andá a VPN · Antenas y activalo)\n'
+              '• Confirmá que la subred del túnel es $redTunel.';
+    });
+  }
+
+  /// true si ya tenemos la subred del TÚNEL (la que asigna el VPS), que es
+  /// distinta de tu red local cuando el modo netmap está activo.
+  bool get _tunelAsignado {
+    if (!AntenasService.cidrValido(_subredAsignada)) return false;
+    if (!_usarNetmap) return true;
+    return _subredAsignada.trim() != _subredLocalCtrl.text.trim();
+  }
+
+  /// true si `s` es una IPv4 válida (a.b.c.d, 0-255 cada octeto).
+  static bool _esIpv4(String s) {
+    final p = s.trim().split('.');
+    if (p.length != 4) return false;
+    for (final o in p) {
+      final n = int.tryParse(o);
+      if (n == null || n < 0 || n > 255) return false;
+    }
+    return true;
+  }
+
 
   // ── Cargar config existente / sugerir IP libre ─────────────────
   Future<void> _cargar() async {
@@ -601,7 +928,7 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
                 ? 'Subred de gestión/antenas: $_redAntenas'
                 : 'Subred de antenas: se asigna al registrar en el VPS',
             subtitle:
-                'Si declarás tu red local en Config. MikroTik (ej. 192.168.10.0/24), '
+                'Si declarás tu red local acá abajo (ej. 192.168.10.0/24), '
                 'se usa ESA subred: así las antenas y tu MikroTik coinciden con tu red '
                 'real. Si no, el VPS te asigna una 10.10.x.0/24 libre — nunca choca con '
                 'otra empresa.',
@@ -639,6 +966,10 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
             keyboard: const TextInputType.numberWithOptions(decimal: false),
             validator: _validarKeepalive,
           ),
+
+          const SizedBox(height: 18),
+          // ── MikroTik (lado del túnel): IP, peer, red local y netmap ──
+          _buildMikrotikTunelSection(),
 
           const SizedBox(height: 18),
           // ── Vista previa (privada enmascarada) ──
@@ -973,6 +1304,616 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
                     GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11)),
         ],
       ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  //  UI — MIKROTIK (LADO DEL TÚNEL)
+  //  Acá vive TODO lo del túnel: la IP del MikroTik, su peer en el
+  //  VPS, tu red local y el modo netmap.
+  // ══════════════════════════════════════════════════════════════
+
+  Widget _buildMikrotikTunelSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _seccionTitulo('MikroTik (lado del túnel)'),
+        _bannerInfo(
+          icon: Icons.router_rounded,
+          color: _C.accent,
+          title: 'Todo lo del túnel está acá',
+          subtitle:
+              'La IP del MikroTik dentro del túnel (10.50.50.x), su Public Key '
+              'como peer del VPS, tu red local y el modo netmap. En '
+              '"Config. MikroTik" queda la configuración del router: datos, '
+              'scheduler, portal de morosos y reglas.',
+        ),
+        const SizedBox(height: 10),
+        // La API Key del VPS vive en Config. MikroTik (la usa el router para
+        // las colas/scheduler). Acá solo se muestra y se puede ir a editarla.
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: _vpsApiKey.isEmpty
+                ? _C.warning.withOpacity(0.08)
+                : _C.surfaceDim,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+                color: _vpsApiKey.isEmpty
+                    ? _C.warning.withOpacity(0.35)
+                    : _C.border),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                  _vpsApiKey.isEmpty
+                      ? Icons.warning_amber_rounded
+                      : Icons.key_rounded,
+                  color: _vpsApiKey.isEmpty ? _C.warning : _C.textSec,
+                  size: 18),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                        _vpsApiKey.isEmpty
+                            ? 'Falta la API Key del VPS'
+                            : 'API Key del VPS',
+                        style: GoogleFonts.spaceGrotesk(
+                            color: _C.textPri,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 2),
+                    Text(
+                        _vpsApiKey.isEmpty
+                            ? 'Abrí Config. MikroTik → "Tu clave de acceso" (se genera '
+                                'sola) y tocá Guardar para poder registrar peers.'
+                            : '${_C.mask(_vpsApiKey)} · se edita en Config. MikroTik',
+                        style: GoogleFonts.spaceGrotesk(
+                            color: _C.textSec, fontSize: 10.5, height: 1.35)),
+                  ],
+                ),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                      builder: (_) => const ConfigMikroTikWidget()),
+                ),
+                child: Text('Abrir',
+                    style: GoogleFonts.spaceGrotesk(
+                        color: _C.primary, fontSize: 10.5)),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        _buildRedLocalCard(),
+        const SizedBox(height: 12),
+        _buildIpTunelCard(),
+        const SizedBox(height: 12),
+        _buildMikrotikPeerCard(),
+      ],
+    );
+  }
+
+  // ── Tarjeta: tu red local + switch netmap ──
+  Widget _buildRedLocalCard() {
+    final activo = _subredAsignada.isNotEmpty &&
+        _subredAsignada != _subredLocalCtrl.text.trim();
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _C.warning.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _C.warning.withOpacity(0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('TU RED LOCAL (donde están tus antenas)',
+              style: GoogleFonts.spaceGrotesk(
+                  color: _C.textSec,
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.3)),
+          const SizedBox(height: 10),
+          _campo(
+            controller: _subredLocalCtrl,
+            label: 'MI SUBRED LOCAL (CIDR)',
+            hint: '192.168.10.0/24',
+            icon: Icons.account_tree_rounded,
+            keyboard: TextInputType.url,
+          ),
+          const SizedBox(height: 8),
+          _campo(
+            controller: _ipLocalCtrl,
+            label: 'MI IP LOCAL / PUERTA DE ENLACE',
+            hint: '192.168.10.1',
+            icon: Icons.home_rounded,
+            keyboard: TextInputType.url,
+          ),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: _C.warning.withOpacity(0.06),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _C.warning.withOpacity(0.25)),
+            ),
+            child: Row(children: [
+              const Icon(Icons.swap_horiz_rounded,
+                  color: _C.warning, size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Uso NAT (netmap) para las antenas',
+                          style: GoogleFonts.spaceGrotesk(
+                              color: _C.textPri,
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 2),
+                      Text(
+                          'Mantené tu red 192.168.x.x aunque otra empresa use la '
+                          'misma: el túnel usa la subred del VPS y la app abre '
+                          'cada antena por su IP virtual.',
+                          style: GoogleFonts.spaceGrotesk(
+                              color: _C.textSec, fontSize: 10, height: 1.35)),
+                    ]),
+              ),
+              Switch(
+                value: _usarNetmap,
+                activeColor: _C.warning,
+                onChanged: (v) {
+                  setState(() => _usarNetmap = v);
+                  _guardarRedLocal();
+                },
+              ),
+            ]),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _usarNetmap
+                ? 'Modo NAT: declaré tu red local REAL (ej. 192.168.1.0/24). No '
+                    'se declara al VPS, así que puede repetirse en varias '
+                    'empresas. La app abre cada antena por la IP virtual del '
+                    'túnel (misma última octeta) y tu MikroTik la traduce con '
+                    'una regla netmap.'
+                : 'Vacío = el VPS te asigna una 10.10.X.0/24 libre. Si declarás '
+                    'tu red real (por ej. 192.168.10.0/24), el túnel expone ESA '
+                    'subred: tus antenas y la IP del MikroTik coinciden con tu '
+                    'red, sin re-IP-ear nada. El VPS valida que ninguna otra '
+                    'empresa use la misma subred.',
+            style: GoogleFonts.spaceGrotesk(
+                color: _C.textSec, fontSize: 10.5, height: 1.45),
+          ),
+          if (activo)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Row(children: [
+                const Icon(Icons.check_circle_rounded,
+                    color: _C.success, size: 14),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text('Subred activa en el túnel: $_subredAsignada',
+                      style: GoogleFonts.spaceGrotesk(
+                          color: _C.success,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700)),
+                ),
+              ]),
+            ),
+          const SizedBox(height: 10),
+          SizedBox(
+            height: 42,
+            child: OutlinedButton.icon(
+              onPressed: _guardandoRedLocal ? null : _guardarRedLocal,
+              icon: _guardandoRedLocal
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.save_rounded, size: 16),
+              label: Text(_guardandoRedLocal ? 'Guardando…' : 'Guardar red local',
+                  style: GoogleFonts.spaceGrotesk(
+                      color: _C.warning,
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w700)),
+              style: OutlinedButton.styleFrom(
+                side: BorderSide(color: _C.warning.withOpacity(0.4)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+          ),
+          if (_usarNetmap) ...[
+            const SizedBox(height: 12),
+            _buildNetmapCard(),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // ── Tarjeta: IP del túnel del MikroTik (10.50.50.x) ──
+  Widget _buildIpTunelCard() {
+    final ip = _mikrotikTunelIp.trim();
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _C.primary.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _C.primary.withOpacity(0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('IP DEL TÚNEL DEL MIKROTIK (10.50.50.x)',
+              style: GoogleFonts.spaceGrotesk(
+                  color: _C.textSec,
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.3)),
+          const SizedBox(height: 8),
+          Row(children: [
+            Expanded(
+              child: Text(
+                ip.isEmpty ? 'Pendiente — tocá "Generar"' : ip,
+                style: GoogleFonts.spaceGrotesk(
+                        color: ip.isEmpty ? _C.textSec : _C.primary,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800)
+                    .copyWith(fontFamily: 'monospace'),
+              ),
+            ),
+            if (ip.isNotEmpty)
+              IconButton(
+                icon: const Icon(Icons.copy_rounded, color: _C.primary),
+                onPressed: () {
+                  Clipboard.setData(ClipboardData(text: ip));
+                  _snack('IP copiada: $ip', _C.success);
+                },
+              ),
+          ]),
+          const SizedBox(height: 4),
+          Text(
+            'Es única con DOBLE control: la app busca la primera libre entre los '
+            'teléfonos y otros MikroTik, y el VPS la vuelve a verificar al '
+            'registrar (si ya la tenía otro equipo, te asigna otra). '
+            'Va en el MikroTik: IP → Addresses → (+) → Address: '
+            '${ip.isEmpty ? '10.50.50.X' : ip}/24 · Interface: wg1.',
+            style: GoogleFonts.spaceGrotesk(
+                color: _C.textSec, fontSize: 10.5, height: 1.4),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 42,
+            child: OutlinedButton.icon(
+              onPressed: _generandoIpTunel ? null : _generarIpTunel,
+              icon: _generandoIpTunel
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.auto_fix_high_rounded, size: 16),
+              label: Text(
+                  _generandoIpTunel ? 'Generando…' : 'Generar IP del túnel',
+                  style: GoogleFonts.spaceGrotesk(
+                      color: _C.primary,
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w700)),
+              style: OutlinedButton.styleFrom(
+                side: BorderSide(color: _C.primary.withOpacity(0.4)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Tarjeta: regla netmap (traduce el túnel ⇄ tu red local) ──
+  Widget _buildNetmapCard() {
+    final redLocal = _subredLocalCtrl.text.trim();
+    // El comando necesita la subred del TÚNEL (10.10.X.0/24), que la asigna el
+    // VPS al registrar el peer. Si todavía no está, pedimos registrarlo.
+    final cmd = _tunelAsignado
+        ? AntenasService.comandoNetmap(
+            redTunel: _subredAsignada,
+            redLocal: redLocal,
+          )
+        : '';
+    if (cmd.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: _C.warning.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: _C.warning.withOpacity(0.3)),
+        ),
+        child: Text(
+          '⚠️ ACÁ VA A APARECER TU COMANDO — falta un paso.\n\n'
+          '1) Generá la IP del túnel del MikroTik (tarjeta de abajo).\n'
+          '2) Pegá la Public Key de tu wg1 y registrá el peer en el VPS.\n'
+          '3) Volvé acá: el comando aparece solo, con tus datos.\n\n'
+          '💡 Es normal: el comando necesita la subred que el VPS te asigna al '
+          'registrar (10.10.X.0/24).',
+          style: GoogleFonts.spaceGrotesk(
+              color: _C.textPri, fontSize: 10.5, height: 1.45),
+        ),
+      );
+    }
+    final l = redLocal.split('/').first.trim().split('.');
+    final t = _subredAsignada.split('/').first.trim().split('.');
+    final ejemplo = (l.length == 4 && t.length == 4)
+        ? '${l[0]}.${l[1]}.${l[2]}.20 ⇄ ${t[0]}.${t[1]}.${t[2]}.20'
+        : '';
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text('PEGÁ ESTO EN TU MIKROTIK (una sola vez)',
+          style: GoogleFonts.spaceGrotesk(
+              color: _C.textSec,
+              fontSize: 10.5,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.3)),
+      const SizedBox(height: 6),
+      Container(
+        padding: const EdgeInsets.fromLTRB(10, 10, 4, 10),
+        decoration: BoxDecoration(
+            color: _C.dark, borderRadius: BorderRadius.circular(10)),
+        child: Row(children: [
+          Expanded(
+            child: SelectableText(
+              cmd,
+              style: GoogleFonts.spaceGrotesk(
+                      color: const Color(0xFF7DD3FC),
+                      fontSize: 10.5,
+                      height: 1.45)
+                  .copyWith(fontFamily: 'monospace'),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Copiar comando',
+            icon: const Icon(Icons.copy_rounded,
+                color: Colors.white70, size: 16),
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: cmd));
+              _snack('Comando netmap copiado', _C.success);
+            },
+          ),
+        ]),
+      ),
+      const SizedBox(height: 10),
+      Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: _C.primary.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: _C.primary.withOpacity(0.2)),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('PASO A PASO (en este orden)',
+              style: GoogleFonts.spaceGrotesk(
+                  color: _C.primary,
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.3)),
+          const SizedBox(height: 6),
+          _pasoNetmap('1',
+              'Registrá el peer del MikroTik en el VPS y esperá el chip verde.'),
+          _pasoNetmap('2',
+              'Copiá el comando de acá arriba con el botón de copiar.'),
+          _pasoNetmap(
+              '3', 'En Winbox: Terminal → pegá el comando → Enter (una sola vez).'),
+          _pasoNetmap('4',
+              'Tocá "Probar" acá abajo: si dice ✅, ya podés abrir tus antenas.'),
+        ]),
+      ),
+      const SizedBox(height: 10),
+      SizedBox(
+        width: double.infinity,
+        height: 42,
+        child: OutlinedButton.icon(
+          onPressed: _probandoNetmap ? null : _probarNetmap,
+          icon: _probandoNetmap
+              ? const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : const Icon(Icons.network_check_rounded, size: 16),
+          label: Text(_probandoNetmap ? 'Probando…' : 'Probar la regla netmap',
+              style: GoogleFonts.spaceGrotesk(
+                  color: _C.primary,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700)),
+          style: OutlinedButton.styleFrom(
+            side: BorderSide(color: _C.primary.withOpacity(0.4)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        ),
+      ),
+      if (_testNetmap != null) ...[
+        const SizedBox(height: 8),
+        Text(_testNetmap!,
+            style: GoogleFonts.spaceGrotesk(
+                color: _testNetmap!.startsWith('✅') ? _C.success : _C.danger,
+                fontSize: 11,
+                height: 1.4)),
+      ],
+      const SizedBox(height: 6),
+      Text(
+        'Traduce la subred del túnel ⇄ tu red local (misma última octeta): '
+        '${ejemplo.isEmpty ? '' : '$ejemplo · '}'
+        'tu MikroTik sigue con su DHCP normal y vos abrís cada antena por la IP '
+        'virtual.',
+        style: GoogleFonts.spaceGrotesk(
+            color: _C.textSec, fontSize: 10, height: 1.4),
+      ),
+    ]);
+  }
+
+  /// Una línea del paso a paso del netmap (número + texto).
+  Widget _pasoNetmap(String n, String texto) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(
+          width: 16,
+          height: 16,
+          margin: const EdgeInsets.only(top: 1),
+          decoration: BoxDecoration(
+              color: _C.primary.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(5)),
+          child: Center(
+            child: Text(n,
+                style: GoogleFonts.spaceGrotesk(
+                    color: _C.primary,
+                    fontSize: 9.5,
+                    fontWeight: FontWeight.w800)),
+          ),
+        ),
+        const SizedBox(width: 7),
+        Expanded(
+          child: Text(texto,
+              style: GoogleFonts.spaceGrotesk(
+                  color: _C.textPri, fontSize: 10.5, height: 1.35)),
+        ),
+      ]),
+    );
+  }
+
+  // ── Tarjeta: Public Key del MikroTik → peer estático en el VPS ──
+  Widget _buildMikrotikPeerCard() {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _C.accent.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _C.accent.withOpacity(0.3)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(
+            child: Text('PUBLIC KEY DE TU MIKROTIK (wg1)',
+                style: GoogleFonts.spaceGrotesk(
+                    color: _C.textSec,
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.3)),
+          ),
+          if (_mikrotikRegistrado)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                  color: _C.success.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: _C.success.withOpacity(0.4))),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.check_circle_rounded,
+                    color: _C.success, size: 13),
+                const SizedBox(width: 4),
+                Text('Registrado en el VPS',
+                    style: GoogleFonts.spaceGrotesk(
+                        color: _C.success,
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w700)),
+              ]),
+            ),
+        ]),
+        const SizedBox(height: 2),
+        Text('Winbox → WireGuard → doble clic en wg1 → campo Public Key',
+            style: GoogleFonts.spaceGrotesk(
+                color: _C.textSec, fontSize: 10.5, height: 1.35)),
+        const SizedBox(height: 10),
+        _campo(
+          controller: _mikrotikPubKeyCtrl,
+          label: 'PUBLIC KEY',
+          hint: 'Pegá la Public Key aquí (ej: Xm9a…fM4=)',
+          icon: Icons.key_rounded,
+        ),
+        if (_mikrotikTunelIp.isEmpty) ...[
+          const SizedBox(height: 10),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: _C.warning.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: _C.warning.withOpacity(0.3)),
+            ),
+            child: Text(
+                '⚠️ Primero generá la IP del túnel del MikroTik (arriba): el '
+                'peer del VPS queda amarrado a esa IP.',
+                style: GoogleFonts.spaceGrotesk(
+                    color: _C.textPri, fontSize: 10.5, height: 1.4)),
+          ),
+        ],
+        const SizedBox(height: 10),
+        SizedBox(
+          width: double.infinity,
+          height: 44,
+          child: ElevatedButton.icon(
+            onPressed: _registrandoMikrotik ? null : _registrarMikrotik,
+            icon: _registrandoMikrotik
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.cloud_upload_rounded, size: 18),
+            label: Text(
+                _registrandoMikrotik
+                    ? 'Registrando…'
+                    : (_mikrotikRegistrado
+                        ? 'Registrar de nuevo'
+                        : 'Registrar peer del MikroTik en el VPS'),
+                style: GoogleFonts.spaceGrotesk(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _C.accent,
+              foregroundColor: Colors.white,
+              disabledBackgroundColor: _C.border,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+          ),
+        ),
+        if (_errorRegistro != null) ...[
+          const SizedBox(height: 10),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: _C.danger.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: _C.danger.withOpacity(0.35)),
+            ),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Icon(Icons.error_outline_rounded,
+                  color: _C.danger, size: 16),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(_errorRegistro!,
+                    style: GoogleFonts.spaceGrotesk(
+                        color: _C.danger, fontSize: 10.5, height: 1.4)),
+              ),
+            ]),
+          ),
+        ],
+        const SizedBox(height: 8),
+        Text(
+          'El VPS lo agrega como peer estático con tu IP '
+          '(${_mikrotikTunelIp.isEmpty ? '10.50.50.X' : _mikrotikTunelIp}/32) y '
+          'tu subred de antenas.',
+          style: GoogleFonts.spaceGrotesk(
+              color: _C.textSec, fontSize: 10, height: 1.4),
+        ),
+      ]),
     );
   }
 

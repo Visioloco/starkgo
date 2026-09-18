@@ -392,14 +392,19 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
     ]);
 
     if (mounted) {
+      // r[0] = snapshot de starlinks (nunca null); r[1] = planes (puede ser null).
+      final snapStarlinks = r[0];
+      if (snapStarlinks == null) return;
       setState(() {
-        _starlinks = r[0].docs;
+        _starlinks = snapStarlinks.docs;
       });
     }
   }
 
-  Future<QuerySnapshot> _cargarPlanesUsuario() async {
-    if (_uid == null) return Future.value(null as QuerySnapshot);
+  Future<QuerySnapshot?> _cargarPlanesUsuario() async {
+    // OJO: antes era `return Future.value(null as QuerySnapshot)`, un cast que
+    // SIEMPRE lanza excepción. Si no hay usuario, simplemente no hay planes.
+    if (_uid == null) return null;
     setState(() => _cargandoPlanes = true);
     try {
       final snap = await FirebaseFirestore.instance.collection('planes').where('propietarioUid', isEqualTo: _uid).get();
@@ -523,8 +528,12 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
         'codigoPais': _selPais.codigo,
       });
 
-      // Notificar al VPS con la IP manual de la antena
-      await VpsService.clienteCreado(
+      // Notificar al VPS con la IP manual de la antena:
+      //  · crea la Simple Queue con la velocidad elegida, y
+      //  · blinda esa IP del portal cautivo (ip-binding bypassed).
+      // Devuelve false si el VPS no aceptó los comandos: en ese caso el
+      // cliente queda guardado pero el router NO recibe nada (hay que avisar).
+      final colaOk = await VpsService.clienteCreado(
         nombre: '${_model.textController1.text.trim()} ${_model.textController2.text.trim()}',
         ip: _model.antna ?? '',
         velocidad: _velocidad ?? '',
@@ -547,6 +556,28 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
           behavior: SnackBarBehavior.floating,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ));
+        // El cliente quedó en Firestore, pero el VPS no confirmó la Simple
+        // Queue / el blindaje del hotspot: se avisa para que no falle en silencio.
+        if (!colaOk) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Icon(Icons.warning_amber_rounded, color: Colors.white, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Cliente guardado, pero el VPS no aceptó la Simple Queue ni el '
+                  'blindaje del hotspot de ${_model.antna ?? ''}. Revisá la API Key '
+                  'en Config. MikroTik (Guardar) y que el VPS esté en línea.',
+                  style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 12.5),
+                ),
+              ),
+            ]),
+            backgroundColor: _C.warning,
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 8),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ));
+        }
         context.pushNamed(DetalleClienteWidget.routeName,
             queryParameters: {'rf': serializeParam(_model.rf?.reference, ParamType.DocumentReference)}.withoutNulls);
       }

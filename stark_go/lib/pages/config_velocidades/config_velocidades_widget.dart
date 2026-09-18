@@ -433,10 +433,11 @@ class _ConfigVelocidadesWidgetState extends State<ConfigVelocidadesWidget> {
                             Expanded(
                               child: Text(
                                 'Al agregar una velocidad se guarda con: burst-limit='
-                                '${_perfilCampos['burstBajada']}/${_perfilCampos['burstSubida']} · '
+                                '${_perfilCampos['burstSubida']}/${_perfilCampos['burstBajada']} · '
                                 'burst-threshold='
-                                '${_perfilCampos['umbralBajada']}/${_perfilCampos['umbralSubida']} · '
+                                '${_perfilCampos['umbralSubida']}/${_perfilCampos['umbralBajada']} · '
                                 'burst-time=${_perfilCampos['tiempo']}s. '
+                                '(Orden RouterOS: subida/bajada, igual que el max-limit.) '
                                 'Así, si creás otro cliente con otra velocidad, cada uno '
                                 'recibe la ráfaga de SU velocidad.',
                                 style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10.5, height: 1.4),

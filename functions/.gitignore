@@ -1,2 +1,6 @@
 node_modules/
 *.local
+# Credenciales de Firebase — NUNCA al repo (quedarían públicas)
+serviceAccountKey.json
+# Credenciales de pago (Rapid/PayPal) — NUNCA al repo
+credenciales.local.json
