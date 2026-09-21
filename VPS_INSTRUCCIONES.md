@@ -114,10 +114,90 @@ await db.collection("pagos_pendientes").add({
 | Campo en Firestore | Valor | Efecto en la app |
 |---|---|---|
 | `plan.tipo` | `"completo"` | Acceso a toda la app (clientes, planes, informes, etc.) |
-| `plan.tipo` | `"vouchers"` | Solo se muestra el módulo MikroTik Local (Conexión Local, Config. VPS, Velocidades) |
+| `plan.tipo` | `"vouchers"` | Home "Plan Solo Vouchers" + módulo MikroTik completo: **Conexión Local**, **Config. MikroTik VPS**, **Velocidades MikroTik** y **VPN · Antenas** (para ver el MikroTik remotamente por el túnel) |
 
 - Si el campo `plan` **no existe** o no tiene `tipo`, la app asume `"completo"` (comportamiento actual).
 - Los usuarios existentes con `planMembresia` (1m, 3m, 6m, 1a) siguen teniendo acceso completo.
+
+### 3.1. Qué ve el plan "Solo Vouchers" (v2.1.5+)
+
+El plan de vouchers **ya no queda encerrado** en la conexión local: puede ajustar su
+MikroTik y verlo remotamente igual que el plan completo.
+
+| Zona de la app | Plan `completo` | Plan `vouchers` |
+|---|---|---|
+| Clientes, Planes, PPPoE, Equipos, Starlinks, Informes, Finanzas, WhatsApp, Facturación | ✅ | ❌ |
+| Conexión Local (API 8728 · WiFi) | ✅ | ✅ |
+| **Config. MikroTik VPS** (IP/usuario/clave del router, API Key, scheduler, script, portal de morosos) | ✅ | ✅ |
+| **Velocidades MikroTik** (perfiles de velocidad / colas) | ✅ | ✅ |
+| **VPN · Antenas** → panel **MikroTik (WebFig)** por el túnel (ver remoto) | ✅ | ✅ |
+| Guardar configuración en Firebase (`config_mikrotik/{uid}`, `vpn_config/{uid}`, `configuracion_local/{uid}`, `hotspot_design/{uid}`) | ✅ | ✅ |
+| Administración (crear operador / lista operadores) | solo admin | ❌ |
+
+### 3.2. Límite de creación de vouchers (PDF)
+
+En **Conexión Local → Fichas** la cantidad ya no es un contador de 20:
+
+| Regla | Valor |
+|---|---|
+| Máximo de fichas por lote | **1000** |
+| Fichas por CADA archivo PDF | **100** (un lote de 1000 genera 10 PDFs) |
+| Atajos de cantidad en la pantalla | 10 / 50 / 100 / 500 / Máx 1000 (o se escribe el número) |
+| Progreso visible | "Creando 345 de 1000…" |
+| Si el router falla a mitad | las fichas ya creadas se guardan igual en PDF |
+
+Todo lo que se crea queda listado en **"PDFs generados"** (ver, descargar, compartir,
+borrar individual o en lote).
+
+---
+
+### 3.3. Limpieza automática de pines (vouchers)
+
+Los pines se crean con la duración del perfil (1 hora, 1 día, 1 semana, 1 mes…) y esa
+duración se copia a cada ficha como `limit-uptime` (tiempo TOTAL acumulado).
+
+**Regla de borrado (Conexión Local → Fichas → switch “Auto”):**
+
+| Ficha | ¿Se borra sola del MikroTik? |
+|---|---|
+| Nueva (nunca se conectó) | ❌ No — está para venderla |
+| Usada y todavía con tiempo a favor (ej. 1 semana usada 2 días) | ❌ No — el cliente sigue con su saldo |
+| **Usada y con su tiempo ya agotado** (ej. 1 hora consumida completa) | ✅ Sí — se limpia del router |
+| Usada pero sin `limit-uptime` (fichas viejas) | ❌ No — se marca **“Sin límite”**; usá *Aplicar tiempo a viejas* o bórrala a mano |
+
+La pantalla muestra el resumen **nuevas · en uso · caducadas**, cada ficha lleva su chip de
+estado (*Nueva / En uso · restan 40 min / Caducada / Sin límite*) y el botón **Caducadas (N)**
+borra sólo esas. El switch **Auto** queda guardado en el teléfono (SharedPreferences) y,
+estando activado, **se revisa el router cada 5 minutos** mientras el panel está abierto.
+Las reglas viven en `stark_go/lib/services/hotspot_vouchers.dart`
+(cubiertas por `test/hotspot_vouchers_test.dart`).
+
+**Atajos de duración al crear el perfil:** `1 hora` (3600 s), `1 día` (86400 s),
+`1 semana` (604800 s) y `1 mes` (2592000 s = 30 días).
+
+### 3.4. ¿Cuándo deja de dar acceso un pin? (validación)
+
+El pin se crea con `limit-uptime` = la duración del perfil (1 h, 5 h, 1 día, 1 semana, 1 mes…).
+RouterOS lleva el **tiempo acumulado conectado** de la ficha y **rechaza el login** cuando se
+agota; por eso un pin de 1 hora deja de dar acceso al completar esa hora de uso.
+
+| Pregunta | Respuesta |
+|---|---|
+| ¿El contador corre desde que se crea? | ❌ No. Corre **mientras el cliente está conectado** (tiempo acumulado de navegación). |
+| ¿Si apenas lo usan 10 minutos y se van, pierde la hora? | ❌ No. Le quedan **50 minutos** para cuando vuelva. |
+| ¿Al llegar a la hora deja de dar acceso? | ✅ Sí. El router ya no lo deja entrar (uptime limit reached). |
+| ¿Si nunca se usa, caduca? | ❌ No. Queda nuevo (para venderlo) y **no se borra** en la limpieza. |
+| ¿Caduca por fecha (ej. “vence 30 días después de la primera conexión”)? | ❌ Eso **no** viene por defecto: la duración es tiempo de uso. Si lo necesitás, se agrega con un *scheduler* del MikroTik. |
+| ¿Se puede hacer de 5 horas o de 1 año? | ✅ Sí: se escribe la duración en segundos (5 h = 18000, 1 año ≈ 31536000) o se usa un atajo. |
+
+**Ver lo que se aplicará:** en *Fichas*, debajo de PERFIL, la app muestra
+**“Cada pin durará 1 h de navegación…”**. Si el perfil **no** tiene duración, lo marca en
+amarillo y **pide confirmación** antes de crear pines que nunca caducarían.
+En la lista de perfiles, la duración se muestra en texto claro (ej. `1h · 1 h`, `30d · 30 días`).
+
+**Probar en tu router (30 s):** tomá un pin de prueba, conectate con él y mirá
+`/ip hotspot user print detail where name="<pin>"` → el `uptime` crece al navegar; al llegar al
+`limit-uptime` el portal deja de aceptarlo.
 
 ---
 
@@ -193,6 +273,8 @@ API Key).
 | **Blindaje del hotspot automático al crear/reactivar cliente** | ❌ Necesita la **APK nueva** (el "siempre blindar" está en la app) |
 | Aviso cuando el VPS no acepta el comando (API Key/VPS caído) | ❌ APK nueva |
 | Tarjeta **"Cola del VPS → Verificar"** | ❌ APK nueva |
+| 🛡️ **Blindaje del administrador** (tu teléfono sin ficha/PIN mientras creás fichas) | ❌ APK nueva (la acción `hotspot-blindar-admin` del VPS ya está lista) → ver `BLINDAJE_ADMIN.md` |
+| 📌 **IPs del MikroTik (leases DHCP)**: ver/usar/marcar la IP de la antena | ❌ APK nueva (los endpoints `/mikrotik/leases` y `/mikrotik/lease/marcar` del VPS ya están listos) → ver `LEASES_MIKROTIK.md` |
 | Comando del firewall con `place-before=0` y el "blinda las IPs" tolerante | ❌ APK nueva (o copialos de este doc) |
 | Fix de la mora automática (`Timestamp`) | ❌ APK nueva |
 

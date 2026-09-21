@@ -31,7 +31,10 @@ class NotificacionesService {
 
   /// Inicializa el plugin y fija la zona horaria local del dispositivo.
   /// Debe llamarse una sola vez, idealmente en `main()`.
+  ///
+  /// En la WEB no hay notificaciones locales: todos los métodos son no-op.
   Future<void> init() async {
+    if (kIsWeb) return;
     if (_initialized) return;
 
     // ── Zona horaria local ─────────────────────────────
@@ -107,6 +110,7 @@ class NotificacionesService {
     required int minuto,
   }) async {
     await init();
+    if (kIsWeb) return; // En la web no hay notificaciones locales.
 
     final now = DateTime.now();
     DateTime fecha = DateTime(now.year, now.month, diaDelMes, hora, minuto);
@@ -152,6 +156,7 @@ class NotificacionesService {
   /// Cancela una notificación programada.
   Future<void> cancelar(int id) async {
     await init();
+    if (kIsWeb) return;
     await _plugin.cancel(id);
   }
 
@@ -160,6 +165,7 @@ class NotificacionesService {
   /// no aplica en la plataforma.
   Future<bool> asegurarPermisoNotificaciones() async {
     await init();
+    if (kIsWeb) return true; // En la web no aplica el permiso.
     final androidImpl = _plugin.resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin>();
     if (androidImpl == null) return true;
@@ -181,7 +187,7 @@ class NotificacionesService {
     required String cuerpo,
   }) async {
     await init();
-
+    if (kIsWeb) return;
     const androidDetails = AndroidNotificationDetails(
       'starlink_cobros',
       'Cobros Starlink',
@@ -260,6 +266,7 @@ class NotificacionesService {
     required String payload,
   }) async {
     await init();
+    if (kIsWeb) return;
     final androidDetails = AndroidNotificationDetails(
       'pagos',
       'Pagos y membresías',
@@ -287,6 +294,7 @@ class NotificacionesService {
   /// WireGuard está activo. Incluye acción "Apagar túnel".
   Future<void> mostrarTunelActivo() async {
     await init();
+    if (kIsWeb) return;
     const androidDetails = AndroidNotificationDetails(
       'tunel_vpn',
       'Túnel VPN',
@@ -332,6 +340,7 @@ class NotificacionesService {
   /// Oculta la notificación persistente del túnel.
   Future<void> ocultarTunelActivo() async {
     await init();
+    if (kIsWeb) return;
     await _plugin.cancel(_idTunelActivo);
     debugPrint('🔔 Notificación del túnel VPN ocultada (id=$_idTunelActivo)');
   }

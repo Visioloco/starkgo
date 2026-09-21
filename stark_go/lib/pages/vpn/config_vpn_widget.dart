@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -115,6 +117,14 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
   String _mikrotikIp = '';
   String _vpsApiKey = '';
 
+  /// true cuando ya se leyó `config_mikrotik/{uid}`: a partir de ahí los
+  /// controladores reflejan lo guardado y es seguro volver a escribir.
+  bool _configCargada = false;
+
+  /// Escucha el login para recargar los datos del usuario autenticado si la
+  /// pantalla se abrió antes de que Firebase restaurara la sesión.
+  StreamSubscription<User?>? _authSub;
+
   /// Peer del MikroTik en el VPS.
   bool _mikrotikRegistrado = false;
   bool _registrandoMikrotik = false;
@@ -144,13 +154,31 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
   @override
   void initState() {
     super.initState();
-    _cargar();
-    // Lado MikroTik del túnel (IP del túnel, peer, red local y netmap).
-    _cargarMikrotik();
+    _inicializar();
+  }
+
+  /// Carga TODO lo del usuario autenticado antes de mostrar el formulario:
+  /// el túnel (`vpn_config/{uid}`) y el lado MikroTik
+  /// (`config_mikrotik/{uid}`: subred local, puerta de enlace, peer y netmap).
+  ///
+  /// Si la sesión todavía no está restaurada, se suscribe al login y recarga:
+  /// así los datos del uid vuelven siempre al entrar/salir de la cuenta.
+  Future<void> _inicializar() async {
+    await Future.wait([_cargar(), _cargarMikrotik()]);
+    if (mounted) setState(() => _cargando = false);
+    if (_uid == null) {
+      _authSub?.cancel();
+      _authSub = FirebaseAuth.instance.authStateChanges().listen((u) async {
+        if (u == null || !mounted) return;
+        await Future.wait([_cargar(), _cargarMikrotik()]);
+        if (mounted) setState(() => _cargando = false);
+      });
+    }
   }
 
   @override
   void dispose() {
+    _authSub?.cancel();
     _endpointCtrl.dispose();
     _peerPubCtrl.dispose();
     _peerPubDisplayCtrl.dispose();
@@ -209,16 +237,44 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
           .get();
       final redTunel = (vpn.data()?['redAntenas'] ?? '').toString().trim();
       if (redTunel.isNotEmpty) _subredAsignada = redTunel;
+      // Ya leímos la config del usuario: es seguro volver a escribirla.
+      _configCargada = true;
     } catch (e) {
       debugPrint('[ConfigVpn] Error leyendo config_mikrotik: $e');
     }
     if (mounted) setState(() {});
   }
 
-  /// Guarda tu red local + el switch netmap (lado MikroTik del túnel).
-  Future<void> _guardarRedLocal() async {
+  /// Persiste el lado MikroTik del túnel en `config_mikrotik/{uid}` — siempre
+  /// con el uid del usuario autenticado, así la configuración es de cada
+  /// cuenta y sigue ahí al cerrar/abrir sesión.
+  ///
+  /// Guarda: **subred local**, **IP local / puerta de enlace**, el switch
+  /// netmap y la IP del túnel. Usa `merge` para no pisar el resto de la
+  /// config del router (datos, API Key, scheduler, portal).
+  ///
+  /// Devuelve `false` si no hay usuario o si todavía no se leyó la config
+  /// (no se escribe a ciegas para no borrar lo ya guardado).
+  Future<bool> _persistirMikrotik() async {
     final uid = _uid;
-    if (uid == null) return;
+    if (uid == null || !_configCargada) return false;
+    await FirebaseFirestore.instance
+        .collection(_colMikrotik)
+        .doc(uid)
+        .set({
+      'propietarioUid': uid,
+      'subredLocal': _subredLocalCtrl.text.trim(),
+      'ipLocal': _ipLocalCtrl.text.trim(),
+      'usarNetmap': _usarNetmap,
+      if (_mikrotikTunelIp.trim().isNotEmpty)
+        'mikrotikTunelIp': _mikrotikTunelIp.trim(),
+      'actualizadoEn': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+    return true;
+  }
+
+  /// Guarda tu red local + la puerta de enlace + el switch netmap.
+  Future<void> _guardarRedLocal() async {
     final subred = _subredLocalCtrl.text.trim();
     final ipLocal = _ipLocalCtrl.text.trim();
     if (subred.isNotEmpty && !AntenasService.cidrValido(subred)) {
@@ -235,19 +291,20 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
       _snack('IP local inválida (ej. 192.168.1.1)', _C.danger);
       return;
     }
+    if (_uid == null) {
+      _snack('Iniciá sesión para guardar tu configuración', _C.warning);
+      return;
+    }
     setState(() => _guardandoRedLocal = true);
     try {
-      await FirebaseFirestore.instance
-          .collection(_colMikrotik)
-          .doc(uid)
-          .set({
-        'propietarioUid': uid,
-        'subredLocal': subred.isEmpty ? null : subred,
-        'ipLocal': ipLocal.isEmpty ? null : ipLocal,
-        'usarNetmap': _usarNetmap,
-        'actualizadoEn': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-      if (mounted) _snack('Red local del túnel guardada ✓', _C.success);
+      final ok = await _persistirMikrotik();
+      if (!mounted) return;
+      _snack(
+        ok
+            ? 'Red local y puerta de enlace guardadas ✓'
+            : 'Esperá un segundo (cargando tu config) y volvé a tocar Guardar',
+        ok ? _C.success : _C.warning,
+      );
     } catch (e) {
       if (mounted) _snack('No se pudo guardar: $e', _C.danger);
     } finally {
@@ -359,6 +416,7 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
     final uid = _uid;
     if (uid != null) {
       await FirebaseFirestore.instance.collection(_colMikrotik).doc(uid).set({
+        'propietarioUid': uid,
         'mikrotikTunelIp': _mikrotikTunelIp.isEmpty ? null : _mikrotikTunelIp,
         'mikrotikIp': _mikrotikIp.isEmpty ? null : _mikrotikIp,
         'subredLocal': _subredLocalCtrl.text.trim().isEmpty
@@ -445,10 +503,7 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
   // ── Cargar config existente / sugerir IP libre ─────────────────
   Future<void> _cargar() async {
     final uid = _uid;
-    if (uid == null) {
-      if (mounted) setState(() => _cargando = false);
-      return;
-    }
+    if (uid == null) return;
     try {
       final doc = await FirebaseFirestore.instance
           .collection('vpn_config')
@@ -486,7 +541,6 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
       if (mounted)
         _error = 'No se pudo leer la configuración: ${e.runtimeType}';
     }
-    if (mounted) setState(() => _cargando = false);
   }
 
   // ── Generar par de claves ─────────────────────────────────────
@@ -645,10 +699,19 @@ class _ConfigVpnWidgetState extends State<ConfigVpnWidget> {
         'actualizadoEn': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
+      // Guardamos TAMBIÉN el lado MikroTik con el uid del usuario: la red
+      // local y la PUERTA DE ENLACE (IP local) quedan en
+      // `config_mikrotik/{uid}`, así no hay que volver a escribirlas al
+      // entrar/salir de la cuenta (antes sólo las guardaba el botón
+      // "Guardar red local" y este botón las perdía).
+      final mikrotikOk = await _persistirMikrotik();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Configuración guardada ✓'),
+        SnackBar(
+          content: Text(mikrotikOk
+              ? 'Configuración guardada ✓'
+              : 'Túnel guardado, pero no pude guardar tu red local: esperá la '
+                  'carga de la pantalla y tocá Guardar otra vez'),
           behavior: SnackBarBehavior.floating,
         ),
       );

@@ -7,6 +7,39 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
 // ─────────────────────────────────────────────────────────────────────────
+// Límites de generación de vouchers (los usa la pantalla de Fichas y el PDF)
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Máximo TOTAL de fichas que se pueden crear de una sola vez.
+const int kMaxVouchersPorLote = 1000;
+
+/// Máximo de fichas por CADA archivo PDF. Un lote grande (ej. 1000) se
+/// reparte en varios PDFs de 100 fichas.
+const int kMaxVouchersPorPdf = 100;
+
+/// Reparte [items] en bloques de [tamano] elementos (el último bloque puede
+/// quedar más corto). Sirve para partir un lote grande de vouchers en varios
+/// PDFs. Lanza [ArgumentError] si [tamano] es <= 0.
+List<List<T>> dividirEnBloques<T>(List<T> items, int tamano) {
+  if (tamano <= 0) {
+    throw ArgumentError.value(tamano, 'tamano', 'debe ser mayor que 0');
+  }
+  final bloques = <List<T>>[];
+  for (int i = 0; i < items.length; i += tamano) {
+    final fin = (i + tamano) > items.length ? items.length : i + tamano;
+    bloques.add(items.sublist(i, fin));
+  }
+  return bloques;
+}
+
+/// Cuántos PDFs generará un lote de [cantidad] fichas (0 si no hay fichas).
+int pdfsParaLote(int cantidad, {int porPdf = kMaxVouchersPorPdf}) {
+  if (cantidad <= 0) return 0;
+  if (porPdf <= 0) throw ArgumentError.value(porPdf, 'porPdf', 'debe ser mayor que 0');
+  return (cantidad / porPdf).ceil();
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // Modelo de un lote de fichas ya exportado a PDF
 // ─────────────────────────────────────────────────────────────────────────
 class PdfBatchRecord {
@@ -95,8 +128,17 @@ class FichasPdfStore {
     final dir = await _dir();
     final ahora = DateTime.now();
     final id = ahora.microsecondsSinceEpoch.toString();
-    final nombreArchivo = 'fichas_${_sanear(perfil)}_${_marcaTiempo(ahora)}.pdf';
-    final file = File('${dir.path}/$nombreArchivo');
+    // Un lote grande se reparte en varios PDFs seguidos: si dos bloques caen
+    // en el mismo segundo, el nombre se repetiría y uno pisaría al otro.
+    // Por eso, si el archivo ya existe, se agrega un sufijo numérico.
+    var nombreArchivo = 'fichas_${_sanear(perfil)}_${_marcaTiempo(ahora)}.pdf';
+    var file = File('${dir.path}/$nombreArchivo');
+    var intento = 1;
+    while (await file.exists()) {
+      nombreArchivo = 'fichas_${_sanear(perfil)}_${_marcaTiempo(ahora)}_$intento.pdf';
+      file = File('${dir.path}/$nombreArchivo');
+      intento++;
+    }
     await file.writeAsBytes(bytes, flush: true);
 
     final registro = PdfBatchRecord(

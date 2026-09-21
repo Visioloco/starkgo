@@ -10,6 +10,8 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
+import '../../services/blindaje_admin_service.dart';
+
 // ════════════════════════════════════════════════════════════════
 //  GENERAR FICHAS — genera vouchers de hotspot y arma el PDF de
 //  cupones (varias fichas por hoja, con líneas de corte).
@@ -167,6 +169,10 @@ class _GenerarFichasWidgetState extends State<GenerarFichasWidget> {
     }
     setState(() => _generando = true);
     try {
+      // 🛡️ Blindaje del administrador (mismo criterio que en el panel local):
+      // tu teléfono queda "bypassed" en el hotspot antes de crear las fichas.
+      await BlindajeAdminService.autoBlindar();
+
       final res = await http.post(
         Uri.parse('$_VPS.url/hotspot/generar-fichas'),
         headers: {'Content-Type': 'application/json'},

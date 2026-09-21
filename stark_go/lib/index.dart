@@ -19,3 +19,6 @@ export '/pages/completar_perfil/completar_perfil_widget.dart' show CompletarPerf
 
 // ── Finanzas personales ──
 export '/pages/finanzas/finanzas_widget.dart' show FinanzasWidget;
+
+// ── Límite de teléfonos por cuenta ──
+export '/pages/dispositivos/dispositivo_bloqueado_page.dart' show DispositivoBloqueadoWidget;

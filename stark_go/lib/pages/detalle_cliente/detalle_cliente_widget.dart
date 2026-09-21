@@ -502,10 +502,7 @@ class _DetalleClienteWidgetState extends State<DetalleClienteWidget> {
   Future<void> _cargarEquipos() async {
     if (_uid == null) return;
 
-    final sl = await FirebaseFirestore.instance
-        .collection('starlinks')
-        .where('propietarioUid', isEqualTo: _uid)
-        .get();
+    final sl = await FirebaseFirestore.instance.collection('starlinks').where('propietarioUid', isEqualTo: _uid).get();
 
     if (!mounted) return;
     setState(() {
@@ -764,8 +761,7 @@ class _DetalleClienteWidgetState extends State<DetalleClienteWidget> {
     // ── VpsService lee el apikey de Firestore automáticamente ──
     // Devuelve false si el VPS no aceptó el comando (API Key distinta o VPS
     // caído): el estado cambió en la app pero el router sigue igual.
-    final bool statusOk =
-        await VpsService.cambiarStatus(status: nuevoStatus, ip: ip, nombre: nombre);
+    final bool statusOk = await VpsService.cambiarStatus(status: nuevoStatus, ip: ip, nombre: nombre);
 
     if (nuevoStatus == 'mora') {
       final numero = cliente.numero.toString().trim();
@@ -1008,10 +1004,12 @@ class _DetalleClienteWidgetState extends State<DetalleClienteWidget> {
                                 .animate()
                                 .fadeIn(duration: 300.ms, delay: 240.ms)
                                 .slideY(begin: 0.05, end: 0),
-                            ConsumoSection(clienteId: widget.rf!.id)
-                                .animate()
-                                .fadeIn(duration: 300.ms, delay: 280.ms)
-                                .slideY(begin: 0.05, end: 0),
+                            ConsumoSection(
+                              // 🔑 Si esta pantalla se reutiliza para otro
+                              // cliente, que la sección se vuelva a cargar.
+                              key: ValueKey(widget.rf!.id),
+                              clienteId: widget.rf!.id,
+                            ).animate().fadeIn(duration: 300.ms, delay: 280.ms).slideY(begin: 0.05, end: 0),
                             _buildStatusSection(c, raw).animate().fadeIn(duration: 300.ms, delay: 300.ms).slideY(begin: 0.05, end: 0),
                             _buildEquiposSection(c, raw).animate().fadeIn(duration: 300.ms, delay: 360.ms).slideY(begin: 0.05, end: 0),
                           ]),
@@ -1057,7 +1055,6 @@ class _DetalleClienteWidgetState extends State<DetalleClienteWidget> {
       },
     );
   }
-
 
   Widget _buildBannerSinConfig() {
     return Padding(

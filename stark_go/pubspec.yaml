@@ -1,7 +1,7 @@
 name: stark_go
 description: A new Flutter project.
 publish_to: 'none'
-version: 1.9.3+22
+version: 2.2.0+26
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
@@ -171,7 +171,9 @@ flutter:
     - assets/rive_animations/
     - assets/pdfs/
     - assets/jsons/
-
+    - assets/images/luna.png
+    - assets/images/personaje.png
+    - assets/images/sol.png
   fonts:
     - family: Icomoon
       fonts:

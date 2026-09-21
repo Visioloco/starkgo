@@ -7,6 +7,7 @@ import '/flutter_flow/flutter_flow_util.dart';
 import '/flutter_flow/nav/nav.dart';
 import '/index.dart';
 import '/pages/renovar_membresia/renovar_membresia_widget.dart';
+import '/services/dispositivo_service.dart';
 
 class SplashWidget extends StatefulWidget {
   const SplashWidget({super.key});
@@ -48,7 +49,16 @@ class _SplashWidgetState extends State<SplashWidget> {
 
     if (!mounted) return;
 
-    // 5. Verificar fecha de vencimiento en Firestore
+    // 5. LÍMITE DE TELÉFONOS POR CUENTA (máximo 2): registra este teléfono o
+    //    manda a la pantalla de "límite alcanzado".
+    final dispositivo = await DispositivoService.verificarYRegistrar();
+    if (!mounted) return;
+    if (!dispositivo.permitido) {
+      context.goNamed(DispositivoBloqueadoWidget.routeName);
+      return;
+    }
+
+    // 6. Verificar fecha de vencimiento en Firestore
     try {
       final doc = await FirebaseFirestore.instance.collection('user').doc(user.uid).get();
       final ts = doc.data()?['fechaVencimiento'] as Timestamp?;

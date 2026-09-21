@@ -11,7 +11,22 @@ class PagoWebViewPage extends StatefulWidget {
   final String url;
   final Plan plan;
 
-  const PagoWebViewPage({super.key, required this.url, required this.plan});
+  /// Pasarela con la que se está pagando: `'epayco'`, `'rapid'`,
+  /// `'mercadoPago'` o `'paypal'`. La pantalla de **pago pendiente** la usa
+  /// para verificar el cobro en la pasarela correcta ("Verificar estado").
+  final String metodo;
+
+  /// Nº de orden/factura que devolvió el VPS (ePayco: `ordenId`,
+  /// Rapid: `checkoutId`, PayPal: `orderId`).
+  final String? ordenId;
+
+  const PagoWebViewPage({
+    super.key,
+    required this.url,
+    required this.plan,
+    this.metodo = '',
+    this.ordenId,
+  });
 
   @override
   State<PagoWebViewPage> createState() => _PagoWebViewPageState();
@@ -44,7 +59,11 @@ class _PagoWebViewPageState extends State<PagoWebViewPage> {
           if (url.startsWith('starkgo://pago/fallido') || (url.contains('mercadopago') && url.contains('status=rejected'))) {
             Navigator.of(context).pushReplacement(
               MaterialPageRoute(
-                builder: (_) => PagoFallidoPage(plan: widget.plan),
+                builder: (_) => PagoFallidoPage(
+                  plan: widget.plan,
+                  metodo: widget.metodo,
+                  ordenId: widget.ordenId,
+                ),
               ),
             );
             return NavigationDecision.prevent;
@@ -56,6 +75,8 @@ class _PagoWebViewPageState extends State<PagoWebViewPage> {
                 builder: (_) => PagoFallidoPage(
                   plan: widget.plan,
                   esPendiente: true,
+                  metodo: widget.metodo,
+                  ordenId: widget.ordenId,
                 ),
               ),
             );

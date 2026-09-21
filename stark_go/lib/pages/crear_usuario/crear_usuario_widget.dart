@@ -1,5 +1,6 @@
 import 'package:stark_go/services/vps_service.dart';
 import 'package:stark_go/pages/config_velocidades/config_velocidades_widget.dart';
+import 'package:stark_go/pages/leases_mikrotik/leases_mikrotik_widget.dart';
 import '/backend/backend.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 import '/custom_code/actions/index.dart' as actions;
@@ -284,7 +285,15 @@ class _FormSection extends StatelessWidget {
 //  MAIN WIDGET
 // ═════════════════════════════════════════════════════════════
 class CrearUsuarioWidget extends StatefulWidget {
-  const CrearUsuarioWidget({super.key});
+  /// IP de la antena que llega desde la pantalla **IPs del MikroTik**
+  /// (`LeasesMikrotikWidget` → "Usar esta IP"): se precarga sola.
+  final String? ipAntena;
+
+  /// Nombre del equipo que reportó el router (solo informativo).
+  final String? nombreAntena;
+
+  const CrearUsuarioWidget({super.key, this.ipAntena, this.nombreAntena});
+
   static String routeName = 'CrearUsuario';
   static String routePath = 'crearUsuario';
 
@@ -361,6 +370,29 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
     _model.textFieldFocusNode5 ??= FocusNode();
     _model.textController6 ??= TextEditingController();
     _model.textFieldFocusNode6 ??= FocusNode();
+
+    // 📌 Si venimos de "IPs del MikroTik" (los leases del router), la IP de la
+    // antena ya viene elegida: se precarga y se avisa de dónde salió.
+    final ipDesdeLease = (widget.ipAntena ?? '').trim();
+    if (ipDesdeLease.isNotEmpty) {
+      _ctrlIpAntena.text = ipDesdeLease;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final equipo = (widget.nombreAntena ?? '').trim();
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+            'IP $ipDesdeLease cargada desde el MikroTik'
+            '${equipo.isEmpty ? '' : ' ($equipo)'}.',
+            style: GoogleFonts.spaceGrotesk(color: Colors.white),
+          ),
+          backgroundColor: _C.accent,
+          behavior: SnackBarBehavior.floating,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ));
+      });
+    }
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _cargarTodo();
       safeSetState(() {});
@@ -703,6 +735,59 @@ class _CrearUsuarioWidgetState extends State<CrearUsuarioWidget> {
                           keyboardType: TextInputType.numberWithOptions(decimal: true),
                           inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d.]'))],
                           validator: (val) => _validarIp(val, requerida: true),
+                        ),
+                        // 🔎 Traer la IP real del MikroTik (leases DHCP):
+                        // conectás la antena, el router le da una IP y la elegís
+                        // acá sin entrar a WinBox.
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: GestureDetector(
+                            onTap: () async {
+                              final ip = await Navigator.of(context).push<String>(
+                                MaterialPageRoute(
+                                  builder: (_) =>
+                                      const LeasesMikrotikWidget(modoSeleccion: true),
+                                ),
+                              );
+                              if (!mounted || ip == null || ip.isEmpty) return;
+                              setState(() => _ctrlIpAntena.text = ip);
+                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                                content: Text('IP $ip cargada desde el MikroTik',
+                                    style: GoogleFonts.spaceGrotesk(
+                                        color: Colors.white)),
+                                backgroundColor: _C.accent,
+                                behavior: SnackBarBehavior.floating,
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12)),
+                              ));
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 14, vertical: 11),
+                              decoration: BoxDecoration(
+                                color: _C.accent.withOpacity(0.10),
+                                borderRadius: BorderRadius.circular(12),
+                                border:
+                                    Border.all(color: _C.accent.withOpacity(0.35)),
+                              ),
+                              child: Row(children: [
+                                const Icon(Icons.wifi_find_rounded,
+                                    size: 16, color: _C.accent),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'No sé la IP de la antena · buscarla en el MikroTik',
+                                    style: GoogleFonts.spaceGrotesk(
+                                        color: _C.accent,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w700),
+                                  ),
+                                ),
+                                const Icon(Icons.chevron_right_rounded,
+                                    size: 18, color: _C.accent),
+                              ]),
+                            ),
+                          ),
                         ),
                         // IP Router manual (opcional)
                         _FormField(

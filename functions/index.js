@@ -16,6 +16,9 @@ app.use(
     },
   })
 );
+// ePayco notifica por `application/x-www-form-urlencoded` (igual que la
+// mayoría de pasarelas colombianas), así que hay que parsear ese formato.
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 const colas = {};
 
 // ═══════════════════════════════════════════════════════════
@@ -92,6 +95,15 @@ function _rosIp(ip) {
   return /^(\d{1,3}\.){3}\d{1,3}$/.test(s) ? s : '';
 }
 
+// MAC válida normalizada (AA:BB:CC:DD:EE:FF) o ''.
+// Acepta cualquier separador (- . : espacio) porque el MikroTik las muestra
+// distinto según la pantalla: se normaliza antes de meterla en un comando.
+function _rosMac(mac) {
+  const s = String(mac == null ? '' : mac).trim().toUpperCase().replace(/[^0-9A-F]/g, '');
+  if (s.length !== 12) return '';
+  return s.match(/.{2}/g).join(':');
+}
+
 // Velocidad RouterOS válida (ej: 5M, 10M, 1.5M, 768k) o null.
 function _rosRate(v) {
   const s = String(v == null ? '' : v).trim();
@@ -136,8 +148,13 @@ async function validarApikey(apikey) {
 function encolar(apikey, cmd) {
   if (!colas[apikey]) colas[apikey] = [];
   const ip = String(cmd.ip || '');
+  const mac = String(cmd.mac || '');
   const yaEsta = colas[apikey].some(
-    (c) => c.nombre === cmd.nombre && c.accion === cmd.accion && String(c.ip || '') === ip
+    (c) =>
+      c.nombre === cmd.nombre &&
+      c.accion === cmd.accion &&
+      String(c.ip || '') === ip &&
+      String(c.mac || '') === mac
   );
   if (!yaEsta) colas[apikey].push({ ...cmd, fecha: new Date() });
 }
@@ -208,6 +225,50 @@ function construirComandos(pendientes) {
       if (c.accion === 'hotspot-desbloquear') {
         if (!ip) return '';
         return `:if ([:len [/ip hotspot ip-binding find where address="${ip}"]] = 0) do={ /ip hotspot ip-binding add address="${ip}" type=bypassed comment="StarkGo ${nombre}" }`;
+      }
+      // 🛡️ BLINDAJE DEL ADMINISTRADOR (mi teléfono).
+      // Mientras creás fichas o configurás el hotspot, tu equipo queda
+      // "bypassed": el portal cautivo NO le pide ficha/PIN y podés seguir
+      // trabajando sin loguearte. Acepta IP y/o MAC:
+      //   · con MAC el blindaje sobrevive a los cambios de IP del DHCP,
+      //   · con IP funciona igual (útil si el celular tiene MAC aleatoria).
+      // Además queda en la address-list `starkgo_admin` para auditoría/reglas.
+      if (c.accion === 'hotspot-blindar-admin') {
+        const mac = _rosMac(c.mac);
+        if (!ip && !mac) return '';
+        const quien = nombre || 'admin';
+        const attrs = [ip ? `address="${ip}"` : '', mac ? `mac-address="${mac}"` : '']
+          .filter(Boolean)
+          .join(' ');
+        const buscar = mac ? `mac-address="${mac}"` : `address="${ip}"`;
+        const lineas = [
+          `:if ([:len [/ip hotspot ip-binding find where ${buscar}]] = 0) do={ /ip hotspot ip-binding add ${attrs} type=bypassed comment="StarkGo ADMIN ${quien}" }`,
+        ];
+        if (ip) {
+          lineas.push(
+            `:if ([:len [/ip firewall address-list find where address="${ip}" and list="starkgo_admin"]] = 0) do={ /ip firewall address-list add list=starkgo_admin address="${ip}" comment="StarkGo ADMIN ${quien}" }`
+          );
+        }
+        return lineas.join('\r\n');
+      }
+      // 📌 MARCAR EL LEASE (DHCP) DE UN CLIENTE.
+      // Deja la IP de la antena: ESTÁTICA (así el DHCP no se la cambia),
+      // con comentario `StarkGo <cliente>` y en la address-list `starkgo`.
+      // Todo en UNA línea: el /import del MikroTik se corta si una línea falla.
+      // Idempotente: si ya es estática no la vuelve a convertir, y si la IP ya
+      // está en la lista no la duplica.
+      if (c.accion === 'marcarLease') {
+        if (!ip) return '';
+        const quien = nombre || 'cliente';
+        const buscarLease =
+          `:local lid [/ip dhcp-server lease find where address="${ip}"]; ` +
+          `:if ([:len $lid] > 0) do={ ` +
+          `:if ([:tostr [/ip dhcp-server lease get $lid dynamic]] = "true") do={ /ip dhcp-server lease make-static $lid }; ` +
+          `/ip dhcp-server lease set $lid comment="StarkGo ${quien}" }`;
+        const enLista =
+          `:if ([:len [/ip firewall address-list find where address="${ip}" and list="starkgo"]] = 0) do={ ` +
+          `/ip firewall address-list add list=starkgo address="${ip}" comment="StarkGo ${quien}" }`;
+        return `${buscarLease}\r\n${enLista}`;
       }
       // Simple Queue por IP de antena (nombre = cliente). Idempotente:
       // si ya existe la actualiza, si no la crea.
@@ -378,12 +439,15 @@ const ACCIONES_ENCOLABLES = new Set([
   'desbloquear',
   'hotspot-bloquear',
   'hotspot-desbloquear',
+  'hotspot-blindar-admin',
+  'marcarLease',
   'limitarMegas',
   'pppoeCrear',
   'pppoeEliminar',
 ]);
 const CAMPOS_ENCOLABLES = [
   'ip',
+  'mac',
   'nombre',
   'subida',
   'bajada',
@@ -647,9 +711,30 @@ app.get('/portal/:apikey', async (req, res) => {
 // ═══════════════════════════════════════
 const { MercadoPagoConfig, Preference, Payment } = require('mercadopago');
 
-const mpClient = new MercadoPagoConfig({
-  accessToken: 'APP_USR-2192060784339362-042316-e4103c6eba088eef4bf579cc39cff8cb-166839613',
-});
+// Token de Mercado Pago: variable de entorno → `functions/credenciales.local.json`
+// → valor histórico de respaldo. (Antes estaba fijo acá: así se puede rotar sin
+// tocar el código.)
+const MP_ACCESS_TOKEN =
+  credencial('MP_ACCESS_TOKEN') ||
+  'APP_USR-2192060784339362-042316-e4103c6eba088eef4bf579cc39cff8cb-166839613';
+
+const mpClient = new MercadoPagoConfig({ accessToken: MP_ACCESS_TOKEN });
+
+// Caché corto en memoria para las consultas a las pasarelas durante el
+// "auto-chequeo": la app pregunta cada pocos segundos mientras el pago está
+// pendiente y no queremos golpear la API de ePayco/Mercado Pago en cada intento.
+const cacheConsultas = new Map();
+function conCache(clave, ttlMs, fn) {
+  const hit = cacheConsultas.get(clave);
+  if (hit && Date.now() - hit.t < ttlMs) return Promise.resolve(hit.v);
+  return Promise.resolve()
+    .then(fn)
+    .then((v) => {
+      if (cacheConsultas.size > 500) cacheConsultas.clear();
+      cacheConsultas.set(clave, { t: Date.now(), v });
+      return v;
+    });
+}
 
 // ════════════════════════════════════════════════════════════════
 //  PLANES MERCADOPAGO — Incluye planes de acceso completo Y vouchers
@@ -682,6 +767,16 @@ const mpClient = new MercadoPagoConfig({
 //    USD_A_COP_TTL_MIN=360   → cada cuántos minutos se re-consulta (6 h)
 // ════════════════════════════════════════════════════════════════
 const MP_CURRENCY = process.env.MP_CURRENCY || 'COP';
+// Países donde Mercado Pago está disponible. La cuenta es de Colombia y solo
+// cobra ahí, así que por defecto es "CO". La app pide el país del teléfono y
+// solo muestra el botón si está en esta lista (`pasarelas.mercadoPago.paises`).
+//   MP_PAISES=CO         → solo Colombia (por defecto)
+//   MP_PAISES=CO,AR,BR   → varios países
+//   MP_FORZAR=true       → mostrar el botón en TODO el mundo (solo pruebas)
+const MP_PAISES = String(process.env.MP_PAISES || 'CO')
+  .split(',')
+  .map((p) => p.trim().toUpperCase())
+  .filter((p) => p.length === 2);
 const USD_A_COP_FIJA = process.env.USD_A_COP ? Number(process.env.USD_A_COP) : 0;
 const USD_A_COP_MARGEN = Number(process.env.USD_A_COP_MARGEN || 0);
 const TASA_TTL_MS = Number(process.env.USD_A_COP_TTL_MIN || 360) * 60 * 1000;
@@ -854,10 +949,34 @@ app.get('/precios', async (req, res) => {
       actualizado: tasa.actualizado,
       margen: USD_A_COP_MARGEN,
       moneda: MP_CURRENCY,
-      // La app usa esto para mostrar/ocultar el botón de Rapid:
+      // La app usa esto para mostrar/ocultar los botones de pago:
       // produccion=false → botón OCULTO · true → botón VISIBLE.
       pasarelas: {
-        rapid: { produccion: RAPID_CFG.produccion, modo: RAPID_CFG.modo },
+        // Rapid quedó reemplazada por ePayco: se muestra solo si
+        // RAPID_ACTIVO=true en el VPS (así sigue oculta sin recompilar la app).
+        rapid: {
+          produccion: rapidProduccionPublicada(),
+          modo: RAPID_CFG.modo,
+          activo: RAPID_ACTIVO,
+        },
+        // ePayco: la pasarela del RESTO DEL MUNDO (en Colombia cobra MP).
+        epayco: {
+          produccion: EPAYCO_CFG.produccion,
+          modo: EPAYCO_CFG.modo,
+          paises: EPAYCO_CFG.paises,
+          excluirPaises: EPAYCO_CFG.excluirPaises,
+          forzar: EPAYCO_CFG.forzar,
+          // En COP (la app lo compara contra el precio en COP): si el tope está
+          // en USD, se convierte aquí con la tasa del día.
+          montoMax: await epaycoMontoMaxCop(EPAYCO_CFG, tasa.valor),
+        },
+        // Mercado Pago solo opera en Colombia (la cuenta es CO): la app
+        // muestra el botón únicamente si el teléfono está en uno de estos
+        // países (variable MP_PAISES, ej: "CO" o "CO,AR").
+        mercadoPago: {
+          paises: MP_PAISES,
+          forzar: aBool(process.env.MP_FORZAR),
+        },
       },
       planes,
     });
@@ -925,7 +1044,30 @@ app.post('/mp/crear-preferencia', verificarTokenUsuario, async (req, res) => {
       },
     });
     console.log(`[MP] Preferencia creada uid=${uid} plan=${planId} valor=${montoCop(plan, tasa.valor)} ${MP_CURRENCY} (tasa ${tasa.valor.toFixed(2)})`);
-    res.json({ initPoint: result.init_point, sandboxInitPoint: result.sandbox_init_point });
+    // Guardamos la orden: sirve para que "Verificar estado" (y el auto-chequeo
+    // de la pantalla de pendiente) sepa qué compra está esperando este usuario.
+    try {
+      await db.collection('mp_ordenes').doc(String(result.id)).set(
+        {
+          uid,
+          planId,
+          plan: plan.titulo,
+          monto: montoCop(plan, tasa.valor),
+          moneda: MP_CURRENCY,
+          preferenceId: String(result.id),
+          estado: 'CREADA',
+          creadoEn: admin.firestore.Timestamp.now(),
+        },
+        { merge: true }
+      );
+    } catch (e) {
+      console.warn('[MP] No pude guardar la orden:', e.message);
+    }
+    res.json({
+      initPoint: result.init_point,
+      sandboxInitPoint: result.sandbox_init_point,
+      ordenId: String(result.id),
+    });
   } catch (e) {
     console.error('[MP] Error crear preferencia:', e.message);
     res.status(500).json({ error: 'Error al crear preferencia' });
@@ -952,35 +1094,1517 @@ app.post('/mp/webhook', async (req, res) => {
       console.warn(`[MP] ⚠️ Pago NO aprobado (${pago.status_detail}) — no se activa membresía`);
     }
     if (pago.status === 'approved') {
-      const [uid, planId] = pago.external_reference.split('|');
-      const plan = PLANES_MP[planId];
-      if (!uid || !plan) return res.sendStatus(200);
-      const userRef = db.collection('user').doc(uid);
-      const userDoc = await userRef.get();
-      const tsActual = userDoc.data()?.fechaVencimiento?.toDate();
-      const base = (tsActual && tsActual > new Date()) ? tsActual : new Date();
-      const nuevaFecha = new Date(base);
-      nuevaFecha.setMonth(nuevaFecha.getMonth() + plan.meses);
-
-      // Actualizar TODOS los campos de membresía
-      await userRef.update({
-        fechaVencimiento: admin.firestore.Timestamp.fromDate(nuevaFecha),
-        planMembresia: planId,           // '1m' | '3m' | '6m' | '1a' | 'v1m' | 'v3m' | 'v6m' | 'v1a'
-        activo: true,
-        plan: {
-          tipo: plan.tipo,               // 'completo' | 'vouchers'
-          nombre: plan.titulo,
-          meses: plan.meses,
-          precio: plan.precio,
-          actualizado: admin.firestore.Timestamp.now(),
+      const ref = String(pago.external_reference || '');
+      if (!ref.includes('|')) {
+        console.warn(`[MP] Pago ${pago.id} aprobado pero sin external_reference usable`);
+        return res.sendStatus(200);
+      }
+      const [uid, planId] = ref.split('|');
+      if (!uid || !PLANES_MP[planId]) return res.sendStatus(200);
+      // ⚠️ Activación IDEMPOTENTE: antes esto extendía la membresía en cada
+      //    notificación (si Mercado Pago repetía el webhook, se sumaban meses
+      //    de más). Ahora usa la misma puerta que las demás pasarelas.
+      const fecha = await activarMembresia(uid, planId, 'MP', `pago_${pago.id}`, 'mp_ordenes');
+      await db.collection('mp_ordenes').doc(`pago_${pago.id}`).set(
+        {
+          uid,
+          planId,
+          pagoId: String(pago.id),
+          estado: 'PAGADO',
+          activado: true,
+          monto: pago.transaction_amount,
+          moneda: pago.currency_id,
+          pagadoEn: admin.firestore.Timestamp.now(),
         },
-      });
-      console.log(`[MP] ✅ uid=${uid} renovado hasta ${nuevaFecha.toISOString()} plan=${planId} tipo=${plan.tipo}`);
+        { merge: true }
+      );
+      if (!fecha) console.log(`[MP] Pago ${pago.id} ya estaba activado (se omite)`);
     }
     res.sendStatus(200);
   } catch (e) {
     console.error('[MP] Error webhook:', e.message);
     res.sendStatus(500);
+  }
+});
+
+// ── Verificación de pagos de Mercado Pago ("Verificar estado") ──
+// La app (y el auto-chequeo de la pantalla de pendiente) preguntan acá si el
+// pago ya se acreditó. Antes esa pantalla consultaba sólo a Rapid, así que un
+// pago con Mercado Pago quedaba "pendiente" para siempre.
+async function mpBuscarPagosAprobados(uid, planId) {
+  const ref = `${uid}|${planId}`;
+  // Caché de 20 s: el auto-chequeo pregunta cada pocos segundos.
+  return conCache(`mp:${ref}`, 20000, async () => {
+    const url =
+      'https://api.mercadopago.com/v1/payments/search' +
+      `?sort=date_created&criteria=desc&limit=20&external_reference=${encodeURIComponent(ref)}`;
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` } });
+    const j = await r.json().catch(() => null);
+    if (!r.ok) {
+      console.warn(`[MP] Búsqueda de pagos HTTP ${r.status}: ${j ? JSON.stringify(j).slice(0, 200) : ''}`);
+      return [];
+    }
+    const res = j && Array.isArray(j.results) ? j.results : [];
+    return res.filter((p) => p && p.status === 'approved');
+  });
+}
+
+// Activa lo que falte de los pagos APROBADOS de Mercado Pago (idempotente).
+// Devuelve { activados, yaActivos } igual que `epaycoVerificarPagos()`.
+async function mpVerificarPagos(uidFiltro, planFiltro) {
+  const activados = [];
+  const yaActivos = [];
+  if (!uidFiltro) return { activados, yaActivos };
+
+  // Qué planes buscar: el que pidió la app o, si no vino ninguno, los de las
+  // compras registradas de ese usuario (una sola consulta a Firestore, así no
+  // disparamos 8 búsquedas en la API de Mercado Pago en cada intento).
+  let planes = planFiltro && PLANES_MP[planFiltro] ? [planFiltro] : [];
+  if (!planes.length) {
+    try {
+      const snap = await db
+        .collection('mp_ordenes')
+        .where('uid', '==', String(uidFiltro))
+        .limit(10)
+        .get();
+      planes = [
+        ...new Set(
+          snap.docs
+            .map((d) => String((d.data() || {}).planId || ''))
+            .filter((p) => PLANES_MP[p])
+        ),
+      ];
+    } catch (e) {
+      console.warn('[MP] No pude leer mp_ordenes:', e.message);
+    }
+    if (!planes.length) planes = Object.keys(PLANES_MP);
+  }
+
+  for (const planId of planes) {
+    let pagos = [];
+    try {
+      pagos = await mpBuscarPagosAprobados(uidFiltro, planId);
+    } catch (e) {
+      console.warn(`[MP] No pude consultar los pagos (${planId}):`, e.message);
+      continue;
+    }
+    for (const p of pagos) {
+      const fecha = await activarMembresia(uidFiltro, planId, 'MP', `pago_${p.id}`, 'mp_ordenes');
+      await db.collection('mp_ordenes').doc(`pago_${p.id}`).set(
+        {
+          uid: uidFiltro,
+          planId,
+          pagoId: String(p.id),
+          estado: 'PAGADO',
+          activado: true,
+          monto: p.transaction_amount,
+          moneda: p.currency_id,
+          pagadoEn: admin.firestore.Timestamp.now(),
+        },
+        { merge: true }
+      );
+      const item = {
+        pagoId: String(p.id),
+        planId,
+        monto: p.transaction_amount,
+        moneda: p.currency_id,
+      };
+      if (fecha) activados.push(item);
+      else yaActivos.push(item);
+    }
+  }
+  return { activados, yaActivos };
+}
+
+// ── POST /mp/verificar — el botón "Verificar estado" (Mercado Pago) ──
+app.post('/mp/verificar', verificarTokenUsuario, async (req, res) => {
+  const { uid } = req.user;
+  const planId = (req.body && req.body.planId) || '';
+  try {
+    let r = await mpVerificarPagos(uid, planId);
+    if (!r.activados.length && !r.yaActivos.length && planId) {
+      r = await mpVerificarPagos(uid, '');
+    }
+    const planes = [...r.activados, ...r.yaActivos].map((a) => a.planId);
+    const pagado = planes.length > 0;
+    console.log(
+      `[MP] Verificar uid=${uid} plan=${planId || 'cualquiera'} → ` +
+        `activados=${r.activados.length} yaActivos=${r.yaActivos.length} pagado=${pagado}`
+    );
+    res.json({
+      ok: true,
+      pagado,
+      activados: r.activados.length,
+      yaActivos: r.yaActivos.length,
+      planes,
+      pagos: [...r.activados, ...r.yaActivos],
+    });
+  } catch (e) {
+    console.error('[MP] Error verificar:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ════════════════════════════════════════════════════════════════
+//  EPAYCO — pasarela de pago (por defecto en TODOS los países,
+//  incluida Colombia; en Colombia además está Mercado Pago)
+//
+//  Credenciales del panel de ePayco (Integraciones → Llaves de API):
+//     EPAYCO_PUBLIC_KEY      = public_key   ← OBLIGATORIA (API + checkout)
+//     EPAYCO_PRIVATE_KEY     = private_key  ← OBLIGATORIA (API)
+//     EPAYCO_CUST_ID_CLIENTE = p_cust_id_cliente  (sólo para validar la
+//     EPAYCO_P_KEY           = p_key              firma del webhook)
+//     EPAYCO_MODE            = 'test' (pruebas) | 'live' (cobros reales)
+//
+//  🎛️  TODO SE MANEJA DESDE FIRESTORE → `config_pagos/epayco`
+//       produccion     : false = botón OCULTO · true = VISIBLE en la app
+//       modo           : 'test' cobra en pruebas · 'live' cobra de verdad
+//       custIdCliente  : p_cust_id_cliente
+//       pKey           : p_key
+//       publicKey/privateKey : llaves del API (opcionales)
+//       paises         : lista blanca (vacía = todos los países)
+//       excluirPaises  : lista negra (vacía = ninguno excluido;
+//                        poné ["CO"] si querés ocultarlo en Colombia)
+//       forzar         : true = mostrar en TODO el mundo (pruebas)
+//     Se relee cada PAGOS_TTL_MS y se publica el espejo público, así que
+//     cambiás las llaves de producción y prendés el botón SIN tocar la app.
+//
+//  Flujo (idéntico al de Mercado Pago / Rapid para la app):
+//     1. La app llama POST /epayco/crear-orden  → { initPoint }
+//     2. El VPS crea la SESIÓN en la API de ePayco y devuelve
+//        https://secure.epayco.co/checkout.php?sessionId=<id>
+//     3. La app abre ese checkout en el WebView; el cliente paga
+//     4. ePayco avisa por POST /epayco/confirmacion (activa la membresía)
+//        y devuelve el navegador a GET /epayco/respuesta?ref_payco=<id>
+//
+//  ⚠️  El checkout CLÁSICO por URL (p_cust_id_cliente + p_key + x_signature)
+//      YA NO EXISTE: la página del checkout es una SPA que sólo entiende
+//      `sessionId`, así que con la URL clásica el cliente veía una **página
+//      404**. Por eso ahora la orden se crea por API (ver abajo).
+//
+//  En el panel de ePayco, si hay que registrar URLs, usá:
+//        URL de respuesta:     http://5.161.88.42:3000/epayco/respuesta
+//        URL de confirmación:  http://5.161.88.42:3000/epayco/confirmacion
+//
+//  Firmas MD5 del checkout viejo (sólo se usan para *intentar* validar la
+//  firma del webhook de confirmación; si no coincide se avisa en el log y,
+//  por defecto, NO se bloquea el pago — ver `firmaObligatoria`):
+//     x_signature (respuesta) = md5(p_cust_id_cliente ^ p_key ^ x_ref_payco
+//                                   ^ x_transaction_id ^ x_amount ^ x_currency_code)
+//     Si ePayco llegara a usar otra variante, revisá `epaycoFirmaRespuesta()`
+//     y los logs: la firma recibida se compara y se avisa en el log.
+//
+//  Códigos de respuesta (x_cod_response):
+//     1 = aceptada · 2 = rechazada · 3 = pendiente · 4 = fallida
+// ════════════════════════════════════════════════════════════════
+// Credenciales de RESPALDO: variables de entorno o `credenciales.local.json`.
+// La fuente de verdad es `config_pagos/epayco` en Firestore (igual que
+// Rapid): ahí podés cambiar llaves y pasar a producción sin tocar el VPS.
+const EPAYCO_CUST_ID = credencial('EPAYCO_CUST_ID_CLIENTE');
+const EPAYCO_P_KEY = credencial('EPAYCO_P_KEY');
+// Llaves del API de ePayco (no las usa el checkout hospedado, pero quedan
+// disponibles y se muestran enmascaradas en /epayco/diag).
+const EPAYCO_PUBLIC_KEY = credencial('EPAYCO_PUBLIC_KEY');
+const EPAYCO_PRIVATE_KEY = credencial('EPAYCO_PRIVATE_KEY');
+const EPAYCO_MODE = (process.env.EPAYCO_MODE || 'test').toLowerCase(); // 'test' | 'live'
+const EPAYCO_MONEDA = process.env.EPAYCO_CURRENCY || 'COP';
+const EPAYCO_PAIS = process.env.EPAYCO_COUNTRY || 'CO';
+const EPAYCO_VPS = process.env.EPAYCO_VPS_URL || 'http://5.161.88.42:3000';
+const EPAYCO_CHECKOUT_URL =
+  process.env.EPAYCO_CHECKOUT_URL || 'https://secure.epayco.co/checkout.php';
+
+// 🚧 Tope de monto de ePayco (en COP). 0 = sin tope.
+//   En modo PRUEBAS ePayco rechaza montos fuera de 5.000–200.000 COP.
+//   Si lo cargás (Firestore `montoMax` o env EPAYCO_MONTO_MAX), la app
+//   avisa con un mensaje claro "supera el monto máximo" en lugar del error
+//   técnico de ePayco. En LIVE poné el tope real de tu cuenta (o 0).
+const EPAYCO_MONTO_MAX = Number(process.env.EPAYCO_MONTO_MAX || 0);
+
+// ¿En qué países se muestra el botón de ePayco?
+//   EPAYCO_PAISES         → lista blanca (vacía = TODOS los países)
+//   EPAYCO_EXCLUIR_PAISES → lista negra (VACÍA por defecto = TODOS los países,
+//                           incluida Colombia). Si algún día querés que en
+//                           Colombia solo cobre Mercado Pago, poné "CO".
+//   EPAYCO_FORZAR=true    → mostrarlo en TODO el mundo (solo para pruebas)
+const listaPaises = (valor) =>
+  String(valor === undefined || valor === null ? '' : valor)
+    .split(',')
+    .map((p) => p.trim().toUpperCase())
+    .filter((p) => p.length === 2);
+const EPAYCO_PAISES = listaPaises(process.env.EPAYCO_PAISES);
+const EPAYCO_EXCLUIR_PAISES = listaPaises(process.env.EPAYCO_EXCLUIR_PAISES);
+
+// Config en uso (mutable: se refresca desde Firestore cada PAGOS_TTL_MS).
+let EPAYCO_CFG = {
+  // OJO: `produccion` sólo decide si el BOTÓN se muestra en la app
+  // (el cobro real de pruebas/live lo decide `modo`).
+  produccion: aBool(process.env.EPAYCO_PRODUCCION),
+  modo: EPAYCO_MODE,
+  custIdCliente: EPAYCO_CUST_ID,
+  pKey: EPAYCO_P_KEY,
+  publicKey: EPAYCO_PUBLIC_KEY,
+  privateKey: EPAYCO_PRIVATE_KEY,
+  moneda: EPAYCO_MONEDA,
+  pais: EPAYCO_PAIS,
+  paises: EPAYCO_PAISES,
+  excluirPaises: EPAYCO_EXCLUIR_PAISES,
+  forzar: aBool(process.env.EPAYCO_FORZAR),
+  montoMax: EPAYCO_MONTO_MAX,
+  checkoutUrl: EPAYCO_CHECKOUT_URL,
+  firmaObligatoria: aBool(process.env.EPAYCO_FIRMA_OBLIGATORIA),
+};
+let epaycoCfgLeido = 0;
+
+// MD5 en hexadecimal — es la firma que usa ePayco. Se hace el require acá
+// adentro para que este módulo no dependa del `crypto` del bloque de PayPal.
+function md5Hex(txt) {
+  return require('crypto')
+    .createHash('md5')
+    .update(String(txt), 'utf8')
+    .digest('hex');
+}
+
+// Firma de la ORDEN (la que viaja en la URL del checkout).
+function epaycoFirmaOrden(cfg, idInvoice, monto, moneda) {
+  return md5Hex(
+    [cfg.custIdCliente, cfg.pKey, idInvoice, monto, moneda].join('^')
+  );
+}
+
+// Firma que ePayco devuelve en la respuesta / confirmación.
+function epaycoFirmaRespuesta(cfg, d) {
+  return md5Hex(
+    [
+      cfg.custIdCliente,
+      cfg.pKey,
+      d.x_ref_payco,
+      d.x_transaction_id,
+      d.x_amount,
+      d.x_currency_code,
+    ].join('^')
+  );
+}
+
+// ¿La firma que envió ePayco coincide con la esperada?
+function epaycoFirmaOk(cfg, d) {
+  const recibida = String(d.x_signature || '').trim().toLowerCase();
+  if (!recibida) return false;
+  return recibida === epaycoFirmaRespuesta(cfg, d).toLowerCase();
+}
+
+// ¿La transacción quedó APROBADA? (1 = aceptada · 3 = pendiente)
+const epaycoAprobada = (codigo) => String(codigo || '').trim() === '1';
+const epaycoPendiente = (codigo) => String(codigo || '').trim() === '3';
+
+// Tope de ePayco EN COP **para la app**.
+//
+// ⚠️ El `montoMax` de Firebase está en la MISMA moneda que `moneda` (o sea, en
+//    USD si cobrás en dólares), pero la app compara ese tope contra el precio
+//    del plan en COP (`PreciosService.epaycoPermiteMonto(precioCop)`). Si le
+//    mandábamos el número crudo (ej: 62), la app escondía el botón en TODOS los
+//    planes. Por eso lo publicamos convertido con la tasa del día:
+//      · moneda COP → se manda tal cual (no cambia nada).
+//      · moneda USD → se convierte a COP con `montoCop` (mismo redondeo/margen
+//        que usan los precios de `/precios`, así el tope y el precio son
+//        directamente comparables).
+//      · montoMax = 0 → 0 (sin tope).
+//    El VPS sigue validando contra el valor crudo en `cfg.moneda`, así que el
+//    tope real del cobro no cambia.
+async function epaycoMontoMaxCop(cfg, tasa) {
+  const max = Number((cfg && cfg.montoMax) || 0);
+  if (!(max > 0)) return 0;
+  if (String((cfg && cfg.moneda) || 'COP').toUpperCase() !== 'USD') return max;
+  try {
+    const t = Number(tasa) > 0 ? Number(tasa) : (await obtenerTasaUsdCop()).valor;
+    return montoCop({ precio: max }, t);
+  } catch (e) {
+    // Sin tasa no inventamos un tope: 0 = sin tope (el botón se muestra y el
+    // cobro real lo valida ePayco).
+    console.warn('[EPAYCO] No pude convertir montoMax a COP:', e.message);
+    return 0;
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
+//  API DE ePayco — el checkout actual trabaja con SESIÓN, no con URL
+//
+//  ⚠️ IMPORTANTE (verificado contra ePayco el 2026-09-20):
+//  el "checkout clásico" por URL (p_cust_id_cliente + p_key + x_signature)
+//  YA NO EXISTE: la página del checkout es una SPA que sólo entiende
+//  `sessionId` (por eso daba una página 404). El flujo correcto es:
+//
+//    1. POST {API}/login  (Basic base64(public_key:private_key)) → { token }
+//    2. POST {API}/payment/session/create (Bearer token)         → { data.sessionId }
+//    3. El cliente abre  https://secure.epayco.co/checkout.php?sessionId=<id>
+//
+//  Las llaves que valen son PUBLIC_KEY + PRIVATE_KEY (panel de ePayco).
+//  custIdCliente/pKey quedan sólo para intentar validar la firma del
+//  webhook de confirmación (si no coincide se avisa en el log; no bloquea).
+// ════════════════════════════════════════════════════════════════
+const EPAYCO_API_URL = process.env.EPAYCO_API_URL || 'https://apify.epayco.co';
+
+// Token de la API (dura ~20 min: se renueva solo cuando está por vencer).
+let epaycoToken = { valor: '', expira: 0 };
+
+async function epaycoLogin({ forzar = false } = {}) {
+  const cfg = await refrescarConfigEpayco();
+  if (!cfg.publicKey || !cfg.privateKey) {
+    throw new Error('faltan publicKey/privateKey de ePayco');
+  }
+  if (!forzar && epaycoToken.valor && Date.now() < epaycoToken.expira) {
+    return epaycoToken.valor;
+  }
+  const basic = Buffer.from(`${cfg.publicKey}:${cfg.privateKey}`).toString('base64');
+  const resp = await fetch(`${EPAYCO_API_URL}/login`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Basic ${basic}`,
+    },
+    body: '{}',
+  });
+  const txt = await resp.text();
+  let json = null;
+  try {
+    json = JSON.parse(txt);
+  } catch (_) {
+    json = null;
+  }
+  if (!json || !json.token) {
+    throw new Error(`ePayco login ${resp.status}: ${txt.slice(0, 200)}`);
+  }
+  epaycoToken = { valor: json.token, expira: Date.now() + 15 * 60 * 1000 };
+  console.log('[EPAYCO] Token de API obtenido (válido 15 min)');
+  return json.token;
+}
+
+// Crea la sesión de pago y devuelve el sessionId.
+// ¿ePayco espera el checkout V2 para nuestra cuenta? (sólo informativo)
+//   GET …/commerce/v2/check?publicKey=<PUB>  → { isV2: true|false }
+// Con `false` (nuestro caso) el checkout válido es el CLÁSICO (V1) por JS:
+//   ePayco.checkout.configure({ key, test }).open(datos)
+async function epaycoEsV2(cfg) {
+  try {
+    const r = await fetch(
+      'https://ms-checkout-create-transaction.epayco.co/commerce/v2/check?publicKey=' +
+        encodeURIComponent(cfg.publicKey || ''),
+      { headers: { Accept: 'application/json' } }
+    );
+    const j = await r.json();
+    return j && (j.isV2 === true || j.isv2 === true);
+  } catch (e) {
+    console.warn('[EPAYCO] No pude consultar si la cuenta es V2:', e.message);
+    return null;
+  }
+}
+
+// Crea la sesión de pago (API V2 de ePayco) — sólo se usa en /epayco/diag.
+// ⚠️ Límites de ePayco: en modo PRUEBAS el monto debe estar entre 5.000 y
+// 200.000 COP (los planes de 6 meses y 1 año superan ese tope → hay que
+// probarlos en LIVE o consultar con ePayco el tope de la cuenta).
+async function epaycoCrearSesion(datos) {
+  const token = await epaycoLogin();
+  const resp = await fetch(`${EPAYCO_API_URL}/payment/session/create`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(datos),
+  });
+  const txt = await resp.text();
+  let json = null;
+  try {
+    json = JSON.parse(txt);
+  } catch (_) {
+    json = null;
+  }
+  const sessionId = json && json.data && json.data.sessionId;
+  if (!sessionId) {
+    // ePayco responde 200 con success:false y una lista de errores muy
+    // explicativa (ej: "property Amount must be between 5000 and 200000"):
+    // la mostramos tal cual para no perder tiempo adivinando.
+    const errores = json && json.data && Array.isArray(json.data.errors)
+      ? json.data.errors.map((e) => e.errorMessage || e.codError).join(' | ')
+      : '';
+    const detalle = errores || (json && json.textResponse) || txt.slice(0, 400);
+    throw new Error(`ePayco sesión ${resp.status}: ${detalle}`);
+  }
+  return sessionId;
+}
+
+// Busca una orden por su `ref_payco` (la vuelta del checkout trae ese id).
+async function epaycoBuscarOrdenPorRef(ref) {
+  if (!ref) return null;
+  try {
+    const snap = await db
+      .collection('epayco_ordenes')
+      .where('refPayco', '==', String(ref))
+      .limit(1)
+      .get();
+    if (snap.docs && snap.docs.length) return snap.docs[0].data();
+  } catch (e) {
+    console.warn('[EPAYCO] No pude buscar la orden por ref:', e.message);
+  }
+  return null;
+}
+
+// Lee (o crea) `config_pagos/epayco` y deja EPAYCO_CFG actualizado.
+// Mismo comportamiento que Rapid: si el documento no existe se crea en
+// PRUEBAS (`produccion=false`) → el botón queda OCULTO en la app hasta que
+// lo pongas en `true` desde la consola de Firebase.
+async function refrescarConfigEpayco({ forzar = false } = {}) {
+  if (!forzar && Date.now() - epaycoCfgLeido < PAGOS_TTL_MS) return EPAYCO_CFG;
+  try {
+    const ref = db.collection('config_pagos').doc('epayco');
+    const doc = await ref.get();
+    if (!doc.exists) {
+      const base = {
+        produccion: aBool(process.env.EPAYCO_PRODUCCION),
+        modo: EPAYCO_MODE,
+        custIdCliente: EPAYCO_CUST_ID,
+        pKey: EPAYCO_P_KEY,
+        publicKey: EPAYCO_PUBLIC_KEY,
+        privateKey: EPAYCO_PRIVATE_KEY,
+        pais: EPAYCO_PAIS,
+        moneda: EPAYCO_MONEDA,
+        paises: EPAYCO_PAISES,
+        excluirPaises: EPAYCO_EXCLUIR_PAISES,
+        forzar: aBool(process.env.EPAYCO_FORZAR),
+        montoMax: EPAYCO_MONTO_MAX,
+        firmaObligatoria: aBool(process.env.EPAYCO_FIRMA_OBLIGATORIA),
+        nota:
+          'produccion=false → botón OCULTO en la app · true → VISIBLE. modo: test|live (decide si se cobra de verdad). ' +
+          'paises=lista blanca (vacía = todos) · excluirPaises=lista negra (vacía = TODOS, incluida Colombia; poné CO para ocultarlo en Colombia).',
+        actualizado: admin.firestore.Timestamp.now(),
+      };
+      await ref.set(base, { merge: true });
+      EPAYCO_CFG = { ...base, checkoutUrl: EPAYCO_CHECKOUT_URL };
+      epaycoCfgLeido = Date.now();
+      console.log('[PAGOS] config_pagos/epayco CREADA (botón oculto)');
+      await publicarEspejoPasarelas();
+      return EPAYCO_CFG;
+    }
+    const d = doc.data() || {};
+    const produccion = aBool(d.produccion);
+    // OJO: si falta `modo` se usa el del VPS / archivo local (test|live).
+    // NO se deduce de `produccion`, para que prender el botón nunca active
+    // cobros reales por accidente.
+    const modo = String(d.modo || EPAYCO_MODE).toLowerCase();
+    EPAYCO_CFG = {
+      produccion,
+      produccionCrudo: d.produccion === undefined ? '(falta el campo)' : String(d.produccion),
+      modo,
+      custIdCliente: String(d.custIdCliente || EPAYCO_CUST_ID).trim(),
+      pKey: String(d.pKey || EPAYCO_P_KEY).trim(),
+      publicKey: String(d.publicKey || EPAYCO_PUBLIC_KEY).trim(),
+      privateKey: String(d.privateKey || EPAYCO_PRIVATE_KEY).trim(),
+      moneda: String(d.moneda || EPAYCO_MONEDA).trim(),
+      pais: String(d.pais || EPAYCO_PAIS).trim(),
+      paises: listaPaises(d.paises === undefined ? EPAYCO_PAISES : d.paises),
+      excluirPaises: listaPaises(
+        d.excluirPaises === undefined ? EPAYCO_EXCLUIR_PAISES : d.excluirPaises
+      ),
+      forzar: d.forzar === undefined ? aBool(process.env.EPAYCO_FORZAR) : aBool(d.forzar),
+      montoMax: Number(d.montoMax === undefined ? EPAYCO_MONTO_MAX : d.montoMax) || 0,
+      checkoutUrl: String(d.checkoutUrl || EPAYCO_CHECKOUT_URL).trim(),
+      firmaObligatoria:
+        d.firmaObligatoria === undefined
+          ? aBool(process.env.EPAYCO_FIRMA_OBLIGATORIA)
+          : aBool(d.firmaObligatoria),
+    };
+    epaycoCfgLeido = Date.now();
+    await publicarEspejoPasarelas();
+  } catch (e) {
+    console.error('[EPAYCO] No pude leer config_pagos/epayco (uso respaldo):', e.message);
+    epaycoCfgLeido = Date.now() - PAGOS_TTL_MS + 10000; // reintenta en 10 s
+  }
+  return EPAYCO_CFG;
+}
+
+// Número de factura único que le mandamos a ePayco (x_id_invoice).
+// Formato: SG-<6 del uid>-<tiempo en base 36>.
+function epaycoIdInvoice(uid) {
+  return `SG-${String(uid || '').slice(0, 6)}-${Date.now().toString(36).toUpperCase()}`;
+}
+
+// Activa la membresía de una transacción de ePayco (IDEMPOTENTE).
+// `datos` = lo que manda ePayco (respuesta del navegador o confirmación).
+// Devuelve true si quedó activa (o ya lo estaba) y false si no aplica.
+async function epaycoActivarTransaccion(datos, cfg, origen) {
+  const idInvoice = String(datos.x_id_invoice || '').trim();
+  const refPayco = String(datos.x_ref_payco || '').trim();
+  const codigo = String(datos.x_cod_response || '').trim();
+
+  // uid / planId: primero en la orden guardada; si no, en x_extra1/x_extra2.
+  let uid = String(datos.x_extra1 || '').trim();
+  let planId = String(datos.x_extra2 || '').trim();
+  let monto = Number(datos.x_amount || 0);
+  if (idInvoice) {
+    const snap = await db.collection('epayco_ordenes').doc(idInvoice).get();
+    if (snap.exists) {
+      const o = snap.data() || {};
+      uid = uid || o.uid || '';
+      planId = planId || o.planId || '';
+      monto = monto || Number(o.monto || 0);
+    }
+  }
+
+  // Guardamos SIEMPRE lo que respondió ePayco (sirve de auditoría).
+  const datosOrden = {
+    idInvoice: idInvoice || null,
+    refPayco: refPayco || null,
+    transaccionId: String(datos.x_transaction_id || '') || null,
+    // Estado legible para soporte (en `epayco_ordenes/<factura>`):
+    // PAGADO · PENDIENTE · RECHAZADO
+    estado: epaycoAprobada(codigo)
+      ? 'PAGADO'
+      : epaycoPendiente(codigo)
+        ? 'PENDIENTE'
+        : 'RECHAZADO',
+    codResponse: codigo || null,
+    respuesta: String(datos.x_response || '') || null,
+    motivo: String(datos.x_response_reason_text || '') || null,
+    franquicia: String(datos.x_franchise || '') || null,
+    emailCliente: String(datos.x_customer_email || '') || null,
+    monto,
+    moneda: String(datos.x_currency_code || '').trim() || null,
+    origen,
+    actualizadoEn: admin.firestore.Timestamp.now(),
+  };
+  await db
+    .collection('epayco_ordenes')
+    .doc(idInvoice || refPayco || `sin-factura-${Date.now()}`)
+    .set(datosOrden, { merge: true });
+
+  if (!uid || !planId) {
+    // Respaldo: buscar la orden por `ref_payco` (por si el webhook no trae
+    // x_extra1/x_extra2 ni la factura nuestra).
+    const otra = await epaycoBuscarOrdenPorRef(refPayco);
+    if (otra) {
+      uid = uid || otra.uid || '';
+      planId = planId || otra.planId || '';
+      monto = monto || Number(otra.monto || 0);
+    }
+  }
+  if (!uid || !planId) {
+    console.warn(`[EPAYCO] (${origen}) No pude identificar uid/plan: factura=${idInvoice} ref=${refPayco}`);
+    return false;
+  }
+  if (!epaycoAprobada(codigo)) {
+    console.log(`[EPAYCO] (${origen}) Transacción NO aprobada: cod=${codigo} factura=${idInvoice}`);
+    return false;
+  }
+  const fecha = await activarMembresia(
+    uid,
+    planId,
+    'ePayco',
+    refPayco ? `pago_${refPayco}` : null,
+    'epayco_ordenes'
+  );
+  if (fecha) {
+    // Deja la factura marcada como activada (para soporte).
+    await db
+      .collection('epayco_ordenes')
+      .doc(idInvoice || `pago_${refPayco}`)
+      .set({ activado: true, activadoEn: admin.firestore.Timestamp.now() }, { merge: true });
+  }
+  return !!fecha;
+}
+
+// Busca una clave en un JSON de ePayco sin depender del nivel ni de las
+// mayúsculas (la API usa nombres distintos según el endpoint).
+function buscarClaveEnJson(obj, nombres, profundidad = 3) {
+  if (!obj || typeof obj !== 'object' || profundidad < 0) return undefined;
+  const buscados = nombres.map((n) => String(n).toLowerCase());
+  for (const [k, v] of Object.entries(obj)) {
+    if (buscados.includes(String(k).toLowerCase())) return v;
+  }
+  for (const v of Object.values(obj)) {
+    const r = buscarClaveEnJson(v, nombres, profundidad - 1);
+    if (r !== undefined) return r;
+  }
+  return undefined;
+}
+
+// Estado REAL de una transacción en ePayco.
+//   GET {API}/transaction/detail?refPayco=<ref>
+// Verificado contra la API (21/09/2026): existe y responde 200.
+// Sirve para no depender del webhook de confirmación: si el cliente pagó y la
+// notificación no llegó, igual sabemos que está aprobada.
+async function epaycoConsultarEstado(refPayco) {
+  if (!refPayco) return null;
+  const token = await epaycoLogin();
+  const resp = await fetch(
+    `${EPAYCO_API_URL}/transaction/detail?refPayco=${encodeURIComponent(refPayco)}`,
+    { headers: { Accept: 'application/json', Authorization: `Bearer ${token}` } }
+  );
+  const txt = await resp.text();
+  let json = null;
+  try {
+    json = JSON.parse(txt);
+  } catch (_) {
+    json = null;
+  }
+  if (!json) return null;
+  const j = json.data && typeof json.data === 'object' ? json.data : json;
+  const codigo = String(
+    buscarClaveEnJson(j, ['x_cod_response', 'codresponse', 'cod_response', 'x_cod_respuesta']) ?? ''
+  ).trim();
+  const estado = String(
+    buscarClaveEnJson(j, ['x_transaction_state', 'transaction_state', 'estado', 'status']) ?? ''
+  ).trim();
+  const ok =
+    codigo === '1' || /aceptad|aprobad|exitos|paid|complet/i.test(estado);
+  return {
+    ok,
+    codigo: codigo || (ok ? '1' : ''),
+    estado,
+    idInvoice: String(buscarClaveEnJson(j, ['x_id_invoice', 'id_invoice', 'invoice']) ?? ''),
+    refPayco: String(buscarClaveEnJson(j, ['x_ref_payco', 'ref_payco', 'referencepayco']) ?? refPayco),
+    transaccionId: String(buscarClaveEnJson(j, ['x_transaction_id', 'transaction_id']) ?? ''),
+    monto: Number(buscarClaveEnJson(j, ['x_amount', 'amount']) ?? 0) || null,
+    moneda: String(buscarClaveEnJson(j, ['x_currency_code', 'currency_code', 'currency']) ?? ''),
+    franquicia: String(buscarClaveEnJson(j, ['x_franchise', 'franchise']) ?? ''),
+    email: String(buscarClaveEnJson(j, ['x_customer_email', 'customer_email', 'email']) ?? ''),
+    crudo: json,
+  };
+}
+
+// ── Pagos de ePayco ya ACREDITADOS de un usuario (activa lo que falte) ──
+// Lo usa el botón "Verificar estado" de la app y `/epayco/reparar` (soporte).
+//
+// Se apoya en `epayco_ordenes/<factura>`, que el VPS escribe tanto cuando vuelve
+// el navegador (`/epayco/respuesta`) como cuando llega el webhook
+// (`/epayco/confirmacion`): si ahí quedó `estado: PAGADO`, el cobro existe.
+//
+// · `activado` lo pone `epaycoActivarTransaccion` cuando ya extendió la
+//   membresía → en ese caso lo contamos como pagado pero NO se extiende de nuevo.
+// · Sin `orderBy` a propósito: así no hace falta crear un índice compuesto
+//   (uid + fecha) en Firestore para que esto funcione.
+async function epaycoVerificarPagos(uidFiltro, planFiltro) {
+  const activados = [];
+  const yaActivos = [];
+  if (!uidFiltro) return { activados, yaActivos };
+  const snap = await db
+    .collection('epayco_ordenes')
+    .where('uid', '==', String(uidFiltro))
+    .limit(25)
+    .get();
+  const cfg = await refrescarConfigEpayco();
+  let consultas = 0; // para no golpear la API de ePayco si hay muchas órdenes
+  for (const d of snap.docs) {
+    const o = d.data() || {};
+    const factura = d.id;
+    // El espejo de idempotencia (`pago_<ref>`) no es una orden de compra.
+    if (factura.startsWith('pago_')) continue;
+    if (String(o.uid || '') !== String(uidFiltro)) continue;
+    const planId = String(o.planId || '');
+    if (!PLANES_MP[planId]) continue;
+    if (planFiltro && planId !== planFiltro) continue;
+    const refPayco = String(o.refPayco || '');
+    let estado = String(o.estado || '').toUpperCase();
+
+    // Si la orden NO figura pagada pero tenemos la referencia, le preguntamos a
+    // ePayco el estado REAL de la transacción: cubre el caso "el cliente pagó
+    // pero el webhook de confirmación nunca llegó".
+    if (estado !== 'PAGADO' && refPayco && consultas < 5) {
+      consultas++;
+      try {
+        // Caché de 20 s: el auto-chequeo de la app pregunta cada pocos segundos.
+        const det = await conCache(`epayco:${refPayco}`, 20000, () =>
+          epaycoConsultarEstado(refPayco)
+        );
+        if (det && det.ok) {
+          console.log(
+            `[EPAYCO] Consulta ${refPayco} → ${det.estado || det.codigo} (APROBADA) factura=${factura}`
+          );
+          await epaycoActivarTransaccion(
+            {
+              x_id_invoice: det.idInvoice || factura,
+              x_ref_payco: det.refPayco || refPayco,
+              x_cod_response: det.codigo || '1',
+              x_transaction_id: det.transaccionId || '',
+              x_amount: det.monto || '',
+              x_currency_code: det.moneda || '',
+              x_franchise: det.franquicia || '',
+              x_customer_email: det.email || '',
+              // uid/planId explícitos (los saca de la orden guardada).
+              x_extra1: String(o.uid || uidFiltro),
+              x_extra2: planId,
+            },
+            cfg,
+            'consulta'
+          );
+          estado = 'PAGADO';
+        } else if (det && det.estado) {
+          console.log(`[EPAYCO] Consulta ${refPayco} → ${det.estado} (no aprobada)`);
+        }
+      } catch (e) {
+        console.warn(`[EPAYCO] No pude consultar ${refPayco}:`, e.message);
+      }
+    }
+    if (estado !== 'PAGADO') continue;
+
+    if (o.activado === true) {
+      yaActivos.push({ factura, planId, refPayco: refPayco || null });
+      continue;
+    }
+    const fecha = await activarMembresia(
+      uidFiltro,
+      planId,
+      'ePayco',
+      refPayco ? `pago_${refPayco}` : `epayco_${factura}`,
+      'epayco_ordenes'
+    );
+    await db
+      .collection('epayco_ordenes')
+      .doc(factura)
+      .set(
+        {
+          activado: true,
+          activadoEn: admin.firestore.Timestamp.now(),
+          activadoPor: 'verificar',
+        },
+        { merge: true }
+      );
+    if (fecha) {
+      activados.push({ factura, planId, refPayco: refPayco || null });
+    } else {
+      // Ya estaba activada (la misma compra): no se extendió otra vez.
+      yaActivos.push({ factura, planId, refPayco: refPayco || null });
+    }
+  }
+  return { activados, yaActivos };
+}
+
+// ── POST /epayco/crear-orden — devuelve la URL del checkout hospedado ──
+// Mismo contrato que /mp/crear-preferencia y /rapid/crear-orden:
+// responde { initPoint } con la URL a la que el WebView debe navegar.
+app.post('/epayco/crear-orden', verificarTokenUsuario, async (req, res) => {
+  const { planId } = req.body || {};
+  const { uid } = req.user;
+  const plan = PLANES_MP[planId];
+  if (!plan) return res.status(400).json({ error: 'Plan inválido' });
+  try {
+    const cfg = await refrescarConfigEpayco();
+    if (!cfg.publicKey || !cfg.privateKey) {
+      // Mensaje corto (se muestra en la app) + detalle en el log del VPS.
+      console.warn(
+        '[EPAYCO] Faltan llaves: cargá publicKey y privateKey en config_pagos/epayco ' +
+          '(o en las variables de entorno / functions/credenciales.local.json).'
+      );
+      return res.status(503).json({
+        error: 'ePayco todavía no está configurado (faltan las llaves public_key y private_key).',
+      });
+    }
+    // Precio: en USD (lo que paga el cliente de otros países) o en COP.
+    // ePayco acepta USD y lo convierte a COP internamente (y aplica su tope).
+    const esUsd = String(cfg.moneda || 'COP').toUpperCase() === 'USD';
+    const tasa = await obtenerTasaUsdCop();
+    const monto = esUsd ? Number(plan.precio) : montoCop(plan, tasa.valor);
+    // Tope de ePayco (en pruebas ≈ 200.000 COP ≈ USD 62). Si está configurado
+    // `montoMax` (en la MISMA moneda), avisamos claro en vez del error técnico.
+    if (cfg.montoMax > 0 && monto > cfg.montoMax) {
+      console.warn(`[EPAYCO] Monto ${monto} ${cfg.moneda} supera el tope configurado (${cfg.montoMax})`);
+      return res.status(400).json({
+        error:
+          `ePayco no acepta ${monto} ${cfg.moneda} en este plan (su máximo es ${cfg.montoMax} ${cfg.moneda}). ` +
+          'Elegí otro plan o pagá con Mercado Pago.',
+      });
+    }
+    const idInvoice = epaycoIdInvoice(uid);
+
+    // Validamos las llaves contra la API (login). El checkout CLÁSICO (V1)
+    // crea la transacción él mismo desde la página /epayco/checkout.
+    await epaycoLogin();
+
+    await db.collection('epayco_ordenes').doc(idInvoice).set(
+      {
+        uid,
+        planId,
+        plan: plan.titulo,
+        monto,
+        moneda: cfg.moneda,
+        estado: 'CREADA',
+        modo: cfg.modo,
+        produccion: cfg.produccion,
+        creadoEn: admin.firestore.Timestamp.now(),
+      },
+      { merge: true }
+    );
+    console.log(
+      `[EPAYCO] Orden ${idInvoice} uid=${uid} plan=${planId} ` +
+        `monto=${monto} ${cfg.moneda} (${cfg.modo}, tasa ${tasa.valor.toFixed(2)})`
+    );
+    res.json({
+      // La app abre ESTA página nuestra: ella lanza el checkout de ePayco
+      // con TODOS los datos del plan (monto incluido).
+      initPoint: `${EPAYCO_VPS}/epayco/checkout?factura=${idInvoice}`,
+      ordenId: idInvoice,
+    });
+  } catch (e) {
+    console.error('[EPAYCO] Error crear orden:', e.message);
+    // Se devuelve el motivo real: la app lo muestra en el aviso y así se
+    // diagnostica en segundos (ej: "ePayco login 401", "ePayco sesión 400: …").
+    res.status(500).json({ error: `No se pudo crear la orden de pago: ${e.message}` });
+  }
+});
+
+// ── GET /epayco/checkout?factura=SG-…  (o ?sessionId=…) ──
+// Página que abre el WebView (la URL que devuelve /epayco/crear-orden).
+//
+// ⚠️ CÓMO FUNCIONA EL CHECKOUT DE ePAYCO (verificado 20/09/2026):
+//  · La página `secure.epayco.co/checkout.php?…` por URL ya NO sirve (da 404).
+//  · Hay dos variantes y ePayco decide cuál con una API:
+//        GET https://ms-checkout-create-transaction.epayco.co/commerce/v2/check?publicKey=<PUB>
+//    → { "isV2": false }  ⇒ NUESTRA CUENTA ES **V1** (usa el checkout clásico por JS).
+//  · Flujo correcto (V1):  ePayco.checkout.configure({ key, test }).open(datos)
+//    donde `datos` lleva name, description, invoice, currency, amount, tax,
+//    tax_base, country, lang, external, response, confirmation. El checkout
+//    CREA la transacción y la muestra en un iframe de secure.epayco.co.
+//    (Con el flujo V2 por `sessionId` el checkout quedaba en $0.00.)
+//  · Los datos se leen de NUESTRA orden (`epayco_ordenes/<factura>`) y no del
+//    query string, así nadie puede cambiar el monto desde la URL.
+app.get('/epayco/checkout', async (req, res) => {
+  try {
+    const cfg = await refrescarConfigEpayco();
+    const factura = String(req.query.factura || '').trim();
+    let sessionId = String(req.query.sessionId || '').trim();
+    let orden = null;
+    if (factura) {
+      const snap = await db.collection('epayco_ordenes').doc(factura).get();
+      if (snap.exists) orden = snap.data() || null;
+    }
+    if (!sessionId && orden) sessionId = String(orden.sessionId || '');
+    if (!factura && !sessionId) {
+      return res.status(400).send('Falta la factura o el sessionId');
+    }
+    if (orden && String(orden.estado || '').toUpperCase() === 'PAGADO') {
+      return res.redirect('starkgo://pago/exitoso');
+    }
+
+    const datos = {
+      name: 'StarkGo',
+      description: (orden && orden.plan) || 'Plan StarkGo',
+      invoice: factura || sessionId,
+      currency: (orden && orden.moneda) || cfg.moneda,
+      amount: Number((orden && orden.monto) || 0),
+      tax_base: 0,
+      tax: 0,
+      country: cfg.pais,
+      lang: 'es',
+      external: 'false',
+      response: `${EPAYCO_VPS}/epayco/respuesta`,
+      confirmation: `${EPAYCO_VPS}/epayco/confirmacion`,
+      methodconfirmation: 'POST',
+    };
+
+    const pagina = `<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StarkGo · Pago seguro</title>
+<style>
+  body{margin:0;font-family:-apple-system,Roboto,Arial,sans-serif;background:#0F172A;color:#fff;
+       display:flex;min-height:100vh;align-items:center;justify-content:center;text-align:center}
+  .caja{padding:24px;max-width:520px}
+  .chico{font-size:13px;opacity:.65;margin-top:6px}
+  a{color:#00C6AE}
+</style>
+</head>
+<body>
+<div class="caja">
+  <p id="msg">Abriendo el checkout de ePayco…</p>
+  <p class="chico" id="detalle"></p>
+</div>
+<script src="https://checkout.epayco.co/checkout.js"></script>
+<script>
+(function () {
+  var KEY = ${JSON.stringify(cfg.publicKey || '')};
+  var TEST = ${cfg.modo === 'live' ? 'false' : 'true'};
+  var DATOS = ${JSON.stringify(datos)};
+  function aviso(html) { document.getElementById('msg').innerHTML = html; }
+  function detalle(html) { document.getElementById('detalle').innerHTML = html; }
+  var VOLVER = '<br><br><a href="starkgo://pago/pendiente">Volver a la app</a>';
+  function error(d) {
+    console.error('[StarkGo] checkout:', d);
+    aviso('No se pudo abrir el checkout de ePayco. Intenta de nuevo.' + VOLVER);
+  }
+  detalle(DATOS.description + ' · ' + DATOS.amount + ' ' + DATOS.currency);
+  if (!window.ePayco || !ePayco.checkout || typeof ePayco.checkout.configure !== 'function') {
+    return error('checkout.js no cargó');
+  }
+  try {
+    // Flujo CLÁSICO (V1): la clave va en configure() y los datos en open().
+    var handler = ePayco.checkout.configure({ key: KEY, test: TEST });
+    if (!handler || typeof handler.open !== 'function') return error('sin handler');
+    var p = handler.open(DATOS);
+    if (p && typeof p.catch === 'function') p.catch(function (e) { error(e && e.message); });
+  } catch (e) {
+    error(e && e.message);
+  }
+})();
+</script>
+</body>
+</html>`;
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.send(pagina);
+  } catch (e) {
+    console.error('[EPAYCO] checkout:', e.message);
+    res.status(500).send('Error abriendo el checkout');
+  }
+});
+
+// ── GET /epayco/respuesta — el navegador del cliente volvió de ePayco ──
+// ePayco manda TODO por la URL (GET): factura, referencia, estado y firma.
+// Activamos la membresía si la transacción fue aceptada y volvemos a la app
+// con el deep link que ya entiende el WebView.
+app.get('/epayco/respuesta', async (req, res) => {
+  try {
+    const d = req.query || {};
+    const cfg = await refrescarConfigEpayco();
+    const codigo = String(d.x_cod_response || '').trim();
+    const ref = String(d.ref_payco || d.x_ref_payco || '').trim();
+    console.log(
+      `[EPAYCO] Volvió el cliente: factura=${d.x_id_invoice || '-'} cod=${codigo || '(sin cod)'} ` +
+        `ref=${ref || '-'} session=${d.sessionId || '-'}`
+    );
+
+    // (1) Postback completo (trae x_cod_response): se activa al instante.
+    if (codigo) {
+      if (!epaycoFirmaOk(cfg, d)) {
+        console.warn(
+          '[EPAYCO] ⚠️ La firma de la respuesta no coincide con la esperada. ' +
+            'Revisá que las llaves del VPS sean las de la MISMA cuenta de ePayco.'
+        );
+        if (cfg.firmaObligatoria) return res.redirect('starkgo://pago/fallido');
+      }
+      // Se guarda siempre (auditoría); se activa sólo si fue aceptada.
+      await epaycoActivarTransaccion(d, cfg, 'respuesta');
+      if (epaycoAprobada(codigo)) return res.redirect('starkgo://pago/exitoso');
+      if (epaycoPendiente(codigo)) return res.redirect('starkgo://pago/pendiente');
+      return res.redirect('starkgo://pago/fallido');
+    }
+
+    // (2) Vuelta del checkout: sólo trae ?ref_payco=<id> (sin `x_cod_response`).
+    //     Antes esto quedaba en "pendiente" hasta que llegara el webhook.
+    //     Ahora, si tenemos la referencia, le preguntamos a ePayco el estado
+    //     REAL de la transacción y activamos si ya está aprobada → la app ve el
+    //     éxito al volver, sin depender de la confirmación.
+    const orden = await epaycoBuscarOrdenPorRef(ref);
+    let estado = String((orden && orden.estado) || '').toUpperCase();
+    if (orden) {
+      console.log(`[EPAYCO] ref=${ref} → orden en estado ${estado || '(sin estado)'}`);
+    } else {
+      console.log(`[EPAYCO] ref=${ref} todavía sin confirmación registrada`);
+    }
+
+    if (estado !== 'PAGADO' && ref) {
+      try {
+        const det = await epaycoConsultarEstado(ref);
+        if (det && det.ok) {
+          console.log(`[EPAYCO] ref=${ref} → consulta APROBADA (${det.estado || det.codigo})`);
+          const idInv = det.idInvoice || String(d.x_id_invoice || '');
+          const activo = await epaycoActivarTransaccion(
+            {
+              x_id_invoice: idInv,
+              x_ref_payco: det.refPayco || ref,
+              x_cod_response: det.codigo || '1',
+              x_transaction_id: det.transaccionId || '',
+              x_amount: det.monto || '',
+              x_currency_code: det.moneda || '',
+              x_franchise: det.franquicia || '',
+              x_customer_email: det.email || '',
+            },
+            cfg,
+            'consulta'
+          );
+          // ⚠️ No alcanza con que ePayco diga "aprobada": si no pudimos
+          // identificar la orden (o ya estaba activada) confirmamos con la
+          // orden guardada antes de decirle "exitoso" al cliente.
+          let yaEstaba = false;
+          if (!activo && idInv) {
+            const od = await db.collection('epayco_ordenes').doc(idInv).get();
+            yaEstaba = od.exists && od.data().activado === true;
+          }
+          if (activo || yaEstaba) {
+            estado = 'PAGADO';
+          } else {
+            console.warn(
+              `[EPAYCO] ref=${ref} está aprobada pero no pude activarla ` +
+                `(factura=${idInv || 'sin factura'}). Revisá /epayco/reparar?factura=…`
+            );
+          }
+        } else if (det && det.estado) {
+          console.log(`[EPAYCO] ref=${ref} → consulta: ${det.estado} (no aprobada)`);
+          estado = estado || det.estado.toUpperCase();
+        }
+      } catch (e) {
+        console.warn(`[EPAYCO] No pude consultar ${ref}:`, e.message);
+      }
+    }
+
+    const estadoNorm = /rechaz|fallid|declinad|cancel/i.test(estado) ? 'RECHAZADO' : estado;
+    if (estadoNorm === 'PAGADO') return res.redirect('starkgo://pago/exitoso');
+    if (estadoNorm === 'RECHAZADO') return res.redirect('starkgo://pago/fallido');
+    return res.redirect('starkgo://pago/pendiente');
+  } catch (e) {
+    console.error('[EPAYCO] Error respuesta:', e.message);
+    return res.redirect('starkgo://pago/fallido');
+  }
+});
+
+// ── POST /epayco/confirmacion — notificación de ePayco (respaldo) ──
+// Llega por `application/x-www-form-urlencoded` y SIN sesión del cliente.
+// Es la vía que activa la membresía cuando el cliente cierra el WebView
+// antes de volver a la app.
+app.post('/epayco/confirmacion', async (req, res) => {
+  try {
+    const d = { ...(req.body || {}), ...(req.query || {}) };
+    const cfg = await refrescarConfigEpayco();
+    const codigo = String(d.x_cod_response || '').trim();
+    const firmaOk = epaycoFirmaOk(cfg, d);
+    console.log(
+      `[EPAYCO] Confirmación factura=${d.x_id_invoice || ''} cod=${codigo || '(falta)'} ` +
+        `firma=${firmaOk ? 'OK' : 'NO COINCIDE'} ref=${d.x_ref_payco || ''}`
+    );
+    if (!firmaOk && cfg.firmaObligatoria) {
+      console.warn('[EPAYCO] Confirmación descartada: firma inválida (firmaObligatoria=true)');
+      return res.status(401).send('firma inválida');
+    }
+    const activado = await epaycoActivarTransaccion(d, cfg, 'confirmacion');
+    // ePayco sólo espera un 200 para dar por recibida la notificación.
+    res.status(200).send(activado ? 'activado' : 'recibido');
+  } catch (e) {
+    console.error('[EPAYCO] Error confirmación:', e.message);
+    res.status(500).send('error');
+  }
+});
+
+// ── GET /epayco/diag — comprueba la configuración en 1 segundo ──
+// Abrí esta URL en el navegador: muestra si están las llaves, si la API de
+// ePayco acepta el login y devuelve un CHECKOUT REAL de prueba para pagar.
+app.get('/epayco/diag', async (req, res) => {
+  try {
+    const cfg = await refrescarConfigEpayco({ forzar: req.query.refrescar === '1' });
+    const tasa = await obtenerTasaUsdCop();
+    // Monto a probar (por defecto, el plan de 1 Mes):
+    //   · ?planId=1a     → monto de ESE plan en la moneda configurada
+    //   · ?monto=383100  → monto exacto en la moneda configurada (cfg.moneda)
+    // Sirve para saber si TU cuenta acepta ese monto: con las llaves de
+    // PRODUCCIÓN y `?planId=1a` sabés en un segundo si podés vender el plan de
+    // 1 Año con ePayco, sin que el cliente tenga que intentarlo.
+    const planPedido = PLANES_MP[String(req.query.planId || '').trim()] || null;
+    const planIdDiag = planPedido ? String(req.query.planId).trim() : '1m';
+    const planTituloDiag = planPedido
+      ? planPedido.titulo
+      : 'PRUEBA StarkGo (no activa membresía)';
+    const esUsdDiag = String(cfg.moneda || 'COP').toUpperCase() === 'USD';
+    // Tope de cordura para ?monto= (endpoint público): no dejamos que se pidan
+    // montos absurdos sólo para probar el límite de la cuenta.
+    const montoCrudo = Number(req.query.monto || 0);
+    const topeSano = esUsdDiag ? 500 : 5000000;
+    const montoPedido = Number.isFinite(montoCrudo)
+      ? Math.min(Math.max(montoCrudo, 0), topeSano)
+      : 0;
+    const monto =
+      montoPedido > 0
+        ? montoPedido
+        : esUsdDiag
+          ? Number((planPedido || PLANES_MP['1m']).precio)
+          : montoCop(planPedido || PLANES_MP['1m'], tasa.valor);
+
+    // (1) ¿La API de ePayco acepta las llaves? (login)
+    let apiOk = false;
+    let apiError = '';
+    try {
+      await epaycoLogin({ forzar: true });
+      apiOk = true;
+    } catch (e) {
+      apiError = e.message;
+    }
+
+    // (2) Sesión de pago REAL de prueba (se puede pagar desde el navegador)
+    let sessionId = '';
+    let errorSesion = '';
+    if (apiOk) {
+      try {
+        sessionId = await epaycoCrearSesion({
+          checkout_version: '2',
+          name: 'StarkGo',
+          description: `PRUEBA ${planTituloDiag} (no activa membresía)`,
+          invoice: epaycoIdInvoice('DIAG'),
+          currency: cfg.moneda,
+          amount: monto,
+          tax: 0,
+          tax_base: 0,
+          country: cfg.pais,
+          lang: 'es',
+          external: 'false',
+          confirmation: `${EPAYCO_VPS}/epayco/confirmacion`,
+          response: `${EPAYCO_VPS}/epayco/respuesta`,
+        });
+      } catch (e) {
+        errorSesion = e.message;
+      }
+    }
+
+    // (2.b) Si ePayco rechazó el monto, el error trae el rango EXACTO que
+    //       acepta la cuenta:
+    //       "[VALIDATION_ERROR] - property Amount must be between 5000 and 5000000"
+    //       Lo exponemos para no tener que adivinar el tope (verificado
+    //       21/09/2026 con las llaves de sandbox: 5.000–5.000.000 COP).
+    let limiteEpayco = null;
+    const rango = /between\s+(\d+)\s+and\s+(\d+)/i.exec(String(errorSesion || ''));
+    if (rango) {
+      limiteEpayco = {
+        min: Number(rango[1]),
+        max: Number(rango[2]),
+        moneda: 'COP',
+        fuente: 'ePayco (respuesta de la API)',
+      };
+    }
+
+    // (3) ¿Se puede guardar la orden en Firestore? (misma escritura que hace
+    //     /epayco/crear-orden: si esto falla, el pago da error 500)
+    let ordenTest = '';
+    let errorOrdenTest = '';
+    if (sessionId) {
+      ordenTest = epaycoIdInvoice('DIAG');
+      try {
+        await db.collection('epayco_ordenes').doc(ordenTest).set(
+          {
+            uid: 'DIAG',
+            planId: planIdDiag,
+            plan: `${planTituloDiag} · prueba de monto`,
+            monto,
+            moneda: cfg.moneda,
+            sessionId,
+            estado: 'PRUEBA',
+            modo: cfg.modo,
+            produccion: cfg.produccion,
+            creadoEn: admin.firestore.Timestamp.now(),
+          },
+          { merge: true }
+        );
+      } catch (e) {
+        errorOrdenTest = e.message;
+      }
+    }
+
+    // (4) ¿Qué flujo de checkout espera ePayco para nuestra cuenta?
+    const esV2 = await epaycoEsV2(cfg);
+
+    res.json({
+      ok: apiOk && !!ordenTest,
+      produccion: cfg.produccion,
+      produccionCrudo: cfg.produccionCrudo,
+      modo: cfg.modo,
+      apiOk,
+      apiError: apiError || null,
+      esV2,
+      flujoCheckout: esV2 === true ? 'V2 (sessionId)' : 'V1 (clásico por JS)',
+      sessionId: sessionId || null,
+      errorSesion: errorSesion || null,
+      // Qué monto se probó y si la cuenta lo aceptó. Probar otro plan/monto:
+      //   /epayco/diag?planId=1a&refrescar=1      (monto del plan 1 Año)
+      //   /epayco/diag?monto=383100&refrescar=1   (monto exacto, en cfg.moneda)
+      planProbado: planIdDiag,
+      montoProbado: monto,
+      monedaProbada: cfg.moneda,
+      montoAceptado: !!sessionId,
+      urlProbarPlan1a: `${EPAYCO_VPS}/epayco/diag?planId=1a&refrescar=1`,
+      // Rango permitido que informa ePayco cuando el monto no entra (null si
+      // el monto pasó: en ese caso tu cuenta acepta ese monto).
+      limiteEpayco,
+      ordenTest: ordenTest || null,
+      errorOrdenTest: errorOrdenTest || null,
+      custIdCliente: cfg.custIdCliente || '(falta)',
+      pKey: cfg.pKey ? maskClave(cfg.pKey) : '(falta)',
+      publicKey: cfg.publicKey || '(falta)',
+      privateKey: cfg.privateKey ? maskClave(cfg.privateKey) : '(falta)',
+      moneda: cfg.moneda,
+      paises: cfg.paises,
+      excluirPaises: cfg.excluirPaises,
+      forzar: cfg.forzar,
+      montoMax: cfg.montoMax,
+      // Tope que ve la app: en COP (si `moneda` es USD, va convertido).
+      montoMaxAppCop: await epaycoMontoMaxCop(cfg, tasa.valor),
+      firmaObligatoria: cfg.firmaObligatoria,
+      tasaUsdCop: tasa.valor,
+      // Pegá esto en el navegador del celular para ver el checkout de ePayco:
+      urlCheckoutPrueba: ordenTest ? `${EPAYCO_VPS}/epayco/checkout?factura=${ordenTest}` : null,
+    });
+  } catch (e) {
+    console.error('[EPAYCO] diag:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ── GET /epayco/test-orden?planId=1m — prueba el PAGO completo ──
+// Hace exactamente lo mismo que /epayco/crear-orden (sesión en ePayco +
+// guardar la orden en Firestore) pero con un uid ficticio, así se puede
+// diagnosticar sin usar el celular. Sólo funciona en modo `test`.
+app.get('/epayco/test-orden', async (req, res) => {
+  try {
+    const cfg = await refrescarConfigEpayco({ forzar: req.query.refrescar === '1' });
+    if (cfg.modo === 'live') {
+      return res.status(403).json({
+        ok: false,
+        error: 'Este endpoint sólo funciona en modo test (modo=live).',
+      });
+    }
+    const planId = String(req.query.planId || '1m');
+    const plan = PLANES_MP[planId];
+    if (!plan) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Plan inválido (usá 1m, 3m, 6m, 1a, v1m, v3m, v6m o v1a)',
+      });
+    }
+    const uid = 'DIAGTEST';
+    const tasa = await obtenerTasaUsdCop();
+    const esUsd = String(cfg.moneda || 'COP').toUpperCase() === 'USD';
+    const monto = esUsd ? Number(plan.precio) : montoCop(plan, tasa.valor);
+    // Mismo control que /epayco/crear-orden (tope configurado, en cfg.moneda).
+    if (cfg.montoMax > 0 && monto > cfg.montoMax) {
+      return res.status(400).json({
+        ok: false,
+        paso: 'tope',
+        planId,
+        monto,
+        montoMax: cfg.montoMax,
+        moneda: cfg.moneda,
+        error: `El plan supera el tope de ePayco (${cfg.montoMax} ${cfg.moneda}): ${monto} ${cfg.moneda}`,
+      });
+    }
+    const idInvoice = epaycoIdInvoice(uid);
+
+    try {
+      // Sólo validamos las llaves (el checkout V1 crea la transacción él mismo).
+      await epaycoLogin();
+    } catch (e) {
+      console.error('[EPAYCO] test-orden (login):', e.message);
+      return res.status(500).json({ ok: false, paso: 'login', planId, monto, error: e.message });
+    }
+
+    try {
+      await db.collection('epayco_ordenes').doc(idInvoice).set(
+        {
+          uid,
+          planId,
+          plan: plan.titulo,
+          monto,
+          moneda: cfg.moneda,
+          estado: 'CREADA',
+          modo: cfg.modo,
+          produccion: cfg.produccion,
+          creadoEn: admin.firestore.Timestamp.now(),
+        },
+        { merge: true }
+      );
+    } catch (e) {
+      console.error('[EPAYCO] test-orden (firestore):', e.message);
+      return res.status(500).json({ ok: false, paso: 'firestore', planId, monto, error: e.message });
+    }
+
+    res.json({
+      ok: true,
+      planId,
+      monto,
+      ordenId: idInvoice,
+      urlCheckout: `${EPAYCO_VPS}/epayco/checkout?factura=${idInvoice}`,
+    });
+  } catch (e) {
+    console.error('[EPAYCO] test-orden:', e.message);
+    res.status(500).json({ ok: false, paso: 'general', error: e.message });
+  }
+});
+
+// ── GET /epayco/estado?factura=SG-... — qué pasó con una orden ──
+// Útil para soporte: devuelve lo que guardó el VPS de esa factura.
+app.get('/epayco/estado', async (req, res) => {
+  try {
+    const factura = String(req.query.factura || '').trim();
+    if (!factura) return res.status(400).json({ error: 'Falta ?factura=' });
+    const doc = await db.collection('epayco_ordenes').doc(factura).get();
+    if (!doc.exists) return res.status(404).json({ ok: false, error: 'No existe esa factura' });
+    res.json({ ok: true, factura, orden: doc.data() });
+  } catch (e) {
+    console.error('[EPAYCO] estado:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ── POST /epayco/verificar — el botón "Verificar estado" (ePayco) ──
+// La app lo llama con el token de Firebase. Busca las órdenes de ePayco del
+// usuario que ya estén PAGADAS y activa lo que falte (idempotente).
+// Devuelve el mismo contrato que `/rapid/verificar`: { pagado, activados, planes }.
+app.post('/epayco/verificar', verificarTokenUsuario, async (req, res) => {
+  const { uid } = req.user;
+  const planId = (req.body && req.body.planId) || '';
+  try {
+    let r = await epaycoVerificarPagos(uid, planId);
+    // Nada de ESE plan → buscamos cualquier pago acreditado del usuario.
+    if (!r.activados.length && !r.yaActivos.length && planId) {
+      r = await epaycoVerificarPagos(uid, '');
+    }
+    const planes = [...r.activados, ...r.yaActivos].map((a) => a.planId);
+    const pagado = planes.length > 0;
+    console.log(
+      `[EPAYCO] Verificar uid=${uid} plan=${planId || 'cualquiera'} → ` +
+        `activados=${r.activados.length} yaActivos=${r.yaActivos.length} pagado=${pagado}`
+    );
+    res.json({
+      ok: true,
+      pagado,
+      activados: r.activados.length,
+      yaActivos: r.yaActivos.length,
+      planes,
+      ordenes: [...r.activados, ...r.yaActivos],
+    });
+  } catch (e) {
+    console.error('[EPAYCO] Error verificar:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ── GET /epayco/reparar — soporte: activar un pago que quedó pendiente ──
+// (sólo con la apikey admin, igual que /consumo/manual)
+//   /epayco/reparar?apikey=…&factura=SG-XXXXXX-YYYY   → activa ESA factura
+//   /epayco/reparar?apikey=…&uid=UID_DEL_CLIENTE      → activa todas sus
+//                                                        órdenes PAGADAS
+app.get('/epayco/reparar', async (req, res) => {
+  if (req.query.apikey !== 'starkgo_admin_2025') {
+    return res.status(401).json({ error: 'No autorizado' });
+  }
+  const factura = String(req.query.factura || '').trim();
+  const uid = String(req.query.uid || '').trim();
+  try {
+    // (a) Una factura concreta.
+    if (factura) {
+      const doc = await db.collection('epayco_ordenes').doc(factura).get();
+      if (!doc.exists) {
+        return res.status(404).json({ ok: false, error: 'No existe esa factura' });
+      }
+      const o = doc.data() || {};
+      const estado = String(o.estado || '').toUpperCase();
+      if (estado !== 'PAGADO') {
+        return res.json({
+          ok: true,
+          activado: false,
+          factura,
+          estado: estado || '(todavía sin estado)',
+          pista:
+            'ePayco no confirmó este cobro como PAGADO. Mirá el pago en el panel ' +
+            'de ePayco y, si está aprobado, revisá que la URL de confirmación ' +
+            'apunte a /epayco/confirmacion.',
+        });
+      }
+      const planId = String(o.planId || '');
+      const uidOrden = String(o.uid || '');
+      const refPayco = String(o.refPayco || '');
+      if (!PLANES_MP[planId] || !uidOrden) {
+        return res.status(400).json({
+          ok: false,
+          error: `La orden no tiene datos usables (planId=${planId || '-'}, uid=${uidOrden || '-'})`,
+        });
+      }
+      const fecha = await activarMembresia(
+        uidOrden,
+        planId,
+        'ePayco',
+        refPayco ? `pago_${refPayco}` : `epayco_${factura}`,
+        'epayco_ordenes'
+      );
+      await db
+        .collection('epayco_ordenes')
+        .doc(factura)
+        .set(
+          {
+            activado: true,
+            activadoEn: admin.firestore.Timestamp.now(),
+            activadoPor: 'reparar',
+          },
+          { merge: true }
+        );
+      console.log(`[EPAYCO] Reparar factura=${factura} uid=${uidOrden} plan=${planId} → ${fecha ? 'ACTIVADO' : 'ya estaba'}`);
+      return res.json({
+        ok: true,
+        activado: !!fecha,
+        yaEstaba: !fecha,
+        factura,
+        uid: uidOrden,
+        planId,
+        refPayco: refPayco || null,
+        vence: fecha ? fecha.toISOString() : null,
+      });
+    }
+
+    // (b) Todas las órdenes PAGADAS de un usuario.
+    if (!uid) {
+      return res.status(400).json({ ok: false, error: 'Falta ?factura= o ?uid=' });
+    }
+    const r = await epaycoVerificarPagos(uid, '');
+    res.json({
+      ok: true,
+      uid,
+      activados: r.activados.length,
+      yaActivos: r.yaActivos.length,
+      ordenes: [...r.activados, ...r.yaActivos],
+    });
+  } catch (e) {
+    console.error('[EPAYCO] reparar:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ── GET /epayco/ordenes — soporte: últimas órdenes de ePayco ──
+// (sólo con la apikey admin)
+//   /epayco/ordenes?apikey=…&limite=20          → las 20 más recientes
+//   /epayco/ordenes?apikey=…&uid=UID_DEL_CLIENTE
+// Sirve para ver por qué un pago quedó en "pendiente" (estado, ref, activado).
+app.get('/epayco/ordenes', async (req, res) => {
+  if (req.query.apikey !== 'starkgo_admin_2025') {
+    return res.status(401).json({ error: 'No autorizado' });
+  }
+  const uid = String(req.query.uid || '').trim();
+  const limite = Math.min(Math.max(Number(req.query.limite || 20) || 20, 1), 100);
+  try {
+    const base = db.collection('epayco_ordenes');
+    // Con `uid` no hace falta índice compuesto; sin `uid` ordenamos por fecha
+    // (índice automático de un solo campo).
+    const q = uid ? base.where('uid', '==', uid) : base.orderBy('creadoEn', 'desc');
+    const snap = await q.limit(limite).get();
+    res.json({
+      ok: true,
+      total: snap.size,
+      ordenes: snap.docs.map((d) => {
+        const o = d.data() || {};
+        let creado = null;
+        try {
+          creado = o.creadoEn && o.creadoEn.toDate ? o.creadoEn.toDate().toISOString() : null;
+        } catch (_) {}
+        return {
+          factura: d.id,
+          uid: o.uid || null,
+          planId: o.planId || null,
+          monto: o.monto === undefined ? null : o.monto,
+          moneda: o.moneda || null,
+          estado: o.estado || null,
+          codResponse: o.codResponse || null,
+          refPayco: o.refPayco || null,
+          activado: o.activado === true,
+          origen: o.origen || null,
+          creadoEn: creado,
+        };
+      }),
+    });
+  } catch (e) {
+    console.error('[EPAYCO] ordenes:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1020,6 +2644,12 @@ if (!RAPID_ACCESS_KEY || !RAPID_SECRET_KEY) {
   );
 }
 const RAPID_MODE = (process.env.RAPID_MODE || 'sandbox').toLowerCase(); // 'sandbox' | 'live'
+// 🔌 INTERRUPTOR DE RAPID (sin recompilar la app):
+//   RAPID_ACTIVO=true  → Rapid vuelve a mostrarse en la app
+//   (por defecto queda APAGADO: ahora el cobro es Mercado Pago en Colombia y
+//    ePayco en el resto del mundo)
+// Los endpoints /rapid/* siguen funcionando, sólo se oculta el botón.
+const RAPID_ACTIVO = aBool(process.env.RAPID_ACTIVO);
 const RAPID_PAIS = process.env.RAPID_COUNTRY || 'CO';
 const RAPID_MONEDA = process.env.RAPID_CURRENCY || 'COP';
 const RAPID_VPS = process.env.RAPID_VPS_URL || 'http://5.161.88.42:3000';
@@ -1092,9 +2722,19 @@ function aBool(v) {
 let espejoPublicado = null;
 
 async function publicarEspejoPasarelas() {
+  // Tope de ePayco en COP (la app lo compara contra el precio en COP): si en
+  // Firebase está en USD, se convierte con la tasa del día.
+  const montoMaxEpayco = await epaycoMontoMaxCop(EPAYCO_CFG);
   const actual = JSON.stringify({
-    produccion: RAPID_CFG.produccion,
-    modo: RAPID_CFG.modo,
+    rapid: rapidProduccionPublicada(),
+    epayco: EPAYCO_CFG.produccion,
+    epaycoModo: EPAYCO_CFG.modo,
+    epaycoPaises: EPAYCO_CFG.paises,
+    epaycoExcluir: EPAYCO_CFG.excluirPaises,
+    epaycoForzar: EPAYCO_CFG.forzar,
+    epaycoMontoMax: montoMaxEpayco,
+    mpPaises: MP_PAISES,
+    mpForzar: aBool(process.env.MP_FORZAR),
   });
   if (actual === espejoPublicado) return;
   try {
@@ -1104,8 +2744,24 @@ async function publicarEspejoPasarelas() {
       .set(
         {
           rapid: {
-            produccion: RAPID_CFG.produccion,
+            produccion: rapidProduccionPublicada(),
             modo: RAPID_CFG.modo,
+            activo: RAPID_ACTIVO,
+          },
+          epayco: {
+            produccion: EPAYCO_CFG.produccion,
+            modo: EPAYCO_CFG.modo,
+            moneda: EPAYCO_CFG.moneda,
+            paises: EPAYCO_CFG.paises,
+            excluirPaises: EPAYCO_CFG.excluirPaises,
+            forzar: EPAYCO_CFG.forzar,
+            montoMax: montoMaxEpayco,
+          },
+          // Mercado Pago solo opera en Colombia: la app muestra el botón
+          // únicamente si el teléfono está en uno de estos países.
+          mercadoPago: {
+            paises: MP_PAISES,
+            forzar: aBool(process.env.MP_FORZAR),
           },
           actualizado: admin.firestore.Timestamp.now(),
         },
@@ -1113,7 +2769,8 @@ async function publicarEspejoPasarelas() {
       );
     espejoPublicado = actual;
     console.log(
-      `[PAGOS] Espejo público actualizado → rapid.produccion=${RAPID_CFG.produccion}`
+      `[PAGOS] Espejo público actualizado → rapid=${rapidProduccionPublicada()} epayco=${EPAYCO_CFG.produccion} ` +
+        `epaycoPaises=[${EPAYCO_CFG.paises.join(',')}] epaycoExcluir=[${EPAYCO_CFG.excluirPaises.join(',')}] mpPaises=${MP_PAISES.join(',')}`
     );
   } catch (e) {
     console.warn('[PAGOS] No pude publicar el espejo público:', e.message);
@@ -1122,6 +2779,12 @@ async function publicarEspejoPasarelas() {
 
 function hostDeModo(modo) {
   return String(modo).toLowerCase() === 'live' ? RAPID_HOST_LIVE : RAPID_HOST_SANDBOX;
+}
+
+// Producción REAL de Rapid para la app: hace falta el interruptor RAPID_ACTIVO
+// (Rapid quedó reemplazada por ePayco) Y que su config esté en producción.
+function rapidProduccionPublicada() {
+  return RAPID_ACTIVO && RAPID_CFG.produccion;
 }
 
 // Lee (o crea) `config_pagos/rapid` y deja RAPID_CFG actualizado.
@@ -1363,6 +3026,11 @@ async function rapidActivarPagos(uidFiltro, planFiltro, desdeSeg) {
 
 // ── POST /rapid/verificar — la app consulta si el pago ya se acreditó ──
 // Lo usa el botón "Verificar estado". Devuelve { pagado, activados, planes }.
+//
+// ⚠️ El APK instalado llama SIEMPRE a este endpoint (aunque el cliente haya
+//    pagado con ePayco), así que acá verificamos **las dos pasarelas**:
+//    Rapid y ePayco. Así un pago de ePayco que quedó "pendiente" en la app se
+//    activa al tocar "Verificar estado", sin necesidad de actualizar la app.
 app.post('/rapid/verificar', verificarTokenUsuario, async (req, res) => {
   const { uid } = req.user;
   const planId = (req.body && req.body.planId) || '';
@@ -1373,14 +3041,58 @@ app.post('/rapid/verificar', verificarTokenUsuario, async (req, res) => {
     if (!activados.length && planId) {
       activados = await rapidActivarPagos(uid, '', 0);
     }
+
+    // ePayco (misma idea: primero ese plan, después cualquiera).
+    let epayco = { activados: [], yaActivos: [] };
+    try {
+      epayco = await epaycoVerificarPagos(uid, planId);
+      if (!epayco.activados.length && !epayco.yaActivos.length && planId) {
+        epayco = await epaycoVerificarPagos(uid, '');
+      }
+    } catch (e) {
+      console.warn('[EPAYCO] Verificar (desde /rapid/verificar):', e.message);
+    }
+
+    // Mercado Pago (igual: primero ese plan, después cualquiera).
+    let mp = { activados: [], yaActivos: [] };
+    try {
+      mp = await mpVerificarPagos(uid, planId);
+      if (!mp.activados.length && !mp.yaActivos.length && planId) {
+        mp = await mpVerificarPagos(uid, '');
+      }
+    } catch (e) {
+      console.warn('[MP] Verificar (desde /rapid/verificar):', e.message);
+    }
+
+    const planes = [
+      ...activados.map((a) => a.planId),
+      ...epayco.activados.map((a) => a.planId),
+      ...epayco.yaActivos.map((a) => a.planId),
+      ...mp.activados.map((a) => a.planId),
+      ...mp.yaActivos.map((a) => a.planId),
+    ];
+    const pagado = planes.length > 0;
     console.log(
-      `[RAPID] Verificar uid=${uid} plan=${planId || 'cualquiera'} → activados=${activados.length}`
+      `[VERIFICAR] uid=${uid} plan=${planId || 'cualquiera'} → rapid=${activados.length} ` +
+        `epayco=${epayco.activados.length} (ya ${epayco.yaActivos.length}) ` +
+        `mp=${mp.activados.length} (ya ${mp.yaActivos.length}) pagado=${pagado}`
     );
     res.json({
       ok: true,
-      pagado: activados.length > 0,
-      activados: activados.length,
-      planes: activados.map((a) => a.planId),
+      pagado,
+      activados: activados.length + epayco.activados.length + mp.activados.length,
+      planes,
+      rapid: { activados: activados.length },
+      epayco: {
+        activados: epayco.activados.length,
+        yaActivos: epayco.yaActivos.length,
+        ordenes: [...epayco.activados, ...epayco.yaActivos],
+      },
+      mercadopago: {
+        activados: mp.activados.length,
+        yaActivos: mp.yaActivos.length,
+        pagos: [...mp.activados, ...mp.yaActivos],
+      },
     });
   } catch (e) {
     console.error('[RAPID] Error verificar:', e.message);
@@ -1553,6 +3265,22 @@ refrescarConfigRapid({ forzar: true })
     )
   )
   .catch((e) => console.error('[RAPID] Config:', e.message));
+
+console.log(
+  `[EPAYCO] Módulo cargado. Config dinámica en Firestore: config_pagos/epayco ` +
+    `(respaldo: modo=${EPAYCO_MODE}, checkout=${EPAYCO_CHECKOUT_URL})`
+);
+// Lee la config real (y crea el documento EN PRUEBAS si todavía no existe,
+// así el botón queda oculto hasta que cargues las llaves y lo pongas en true).
+refrescarConfigEpayco({ forzar: true })
+  .then((c) =>
+    console.log(
+      `[EPAYCO] Config → produccion=${c.produccion} (crudo=${c.produccionCrudo}) ` +
+        `modo=${c.modo} custIdCliente=${c.custIdCliente || '(falta)'} ` +
+        `pKey=${c.pKey ? maskClave(c.pKey) : '(falta)'}`
+    )
+  )
+  .catch((e) => console.error('[EPAYCO] Config:', e.message));
 
 // ════════════════════════════════════════════════════════════════
 //  PAYPAL - Renovar Membresía
@@ -2782,6 +4510,167 @@ function crearHotspotUserMikroTik(host, usuario, clave, login, pass, perfil, lim
   if (limitUptime && limitUptime !== '0s') body['limit-uptime'] = limitUptime;
   return mikrotikRest(host, usuario, clave, '/rest/ip/hotspot/user', 'PUT', body);
 }
+
+// ════════════════════════════════════════════════════════════════
+//  DHCP LEASES — ver y marcar las IPs que el MikroTik le da a las antenas
+//
+//  Flujo real del operador: conecta la antena → el MikroTik le asigna una IP →
+//  necesita ESA IP para registrar el cliente (campo `ipatn`). Antes había que
+//  entrar a WinBox a verla.
+//
+//  "Marcar" deja el lease:
+//    · ESTÁTICO (la antena conserva la IP, el DHCP no se la cambia),
+//    · con comentario `StarkGo <cliente>`,
+//    · y la IP en la address-list `starkgo` (para reglas propias).
+//  Se intenta por REST (instantáneo); si el REST no está disponible, el VPS
+//  encola la acción `marcarLease` y el router lo aplica en el próximo ciclo.
+// ════════════════════════════════════════════════════════════════
+
+// GET /mikrotik/leases?apikey=… → leases del DHCP del router
+app.get('/mikrotik/leases', async (req, res) => {
+  const { apikey } = req.query;
+  const valida = await validarApikey(apikey);
+  if (!valida) return res.status(401).json({ error: 'No autorizado' });
+  try {
+    const cfg = await obtenerConfigDesdeApikey(apikey);
+    if (!cfg) return res.status(404).json({ error: 'Sin config MikroTik' });
+    const r = await mikrotikRest(
+      cfg.mikrotikIp, cfg.mikrotikUser, cfg.mikrotikPass,
+      '/rest/ip/dhcp-server/lease', 'GET'
+    );
+    if (r.status >= 400) {
+      return res.status(502).json({
+        error: `El MikroTik respondió ${r.status}`,
+        detalle: typeof r.body === 'string' ? r.body.slice(0, 200) : r.body,
+        pista:
+          'Revisá que el servicio www-ssl (o www) esté habilitado y que el VPS ' +
+          'llegue al router (es el mismo que usa el tracking de consumo).',
+      });
+    }
+    const leases = (Array.isArray(r.body) ? r.body : []).map((l) => ({
+      id: l['.id'] || null,
+      ip: l.address || '',
+      mac: l['mac-address'] || '',
+      nombre: l['host-name'] || '',
+      comentario: l.comment || '',
+      dinamica: l.dynamic === true || l.dynamic === 'true',
+      estado: l.status || '',
+      servidor: l.server || '',
+      caduca: l['expires-after'] || '',
+      visto: l['last-seen'] || '',
+    }));
+    res.json({ ok: true, fuente: 'vps (rest)', total: leases.length, leases });
+  } catch (e) {
+    console.error('[LEASES] Error leyendo leases:', e.message);
+    res.status(502).json({ error: `No pude leer los leases: ${e.message}` });
+  }
+});
+
+// POST /mikrotik/lease/marcar  { apikey, ip, nombre }
+// Deja el lease ESTÁTICO + comentado + en la address-list `starkgo`.
+// (Lo llama el botón "Marcar StarkGo" y también el alta de cliente, solo.)
+app.post('/mikrotik/lease/marcar', async (req, res) => {
+  const { apikey, ip, nombre } = req.body || {};
+  const valida = await validarApikey(apikey);
+  if (!valida) return res.status(401).json({ error: 'No autorizado' });
+  const ipOk = _rosIp(ip);
+  if (!ipOk) return res.status(400).json({ error: 'Falta la IP (o no es válida)' });
+  const quien = _ros(nombre, 40) || 'cliente';
+
+  try {
+    const cfg = await obtenerConfigDesdeApikey(apikey);
+    if (!cfg) return res.status(404).json({ error: 'Sin config MikroTik' });
+
+    // (1) ¿Existe un lease (DHCP) para esa IP?
+    const busca = await mikrotikRest(
+      cfg.mikrotikIp, cfg.mikrotikUser, cfg.mikrotikPass,
+      `/rest/ip/dhcp-server/lease?address=${encodeURIComponent(ipOk)}`, 'GET'
+    );
+    const lease = Array.isArray(busca.body) && busca.body[0] ? busca.body[0] : null;
+    if (!lease) {
+      // IP fija (fuera del DHCP): igual queda marcada en la address-list.
+      encolar(apikey, { accion: 'marcarLease', ip: ipOk, nombre: quien });
+      return res.json({
+        ok: true,
+        via: 'cola',
+        ip: ipOk,
+        motivo: 'Esa IP no está en los leases del DHCP: la marqué en la lista `starkgo`.',
+      });
+    }
+
+    const id = String(lease['.id'] || '');
+    const eraDinamica = lease.dynamic === true || lease.dynamic === 'true';
+
+    // (2) Si es dinámica → ESTÁTICA (así la antena conserva esa IP).
+    let estaticaOk = !eraDinamica;
+    if (eraDinamica && id) {
+      const mk = await mikrotikRest(
+        cfg.mikrotikIp, cfg.mikrotikUser, cfg.mikrotikPass,
+        '/rest/ip/dhcp-server/lease/make-static', 'POST', { '.id': id }
+      );
+      estaticaOk = mk.status < 400;
+      if (!estaticaOk) {
+        console.warn('[LEASES] make-static:', mk.status, JSON.stringify(mk.body).slice(0, 150));
+      }
+    }
+
+    // (3) Comentario identificable (sólo editable si ya quedó estática).
+    const comentario = `StarkGo ${quien}`;
+    let comentarioOk = false;
+    if (estaticaOk && id) {
+      const patch = await mikrotikRest(
+        cfg.mikrotikIp, cfg.mikrotikUser, cfg.mikrotikPass,
+        `/rest/ip/dhcp-server/lease/${id}`, 'PATCH', { comment: comentario }
+      );
+      comentarioOk = patch.status < 400;
+    }
+
+    // (4) Address-list `starkgo` (para las reglas propias del operador).
+    let listaOk = false;
+    try {
+      const ya = await mikrotikRest(
+        cfg.mikrotikIp, cfg.mikrotikUser, cfg.mikrotikPass,
+        `/rest/ip/firewall/address-list?list=starkgo&address=${encodeURIComponent(ipOk)}`, 'GET'
+      );
+      if (Array.isArray(ya.body) && ya.body.length > 0) {
+        listaOk = true;
+      } else {
+        const add = await mikrotikRest(
+          cfg.mikrotikIp, cfg.mikrotikUser, cfg.mikrotikPass,
+          '/rest/ip/firewall/address-list', 'PUT',
+          { list: 'starkgo', address: ipOk, comment: comentario }
+        );
+        listaOk = add.status < 400;
+      }
+    } catch (e) {
+      console.warn('[LEASES] address-list:', e.message);
+    }
+
+    // Si el REST no pudo dejarlo estático/comentado, encolamos el script.
+    const encolado = !estaticaOk || !comentarioOk;
+    if (encolado) encolar(apikey, { accion: 'marcarLease', ip: ipOk, nombre: quien });
+
+    console.log(
+      `[LEASES] Marcar ${ipOk} (${quien}) → estatica=${estaticaOk} ` +
+        `comentario=${comentarioOk} lista=${listaOk} encolado=${encolado}`
+    );
+    res.json({
+      ok: estaticaOk || comentarioOk || listaOk,
+      via: 'rest',
+      ip: ipOk,
+      eraDinamica,
+      estatica: estaticaOk,
+      comentario: comentarioOk ? comentario : null,
+      addressList: listaOk,
+      encolado,
+    });
+  } catch (e) {
+    console.error('[LEASES] marcar:', e.message);
+    // Último recurso: la cola (el router lo aplica en el próximo ciclo).
+    encolar(apikey, { accion: 'marcarLease', ip: ipOk, nombre: quien });
+    res.json({ ok: true, via: 'cola', error: e.message });
+  }
+});
 
 // ── PERFILES (Planes) ──────────────────────────────────────────
 

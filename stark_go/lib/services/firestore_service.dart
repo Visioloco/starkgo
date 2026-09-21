@@ -4,6 +4,18 @@ import '../../services/mikrotik_local_api.dart';
 class FirestoreService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
+  // ══════════════════════════════════════════════════════════════════
+  //  CONEXIÓN LOCAL DEL MIKROTIK (Modo Local)
+  //
+  //  Se guarda en `configuracion_local/{uid}` — el documento es del uid del
+  //  usuario autenticado, así cada cuenta tiene SU router y los datos
+  //  vuelven al entrar/salir (antes sólo vivían en memoria, en FFAppState).
+  //
+  //  OJO: se usa la colección de PRIMER NIVEL `configuracion_local` porque
+  //  es la que permiten las reglas de Firestore (`firestore.rules`); una
+  //  subcolección de `usuarios/{uid}` quedaría denegada.
+  // ══════════════════════════════════════════════════════════════════
+
   // ── Guardar configuración local del MikroTik ──
   Future<void> guardarConfiguracionLocal({
     required String uid,
@@ -12,12 +24,18 @@ class FirestoreService {
     required String usuario,
     required bool useSsl,
     required String nombreRouter,
+    String clave = '',
   }) async {
     try {
-      await _firestore.collection('usuarios').doc(uid).collection('configuracion_local').doc('mikrotik').set({
+      await _firestore.collection('configuracion_local').doc(uid).set({
+        'propietarioUid': uid,
         'ip': ip,
         'puerto': puerto,
         'usuario': usuario,
+        // La clave del router se guarda (igual que en Config. MikroTik) para
+        // no tener que volver a escribirla: es el mismo criterio del resto
+        // de la app y el doc sólo lo puede leer su dueño.
+        'clave': clave,
         'useSsl': useSsl,
         'nombreRouter': nombreRouter,
         'fechaActualizacion': FieldValue.serverTimestamp(),
@@ -30,7 +48,8 @@ class FirestoreService {
   // ── Obtener configuración local guardada ──
   Future<Map<String, dynamic>?> obtenerConfiguracionLocal(String uid) async {
     try {
-      final doc = await _firestore.collection('usuarios').doc(uid).collection('configuracion_local').doc('mikrotik').get();
+      final doc =
+          await _firestore.collection('configuracion_local').doc(uid).get();
 
       if (doc.exists) {
         return doc.data();
@@ -117,7 +136,7 @@ class FirestoreService {
   // ── Eliminar configuración local ──
   Future<void> eliminarConfiguracionLocal(String uid) async {
     try {
-      await _firestore.collection('usuarios').doc(uid).collection('configuracion_local').doc('mikrotik').delete();
+      await _firestore.collection('configuracion_local').doc(uid).delete();
     } catch (e) {
       throw Exception('Error eliminando configuración local: $e');
     }

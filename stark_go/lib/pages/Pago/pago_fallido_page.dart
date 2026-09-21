@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
@@ -16,10 +17,21 @@ class PagoFallidoPage extends StatefulWidget {
   final Plan plan;
   final bool esPendiente;
 
+  /// Pasarela con la que se pagó: `'epayco'`, `'rapid'`, `'mercadoPago'`,
+  /// `'paypal'` (o vacío en builds viejos). Decide a qué endpoint se le pide
+  /// la verificación del cobro.
+  final String metodo;
+
+  /// Factura/orden que devolvió el VPS (ePayco: `ordenId`). Se manda a
+  /// `/epayco/verificar` para revisar ESA orden.
+  final String? ordenId;
+
   const PagoFallidoPage({
     super.key,
     required this.plan,
     this.esPendiente = false,
+    this.metodo = '',
+    this.ordenId,
   });
 
   @override
@@ -36,6 +48,19 @@ class _PagoFallidoPageState extends State<PagoFallidoPage> with TickerProviderSt
   /// true mientras se consulta al VPS si el pago ya se acreditó.
   bool _verificando = false;
 
+  /// Auto-chequeo (sólo cuando el pago está PENDIENTE): cada [_intervaloAuto]
+  /// segundos le preguntamos al VPS si la pasarela ya acreditó el pago. En
+  /// cuanto lo acredita, la pantalla de éxito aparece **sola**.
+  Timer? _autoTimer;
+  static const int _maxIntentos = 20;
+  static const Duration _intervaloAuto = Duration(seconds: 12);
+
+  /// Intentos hechos (manuales + automáticos).
+  int _intentos = 0;
+
+  /// ¿Sigue activo el auto-chequeo?
+  bool get _autoActivo => _autoTimer != null;
+
   @override
   void initState() {
     super.initState();
@@ -46,8 +71,8 @@ class _PagoFallidoPageState extends State<PagoFallidoPage> with TickerProviderSt
       NotificacionesService.instance.notificarPagoPendiente(
         titulo: '⏳ Pago en revisión · ${widget.plan.duracion}',
         detalle: 'El pago de ${widget.plan.precioCopTexto} quedó en revisión '
-            '(banco/pasarela). Se activa solo cuando se apruebe: '
-            'tocá "Verificar estado".',
+            '(banco/pasarela). Lo revisamos automáticamente: se activa solo '
+            'cuando se apruebe.',
       );
     } else {
       NotificacionesService.instance.notificarPagoFallido(
@@ -65,6 +90,27 @@ class _PagoFallidoPageState extends State<PagoFallidoPage> with TickerProviderSt
       vsync: this,
       duration: const Duration(milliseconds: 600),
     )..forward();
+
+    // 🔄 Auto-chequeo del pago pendiente: revisamos solos cada [_intervaloAuto]
+    //    segundos. En cuanto la pasarela acredita el pago, se muestra la
+    //    pantalla de éxito sin que el cliente toque nada (el botón manual
+    //    sigue estando).
+    if (widget.esPendiente) {
+      Future.delayed(const Duration(seconds: 4), () {
+        if (mounted) _verificarPago(silencioso: true);
+      });
+      _autoTimer = Timer.periodic(_intervaloAuto, (_) {
+        if (!mounted || _verificando) return;
+        if (_intentos >= _maxIntentos) {
+          _autoTimer?.cancel();
+          _autoTimer = null;
+          if (mounted) setState(() {}); // refresca el texto de ayuda
+          return;
+        }
+        _verificarPago(silencioso: true);
+      });
+    }
+
     SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
       statusBarIconBrightness: Brightness.light,
@@ -73,6 +119,7 @@ class _PagoFallidoPageState extends State<PagoFallidoPage> with TickerProviderSt
 
   @override
   void dispose() {
+    _autoTimer?.cancel();
     _bgController.dispose();
     _shakeController.dispose();
     super.dispose();
@@ -85,47 +132,83 @@ class _PagoFallidoPageState extends State<PagoFallidoPage> with TickerProviderSt
   String get _titulo => widget.esPendiente ? 'Pago pendiente' : 'Pago rechazado';
 
   String get _subtitulo => widget.esPendiente
-      ? 'Tu pago está siendo procesado.\nTocá "Verificar estado": si ya se acreditó, se activa al instante.'
+      ? 'Tu pago está siendo procesado.\nLo revisamos automáticamente: si se acredita, se activa solo.'
       : 'No pudimos procesar tu pago.\nPor favor intenta con otro método.';
 
   // ══════════════════════════════════════════════════════════
-  //  Verificar el pago contra el VPS (Rapid)
-  //  El VPS consulta los pagos acreditados del usuario y, si encuentra
-  //  alguno, activa la membresía y acá mostramos la pantalla de éxito.
+  //  Verificar el pago contra el VPS
+  //  El VPS revisa los pagos ACREDITADOS del usuario en la pasarela con la que
+  //  pagó (Rapid / ePayco / Mercado Pago) y en las demás como respaldo; si
+  //  encuentra uno, activa la membresía y acá mostramos el éxito.
+  //
+  //  ⚠️ Antes esto pedía SIEMPRE `/rapid/verificar`: un pago con ePayco o con
+  //     Mercado Pago que quedaba "pendiente" no se podía verificar nunca.
+  //
+  //  `silencioso` = lo llama el auto-chequeo (cada [_intervaloAuto] segundos):
+  //  en ese caso no mostramos avisos cuando todavía no figura el pago.
   // ══════════════════════════════════════════════════════════
-  Future<void> _verificarPago() async {
+  Future<void> _verificarPago({bool silencioso = false}) async {
+    if (_verificando) return;
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
-      _snack('Sesión expirada. Volvé a iniciar sesión.', const Color(0xFFE53935));
+      _autoTimer?.cancel();
+      _autoTimer = null;
+      if (!silencioso) {
+        _snack('Sesión expirada. Volvé a iniciar sesión.', const Color(0xFFE53935));
+      }
       return;
     }
+    _intentos++;
     setState(() => _verificando = true);
     try {
       final token = await user.getIdToken(true);
-      final resp = await http
-          .post(
-            Uri.parse('$_vpsUrl/rapid/verificar'),
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer $token',
-            },
-            body: jsonEncode({'planId': widget.plan.id}),
-          )
-          .timeout(const Duration(seconds: 25));
+      // Endpoint según la pasarela con la que se pagó (el segundo es respaldo:
+      // en el VPS todos revisan las tres pasarelas).
+      final rutas = switch (widget.metodo) {
+        'epayco' => const ['/epayco/verificar', '/rapid/verificar'],
+        'mercadoPago' => const ['/mp/verificar', '/rapid/verificar'],
+        _ => const ['/rapid/verificar'],
+      };
+
+      var pagado = false;
+      for (final ruta in rutas) {
+        final resp = await http
+            .post(
+              Uri.parse('$_vpsUrl$ruta'),
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer $token',
+              },
+              body: jsonEncode({
+                'planId': widget.plan.id,
+                if (widget.ordenId != null && widget.ordenId!.isNotEmpty)
+                  'factura': widget.ordenId,
+              }),
+            )
+            .timeout(const Duration(seconds: 25));
+
+        if (resp.statusCode != 200) continue;
+        Map<String, dynamic> data = const {};
+        try {
+          final dec = jsonDecode(resp.body);
+          if (dec is Map<String, dynamic>) data = dec;
+        } catch (_) {}
+        if (data['pagado'] == true) {
+          pagado = true;
+          break;
+        }
+      }
 
       if (!mounted) return;
-      Map<String, dynamic> data = const {};
-      try {
-        final dec = jsonDecode(resp.body);
-        if (dec is Map<String, dynamic>) data = dec;
-      } catch (_) {}
-
-      if (resp.statusCode == 200 && data['pagado'] == true) {
+      if (pagado) {
+        _autoTimer?.cancel();
+        _autoTimer = null;
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => PagoExitosoPage(plan: widget.plan)),
         );
         return;
       }
+      if (silencioso) return;
       _snack(
         'Todavía no figura el pago acreditado.\n'
         'Si ya pagaste, esperá un minuto y tocá de nuevo.',
@@ -335,6 +418,19 @@ class _PagoFallidoPageState extends State<PagoFallidoPage> with TickerProviderSt
                   ),
                 ),
               ).animate().fadeIn(duration: 400.ms, delay: 700.ms),
+
+              // Estado del auto-chequeo (sólo en "pago pendiente").
+              if (widget.esPendiente) ...[
+                const SizedBox(height: 12),
+                Text(
+                  _autoActivo
+                      ? 'Revisando el pago automáticamente… ($_intentos/$_maxIntentos)'
+                      : 'Dejamos de revisar automáticamente. Tocá "Verificar estado" '
+                          'o escribinos por soporte.',
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.dmSans(color: Colors.white38, fontSize: 11.5),
+                ).animate().fadeIn(duration: 300.ms),
+              ],
 
               const SizedBox(height: 12),
 

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:routeros_api/routeros_api.dart';
 
 // ════════════════════════════════════════════════════════════════
@@ -167,6 +168,153 @@ class MikrotikLocalApi {
       '/ip/hotspot/user/set',
       atributos: ['=.id=$id', '=limit-uptime=$limitUptime'],
     );
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // 🛡️ Blindaje del administrador (portal cautivo / hotspot)
+  //
+  // Deja TU teléfono como `ip-binding type=bypassed`: el portal NO le pide
+  // ficha/PIN. Se puede hacer por IP y/o por MAC (la MAC sobrevive a los
+  // cambios de IP del DHCP).
+  // ─────────────────────────────────────────────────────────────
+
+  /// Equipos que el hotspot ve ahora mismo (`/ip hotspot host/print`).
+  /// Cada uno trae `mac-address`, `address` (IP) y `host-name`.
+  Future<List<Map<String, dynamic>>> obtenerHostsHotspot() async {
+    return await _ejecutar('/ip/hotspot/host/print');
+  }
+
+  /// `ip-binding` existentes del hotspot (para saber qué está blindado).
+  Future<List<Map<String, dynamic>>> obtenerBindingsHotspot() async {
+    return await _ejecutar('/ip/hotspot/ip-binding/print');
+  }
+
+  /// Crea el `ip-binding type=bypassed` para una IP y/o MAC.
+  ///
+  /// Devuelve `true` si quedó blindado (o si ya lo estaba: RouterOS responde
+  /// con error "already have" y lo tratamos como éxito, así reintentar es
+  /// inofensivo).
+  Future<bool> blindarDispositivo({
+    String? ip,
+    String? mac,
+    String comentario = 'StarkGo ADMIN',
+  }) async {
+    final atributos = <String>[
+      '=type=bypassed',
+      '=comment=$comentario',
+    ];
+    final ipOk = (ip ?? '').trim();
+    final macOk = (mac ?? '').trim().toUpperCase();
+    if (ipOk.isNotEmpty) atributos.add('=address=$ipOk');
+    if (macOk.isNotEmpty) atributos.add('=mac-address=$macOk');
+    if (ipOk.isEmpty && macOk.isEmpty) return false;
+
+    try {
+      await _ejecutar('/ip/hotspot/ip-binding/add', atributos: atributos);
+      return true;
+    } on MikrotikLocalException catch (e) {
+      final msg = e.mensaje.toLowerCase();
+      // Ya existía ese binding → el objetivo está cumplido.
+      if (msg.contains('already') || msg.contains('haved')) return true;
+      rethrow;
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // 📌 Leases DHCP — las IPs que el router le da a las antenas
+  //
+  // Sirve para saber qué IP le tocó a una antena recién conectada SIN entrar
+  // a WinBox: la app la lista, la buscás y la usás al registrar el cliente.
+  // ─────────────────────────────────────────────────────────────
+
+  /// Leases del servidor DHCP (`/ip dhcp-server lease/print`).
+  /// Campos útiles: `address` (IP), `mac-address`, `host-name`, `dynamic`
+  /// (true = la dio el DHCP), `status`, `comment`, `last-seen`.
+  Future<List<Map<String, dynamic>>> obtenerLeasesDhcp() async {
+    return await _ejecutar('/ip/dhcp-server/lease/print');
+  }
+
+  /// Marca el lease de una IP como StarkGo:
+  ///   · lo pasa a **ESTÁTICO** (si era dinámico) → la antena conserva la IP,
+  ///   · le pone el comentario `StarkGo <nombre>`,
+  ///   · y agrega la IP a la address-list `starkgo`.
+  ///
+  /// Devuelve `{estatica, comentario, lista}` con lo que se logró aplicar.
+  /// Es idempotente: si ya es estática o ya está en la lista, no repite nada.
+  Future<Map<String, bool>> marcarLeaseDhcp({
+    required String ip,
+    required String nombre,
+  }) async {
+    final resultado = <String, bool>{
+      'estatica': false,
+      'comentario': false,
+      'lista': false,
+    };
+    final ipOk = ip.trim();
+    if (ipOk.isEmpty) return resultado;
+    final comentario = 'StarkGo ${nombre.trim()}';
+
+    final leases = await obtenerLeasesDhcp();
+    final lease = leases.firstWhere(
+      (l) => (l['address']?.toString() ?? '') == ipOk,
+      orElse: () => <String, dynamic>{},
+    );
+    final id = lease['.id']?.toString() ?? '';
+
+    if (id.isEmpty) {
+      // No hay lease para esa IP (IP fija fuera del DHCP): igual la dejamos
+      // marcada en la address-list.
+      await _agregarListaStarkgo(ip: ipOk, comentario: comentario, resultado: resultado);
+      return resultado;
+    }
+
+    final esDinamica = lease['dynamic'] == true || lease['dynamic']?.toString() == 'true';
+    if (esDinamica) {
+      try {
+        await _ejecutar('/ip/dhcp-server/lease/make-static', atributos: ['=.id=$id']);
+        resultado['estatica'] = true;
+      } catch (e) {
+        debugPrint('[Leases] make-static falló: $e');
+      }
+    } else {
+      resultado['estatica'] = true; // ya era estática
+    }
+
+    if (resultado['estatica'] == true) {
+      try {
+        await _ejecutar('/ip/dhcp-server/lease/set',
+            atributos: ['=.id=$id', '=comment=$comentario']);
+        resultado['comentario'] = true;
+      } catch (e) {
+        debugPrint('[Leases] comentario falló: $e');
+      }
+    }
+
+    await _agregarListaStarkgo(ip: ipOk, comentario: comentario, resultado: resultado);
+    return resultado;
+  }
+
+  /// Deja la IP en la address-list `starkgo` (idempotente).
+  Future<void> _agregarListaStarkgo({
+    required String ip,
+    required String comentario,
+    required Map<String, bool> resultado,
+  }) async {
+    try {
+      final actual = await _ejecutar('/ip/firewall/address-list/print');
+      final ya = actual.any((a) =>
+          (a['list']?.toString() ?? '') == 'starkgo' &&
+          (a['address']?.toString() ?? '') == ip);
+      if (ya) {
+        resultado['lista'] = true;
+        return;
+      }
+      await _ejecutar('/ip/firewall/address-list/add',
+          atributos: ['=list=starkgo', '=address=$ip', '=comment=$comentario']);
+      resultado['lista'] = true;
+    } catch (e) {
+      debugPrint('[Leases] address-list falló: $e');
+    }
   }
 
   // ─────────────────────────────────────────────────────────────

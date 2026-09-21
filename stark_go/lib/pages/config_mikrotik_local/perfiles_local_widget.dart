@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import '../../services/hotspot_vouchers.dart';
 import '../../services/mikrotik_local_api.dart';
+import '../../widgets/sin_soporte_web.dart';
 
 // ─────────────────────────────────────────────────────────────────────────
 // Paleta — misma que usa ConfigMikroTikWidget, para que todo el flujo de
@@ -22,6 +25,17 @@ class _C {
   static const Color border = Color(0xFFE2E8F0);
   static const Color purple = Color(0xFF7C3AED);
 }
+
+/// Atajos de duración para los perfiles de hotspot (los pines/vouchers de
+/// 1 hora, 1 día, 1 semana y 1 mes). El valor va en SEGUNDOS, que es lo que
+/// espera el campo "SESIÓN" y lo que RouterOS guarda como session-timeout.
+const Map<String, int> _kPresetsDuracion = {
+  '1 hora': 3600,
+  '5 horas': 18000,
+  '1 día': 86400,
+  '1 semana': 604800,
+  '1 mes': 2592000, // 30 días
+};
 
 class PerfilesLocalWidget extends StatefulWidget {
   final MikrotikLocalApi api;
@@ -178,6 +192,27 @@ class _PerfilesLocalWidgetState extends State<PerfilesLocalWidget> {
                         keyboardType: TextInputType.number,
                       ),
                     ),
+                  ]),
+                  const SizedBox(height: 10),
+                  Text('ATAJOS DE DURACIÓN',
+                      style: GoogleFonts.spaceGrotesk(
+                          color: _C.textSec, fontSize: 10.5, fontWeight: FontWeight.w600, letterSpacing: 0.3)),
+                  const SizedBox(height: 6),
+                  Wrap(spacing: 6, runSpacing: 6, children: [
+                    for (final p in _kPresetsDuracion.entries)
+                      GestureDetector(
+                        onTap: () => setDialogState(() => _tiempoController.text = '${p.value}'),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                          decoration: BoxDecoration(
+                            color: _C.warning.withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: _C.warning.withOpacity(0.3)),
+                          ),
+                          child: Text('${p.key} · ${p.value}s',
+                              style: GoogleFonts.spaceGrotesk(color: _C.warning, fontSize: 11, fontWeight: FontWeight.w700)),
+                        ),
+                      ),
                   ]),
                   const SizedBox(height: 22),
                   Row(children: [
@@ -385,6 +420,13 @@ class _PerfilesLocalWidgetState extends State<PerfilesLocalWidget> {
   // ─────────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
+    // ── WEB: los perfiles locales necesitan la API del router ──
+    if (kIsWeb) {
+      return const SinSoporteWebInline(
+        titulo: 'Perfiles locales',
+        detalle: 'Sólo disponible desde la app del teléfono (API del MikroTik).',
+      );
+    }
     return Container(
       color: _C.surfaceDim,
       child: RefreshIndicator(
@@ -563,6 +605,9 @@ class _PerfilesLocalWidgetState extends State<PerfilesLocalWidget> {
     final nombre = perfil['name']?.toString() ?? 'Sin nombre';
     final rateLimit = perfil['rate-limit']?.toString() ?? 'N/A';
     final sessionTimeout = perfil['session-timeout']?.toString() ?? 'N/A';
+    // Se muestra la duración en texto claro ("1 h", "30 días") para validar de
+    // un vistazo que los pines de este perfil sí van a caducar.
+    final duracion = duracionLegible(parseDuracionRouteros(sessionTimeout));
     final sharedUsers = perfil['shared-users']?.toString() ?? '1';
     final id = perfil['.id']?.toString() ?? '';
 
@@ -591,7 +636,7 @@ class _PerfilesLocalWidgetState extends State<PerfilesLocalWidget> {
                 const SizedBox(height: 5),
                 Wrap(spacing: 6, runSpacing: 4, children: [
                   _chip(Icons.speed_rounded, rateLimit, _C.accent),
-                  _chip(Icons.timer_rounded, sessionTimeout, _C.warning),
+                  _chip(Icons.timer_rounded, '$sessionTimeout · $duracion', _C.warning),
                   _chip(Icons.people_alt_rounded, sharedUsers, _C.primary),
                 ]),
               ],

@@ -12,17 +12,26 @@ import '/auth/firebase_auth/auth_util.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 import '/index.dart';
 import '../../plan_model.dart';
+import '../../services/pais_service.dart';
 import '../../services/precios_service.dart';
 
 import '../Pago/pago_webview_page.dart';
 
 /// Métodos de pago disponibles.
-enum MetodoPago { mercadoPago, rapid, paypal }
+enum MetodoPago { mercadoPago, rapid, epayco, paypal }
 
-/// Rapid (antes Rapyd): cobra con tarjeta / efectivo en el checkout
-/// hospedado. Las credenciales (rak_/rsk_) y el modo sandbox|live viven en
-/// el VPS, en el módulo `/rapid/*`.
-const bool _kRapidHabilitado = true;
+/// Rapid (antes Rapyd): APAGADA — su reemplazo es ePayco.
+/// El botón se muestra SOLO si el VPS la enciende (`RAPID_ACTIVO=true`), así
+/// que se puede reactivar sin recompilar la app. Este valor compilado es sólo
+/// el respaldo cuando el VPS todavía no respondió.
+const bool _kRapidHabilitado = false;
+
+/// ePayco: disponible en TODOS los países (incluida Colombia; ahí además
+/// está Mercado Pago). El botón se muestra SOLO si el VPS lo informa en
+/// producción (`config_pagos/epayco.produccion` = true) y el país no está en
+/// `excluirPaises`. Mientras no esté configurado, este valor compilado lo
+/// mantiene OCULTO.
+const bool _kEpaycoHabilitado = false;
 
 /// PayPal DESACTIVADO por ahora (se usará más adelante).
 /// Poné en `true` cuando quieras volver a mostrar el botón.
@@ -66,13 +75,42 @@ class _ActivarMembresiaWidgetState extends State<ActivarMembresiaWidget> with Ti
 
   static const String _vpsUrl = 'http://5.161.88.42:3000';
 
-  /// El botón de Rapid se muestra SOLO si el VPS informa que está en
-  /// PRODUCCIÓN (`config_pagos/rapid.produccion` = true en Firestore).
-  /// Si todavía no llegó el dato, se usa el valor compilado como respaldo.
+  /// El botón de Rapid se muestra SOLO si el VPS la enciende
+  /// (`RAPID_ACTIVO=true`, además de que su config esté en producción).
+  /// Rapid quedó reemplazada por ePayco, así que por defecto está oculta.
   bool get _rapidVisible => PreciosService.rapidProduccion ?? _kRapidHabilitado;
 
-  /// Reconstruye la pantalla cuando cambia el estado de Rapid en Firestore
-  /// (tiempo real: el botón aparece/desaparece sin reiniciar la app).
+  /// El botón de ePayco se muestra SOLO si el VPS lo tiene en producción
+  /// (`config_pagos/epayco.produccion` = true), el país no está excluido
+  /// (`config_pagos/epayco.excluirPaises`) y el plan elegido no supera el
+  /// tope de monto de ePayco (`montoMax`). Todo se ajusta desde Firestore
+  /// sin recompilar la app.
+  bool get _epaycoVisible =>
+      (PreciosService.epaycoProduccion ?? _kEpaycoHabilitado) &&
+      PreciosService.epaycoDisponible(PaisService.pais) &&
+      PreciosService.epaycoPermiteMonto(_planSel?.precioCop);
+
+  /// true si el plan elegido supera el tope de monto de ePayco (para avisar
+  /// por qué no se puede pagar ese plan con ePayco).
+  bool get _epaycoMontoExcedido =>
+      _planSel != null &&
+      PreciosService.epaycoDisponible(PaisService.pais) &&
+      !PreciosService.epaycoPermiteMonto(_planSel!.precioCop);
+
+  /// Mercado Pago SOLO funciona en Colombia (la cuenta es colombiana): el
+  /// botón se muestra únicamente si el teléfono está en uno de los países
+  /// permitidos (`pasarelas.mercadoPago.paises`, por defecto CO).
+  bool get _mercadoPagoVisible =>
+      PreciosService.mercadoPagoDisponible(PaisService.pais);
+
+  /// true si NO hay ninguna pasarela disponible para este teléfono
+  /// (ej: cliente en el exterior antes de habilitar ePayco).
+  bool get _sinPasarelas =>
+      !_mercadoPagoVisible && !_epaycoVisible && !_rapidVisible && !_kPayPalHabilitado;
+
+  /// Reconstruye la pantalla cuando cambia el estado de una pasarela en
+  /// Firestore o cuando termina la detección del país (tiempo real: los
+  /// botones aparecen/desaparecen sin reiniciar la app).
   void _onPasarelas() {
     if (mounted) setState(() {});
   }
@@ -96,6 +134,12 @@ class _ActivarMembresiaWidgetState extends State<ActivarMembresiaWidget> with Ti
     // Tiempo real: si cambiás `produccion` en Firestore, el botón cambia solo.
     PreciosService.escucharPasarelas();
     PreciosService.rapidProduccionNotifier.addListener(_onPasarelas);
+    PreciosService.epaycoProduccionNotifier.addListener(_onPasarelas);
+    // ¿En qué país está el teléfono? Decide si se muestra Mercado Pago.
+    PaisService.paisNotifier.addListener(_onPasarelas);
+    PaisService.detectar().then((_) {
+      if (mounted) setState(() {});
+    });
     SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
       statusBarIconBrightness: Brightness.light,
@@ -105,6 +149,8 @@ class _ActivarMembresiaWidgetState extends State<ActivarMembresiaWidget> with Ti
   @override
   void dispose() {
     PreciosService.rapidProduccionNotifier.removeListener(_onPasarelas);
+    PreciosService.epaycoProduccionNotifier.removeListener(_onPasarelas);
+    PaisService.paisNotifier.removeListener(_onPasarelas);
     _pulseController.dispose();
     _shimmerController.dispose();
     super.dispose();
@@ -153,10 +199,11 @@ class _ActivarMembresiaWidgetState extends State<ActivarMembresiaWidget> with Ti
 
       final token = await user.getIdToken(true);
 
-      // Endpoint según el botón de pago pulsado. Los tres responden
+      // Endpoint según el botón de pago pulsado. Todos responden
       // { initPoint } con la URL del checkout hospedado.
       final endpoint = switch (metodo) {
         MetodoPago.rapid => '/rapid/crear-orden',
+        MetodoPago.epayco => '/epayco/crear-orden',
         MetodoPago.paypal => '/paypal/crear-orden',
         MetodoPago.mercadoPago => '/mp/crear-preferencia',
       };
@@ -178,7 +225,8 @@ class _ActivarMembresiaWidgetState extends State<ActivarMembresiaWidget> with Ti
           .timeout(const Duration(seconds: 15));
 
       if (response.statusCode != 200) {
-        _showError('Error del servidor (${response.statusCode})');
+        debugPrint('[Pago] VPS respondió ${response.statusCode}: ${response.body}');
+        _showError(_mensajeErrorVps(response));
         return;
       }
 
@@ -193,13 +241,22 @@ class _ActivarMembresiaWidgetState extends State<ActivarMembresiaWidget> with Ti
       if (mounted) {
         Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (_) => PagoWebViewPage(url: url, plan: _planSel!),
+            builder: (_) => PagoWebViewPage(
+              url: url,
+              plan: _planSel!,
+              // Pasarela + nº de orden: la pantalla de "pago pendiente" los usa
+              // para verificar el cobro en la pasarela correcta.
+              metodo: metodo.name,
+              ordenId: (data['ordenId'] ?? data['checkoutId'] ?? data['orderId'])
+                  as String?,
+            ),
           ),
         );
       }
     } on TimeoutException {
       _showError('Tiempo de espera agotado. Verifica tu conexión.');
     } catch (e) {
+      debugPrint('[Pago] Excepción al iniciar el pago: $e');
       _showError('Error al iniciar el pago: $e');
     } finally {
       if (mounted) {
@@ -213,6 +270,21 @@ class _ActivarMembresiaWidgetState extends State<ActivarMembresiaWidget> with Ti
 
   String _formatFecha(DateTime d) => '${d.day.toString().padLeft(2, '0')}/'
       '${d.month.toString().padLeft(2, '0')}/${d.year}';
+
+  /// Motivo del error que devolvió el VPS (ej: "ePayco todavía no está
+  /// configurado…"). Si no manda mensaje, se usa el código HTTP.
+  String _mensajeErrorVps(http.Response r) {
+    try {
+      final j = jsonDecode(r.body);
+      if (j is Map) {
+        final m = '${j['error'] ?? j['message'] ?? ''}'.trim();
+        if (m.isNotEmpty) return m;
+      }
+    } catch (_) {
+      // Sin cuerpo JSON: se muestra el código.
+    }
+    return 'Error del servidor (${r.statusCode})';
+  }
 
   void _showError(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -763,16 +835,18 @@ class _ActivarMembresiaWidgetState extends State<ActivarMembresiaWidget> with Ti
     );
   }
 
-  // ── Botones de pago (Mercado Pago · Rapid; PayPal opcional) ──
+  // ── Botones de pago (Mercado Pago · Rapid · ePayco; PayPal opcional) ──
   Widget _buildBotones() {
     return Column(children: [
-      _buildBotonPago(
-        MetodoPago.mercadoPago,
-        'Pagar con Mercado Pago',
-        Icons.account_balance_wallet_rounded,
-        const [Color(0xFF00B1EA), Color(0xFF1A73E8)],
-        const Color(0xFF00B1EA),
-      ),
+      // Mercado Pago SOLO en Colombia (su cuenta solo cobra allá).
+      if (_mercadoPagoVisible)
+        _buildBotonPago(
+          MetodoPago.mercadoPago,
+          'Pagar con Mercado Pago',
+          Icons.account_balance_wallet_rounded,
+          const [Color(0xFF00B1EA), Color(0xFF1A73E8)],
+          const Color(0xFF00B1EA),
+        ),
       if (_rapidVisible) ...[
         const SizedBox(height: 12),
         _buildBotonPago(
@@ -782,6 +856,27 @@ class _ActivarMembresiaWidgetState extends State<ActivarMembresiaWidget> with Ti
           const [Color(0xFF00C6AE), Color(0xFF0F766E)],
           const Color(0xFF00C6AE),
         ),
+      ],
+      // ePayco: solo si el VPS lo tiene en producción.
+      if (_epaycoVisible) ...[
+        const SizedBox(height: 12),
+        _buildBotonPago(
+          MetodoPago.epayco,
+          'Pagar con ePayco',
+          Icons.credit_score_rounded,
+          const [Color(0xFF001E42), Color(0xFF00A0DF)],
+          const Color(0xFF00A0DF),
+        ),
+      ],
+      // Aviso cuando Mercado Pago está oculto por el país.
+      if (!_mercadoPagoVisible) ...[
+        const SizedBox(height: 12),
+        _buildAvisoPais(),
+      ],
+      // Aviso cuando el plan supera el tope de monto de ePayco.
+      if (_epaycoMontoExcedido) ...[
+        const SizedBox(height: 12),
+        _buildAvisoMonto(),
       ],
       // PayPal desactivado por ahora (_kPayPalHabilitado = false).
       if (_kPayPalHabilitado) ...[
@@ -794,7 +889,79 @@ class _ActivarMembresiaWidgetState extends State<ActivarMembresiaWidget> with Ti
           const Color(0xFF0070BA),
         ),
       ],
+      // Sin ninguna pasarela para este país: pedimos que nos escriban.
+      if (_sinPasarelas) ...[
+        const SizedBox(height: 12),
+        _buildAvisoSinPago(),
+      ],
     ]);
+  }
+
+  // ── Aviso: todavía no hay pasarela habilitada para este país ──
+  Widget _buildAvisoSinPago() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: _C.primary.withOpacity(0.10),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _C.primary.withOpacity(0.25)),
+      ),
+      child: Row(children: [
+        Icon(Icons.support_agent_rounded, color: _C.primary, size: 16),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            'Estamos habilitando los pagos para tu país. Escríbenos por WhatsApp y activamos tu plan manualmente.',
+            style: GoogleFonts.dmSans(color: Colors.white60, fontSize: 11.5),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  // ── Aviso: el plan elegido supera el tope de monto de ePayco ──
+  Widget _buildAvisoMonto() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+      decoration: BoxDecoration(
+        color: _C.warning.withOpacity(0.10),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _C.warning.withOpacity(0.25)),
+      ),
+      child: Row(children: [
+        Icon(Icons.speed_rounded, color: _C.warning, size: 16),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            'ePayco no acepta este monto (su máximo es \$${PreciosService.formatoCop(PreciosService.epaycoMontoMax)} COP). '
+            'Elegí un plan menor o pagalo con Mercado Pago.',
+            style: GoogleFonts.dmSans(color: Colors.white60, fontSize: 11.5),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  // ── Aviso: Mercado Pago solo está disponible en Colombia ──
+  Widget _buildAvisoPais() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+      decoration: BoxDecoration(
+        color: _C.warning.withOpacity(0.10),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _C.warning.withOpacity(0.25)),
+      ),
+      child: Row(children: [
+        Icon(Icons.public_rounded, color: _C.warning, size: 16),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            'Mercado Pago solo está disponible en Colombia. Usa otra pasarela para pagar desde tu país.',
+            style: GoogleFonts.dmSans(color: Colors.white60, fontSize: 11.5),
+          ),
+        ),
+      ]),
+    );
   }
 
   Widget _buildBotonPago(

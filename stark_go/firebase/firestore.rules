@@ -50,6 +50,12 @@ service cloud.firestore {
     match /vpn_config/{doc}              { allow read, write: if request.auth != null; }
     match /whatsapp_instances/{doc}      { allow read, write: if request.auth != null; }
 
+    // ══ Límite de teléfonos por cuenta (máximo 2) ══
+    // Un documento por teléfono: `dispositivos/{uid}/equipos/{idDispositivo}`.
+    // El subdocumento necesita su propia regla (las reglas NO se heredan).
+    match /dispositivos/{uid}                 { allow read, write: if request.auth != null; }
+    match /dispositivos/{uid}/equipos/{dev}   { allow read, write: if request.auth != null; }
+
     // ── config_pagos/{...}, portal_vps/{...} y todo lo demás: SOLO el VPS ──
   }
 }

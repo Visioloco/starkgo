@@ -44,6 +44,7 @@ import 'package:stark_go/pages/config_mikro_tik/config_mikro_tik_widget.dart';
 import 'package:stark_go/pages/config_velocidades/config_velocidades_widget.dart';
 // ── FINANZAS PERSONALES (NUEVO) ──────────────────────────────────────────────
 import 'package:stark_go/pages/finanzas/finanzas_widget.dart';
+import 'package:stark_go/pages/leases_mikrotik/leases_mikrotik_widget.dart';
 
 const kTransitionInfoKey = '__transition_info__';
 
@@ -131,7 +132,18 @@ GoRouter createRouter(AppStateNotifier appStateNotifier) => GoRouter(
             FFRoute(
               name: CrearUsuarioWidget.routeName,
               path: CrearUsuarioWidget.routePath,
-              builder: (context, params) => CrearUsuarioWidget(),
+              builder: (context, params) => CrearUsuarioWidget(
+                // La IP puede venir de la pantalla "IPs del MikroTik".
+                ipAntena: params.getParam('ip', ParamType.String),
+                nombreAntena: params.getParam('nombre', ParamType.String),
+              ),
+            ),
+            // 📌 IPs del MikroTik (leases DHCP): ver la IP que el router le dio
+            // a la antena, buscarla y usarla al crear el cliente.
+            FFRoute(
+              name: LeasesMikrotikWidget.routeName,
+              path: LeasesMikrotikWidget.routePath,
+              builder: (context, params) => const LeasesMikrotikWidget(),
             ),
             FFRoute(
               name: ListaclientesWidget.routeName,
@@ -322,6 +334,15 @@ GoRouter createRouter(AppStateNotifier appStateNotifier) => GoRouter(
               name: ConfigVpnWidget.routeName,
               path: ConfigVpnWidget.routePath,
               builder: (context, params) => const ConfigVpnWidget(),
+            ),
+
+            // ── LÍMITE DE TELÉFONOS POR CUENTA (2) ✅ NUEVO ─────────────────
+            // Se muestra cuando la cuenta ya está abierta en 2 teléfonos.
+            FFRoute(
+              name: DispositivoBloqueadoWidget.routeName,
+              path: DispositivoBloqueadoWidget.routePath,
+              requireAuth: true,
+              builder: (context, params) => const DispositivoBloqueadoWidget(),
             ),
           ].map((r) => r.toRoute(appStateNotifier)).toList(),
         ),

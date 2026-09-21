@@ -7,6 +7,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'config_mikro_tik_model.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 import '/services/vps_service.dart';
+import '/services/antenas_service.dart';
 import '../config_perfiles/config_perfiles_widget.dart';
 import '../vpn/config_vpn_widget.dart';
 
@@ -38,6 +39,11 @@ class _Field extends StatelessWidget {
   final Color color;
   final TextInputType keyboardType;
   final bool obscure;
+
+  /// Si el campo es `obscure`, con `visible: true` se muestra el texto y se
+  /// dibuja el ojito para alternar (el estado lo maneja la pantalla).
+  final bool visible;
+  final VoidCallback? onToggleVisible;
   final List<TextInputFormatter>? formatters;
   final String? Function(String?)? validator;
 
@@ -50,6 +56,8 @@ class _Field extends StatelessWidget {
     required this.color,
     this.keyboardType = TextInputType.text,
     this.obscure = false,
+    this.visible = false,
+    this.onToggleVisible,
     this.formatters,
     this.validator,
   });
@@ -66,7 +74,7 @@ class _Field extends StatelessWidget {
         controller: ctrl,
         focusNode: focusNode,
         keyboardType: keyboardType,
-        obscureText: obscure,
+        obscureText: obscure && !visible,
         inputFormatters: formatters,
         validator: validator,
         style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 14, fontWeight: FontWeight.w500),
@@ -80,6 +88,19 @@ class _Field extends StatelessWidget {
             decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(9)),
             child: Icon(icon, color: color, size: 17),
           ),
+          // 👁️ Ojito para ver la contraseña mientras se escribe.
+          suffixIcon: obscure && onToggleVisible != null
+              ? IconButton(
+                  onPressed: onToggleVisible,
+                  splashRadius: 18,
+                  tooltip: visible ? 'Ocultar contraseña' : 'Ver contraseña',
+                  icon: Icon(
+                    visible ? Icons.visibility_rounded : Icons.visibility_off_rounded,
+                    color: _C.textSec,
+                    size: 20,
+                  ),
+                )
+              : null,
           filled: true,
           fillColor: _C.surface,
           contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -286,8 +307,16 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
   // ── Controla si la tarjeta de Device-Mode aparece expandida ──
   bool _deviceModeExpandida = true;
 
+  /// 👁️ Muestra la contraseña del MikroTik mientras se escribe.
+  bool _verPassMikrotik = false;
+
   // ── Portal de pago para morosos (opcional; apagado por defecto) ──
   bool _portalMorosos = false;
+
+  /// true cuando ya se leyó `config_mikrotik/{uid}`. Hasta entonces no se
+  /// escriben la red local ni la puerta de enlace, para no pisar con vacío
+  /// lo que ya está guardado a nombre del usuario.
+  bool _configCargada = false;
 
   // ── Estado de la cola del VPS (¿el MikroTik ya aplicó los comandos?) ──
   bool _consultandoCola = false;
@@ -307,9 +336,7 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
       if (!mounted) return;
       setState(() {
         _cola = estado;
-        _colaError = estado == null
-            ? 'No pude consultar el VPS (revisá la API Key y que el VPS esté en línea).'
-            : null;
+        _colaError = estado == null ? 'No pude consultar el VPS (revisá la API Key y que el VPS esté en línea).' : null;
       });
     } catch (e) {
       if (mounted) setState(() => _colaError = 'Error: $e');
@@ -423,8 +450,15 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
     _model.mikrotikUserFocusNode ??= FocusNode();
     _model.mikrotikPassController ??= TextEditingController();
     _model.mikrotikPassFocusNode ??= FocusNode();
-    // OJO: los controladores del túnel (Public Key de wg1, IP local y subred
-    // local) viven en la pantalla "Configurar VPN", no acá.
+    // Red local del operador: la subred donde viven sus antenas y la puerta
+    // de enlace (IP local del MikroTik). Se guardan con el uid del usuario.
+    _model.subredLocalController ??= TextEditingController();
+    _model.subredLocalFocusNode ??= FocusNode();
+    _model.ipLocalController ??= TextEditingController();
+    _model.ipLocalFocusNode ??= FocusNode();
+    // OJO: los controladores del túnel (Public Key de wg1 y la IP del túnel)
+    // viven en la pantalla "Configurar VPN"; acá sólo la red local y la
+    // puerta de enlace, que se editan en las dos pantallas sobre el mismo doc.
     _cargarConfig();
   }
 
@@ -445,14 +479,20 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
         _model.mikrotikIpController!.text = d['mikrotikIp'] ?? '';
         _model.mikrotikUserController!.text = d['mikrotikUser'] ?? '';
         _model.mikrotikPassController!.text = d['mikrotikPass'] ?? '';
+        // Tu red local y la puerta de enlace: se guardan en el MISMO doc del
+        // uid (`config_mikrotik/{uid}`), así vuelven al entrar/salir.
+        _model.subredLocalController!.text = (d['subredLocal'] ?? '').toString();
+        _model.ipLocalController!.text = (d['ipLocal'] ?? '').toString();
         _portalMorosos = (d['portalMorosos'] ?? false) == true;
-        // El túnel (IP del MikroTik, Public Key de wg1, red local y netmap) se
-        // configura en "Configurar VPN" — desde acá no se lee ni se escribe.
+        // El túnel (IP del MikroTik en el túnel, Public Key de wg1 y netmap)
+        // se configura en "Configurar VPN" — desde acá no se lee ni se escribe.
         setState(() => _model.schedulerMinutos = d['schedulerMinutos'] as int?);
         _model.scriptVisible = d['scriptGenerado'] == true;
       } else {
         _model.vpsApiKeyController!.text = _generarApiKey(_uid!);
       }
+      // Lectura OK (exista o no el doc): ya es seguro guardar.
+      _configCargada = true;
     } catch (e) {
       debugPrint('[StarkGo] Error cargando config MikroTik: $e');
     } finally {
@@ -466,23 +506,38 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
       _snack('Selecciona el intervalo del scheduler', _C.danger);
       return;
     }
-    if (_uid == null) return;
+    final uid = _uid;
+    if (uid == null) {
+      _snack('Iniciá sesión para guardar tu configuración', _C.danger);
+      return;
+    }
     setState(() => _model.guardando = true);
     try {
-      await FirebaseFirestore.instance.collection(_col).doc(_uid).set({
-        'propietarioUid': _uid,
+      // Todo se guarda en `config_mikrotik/{uid}`: la config SIEMPRE es de la
+      // cuenta autenticada, y al cerrar/abrir sesión vuelve tal cual.
+      final datos = <String, dynamic>{
+        'propietarioUid': uid,
         'vpsApiKey': _model.vpsApiKeyController!.text.trim(),
         'mikrotikIp': _model.mikrotikIpController!.text.trim(),
         'mikrotikUser': _model.mikrotikUserController!.text.trim(),
         'mikrotikPass': _model.mikrotikPassController!.text.trim(),
-        // OJO: mikrotikTunelIp, ipLocal, subredLocal, usarNetmap y
-        // mikrotikPublicKey los escribe "Configurar VPN" (lado túnel): no se
-        // tocan desde acá para no pisarlos con valores vacíos.
         'schedulerMinutos': _model.schedulerMinutos,
         'scriptGenerado': true,
         'portalMorosos': _portalMorosos,
         'actualizadoEn': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      };
+      // Tu red local + la puerta de enlace (IP local del MikroTik). Sólo se
+      // escriben cuando ya se leyó el doc del usuario: así un guardado con
+      // los campos vacíos (por ejemplo al abrir la pantalla por primera vez)
+      // nunca borra lo que ya estaba guardado.
+      if (_configCargada) {
+        datos['subredLocal'] = _model.subredLocalController!.text.trim();
+        datos['ipLocal'] = _model.ipLocalController!.text.trim();
+      }
+      // OJO: mikrotikTunelIp, mikrotikPublicKey, mikrotikRegistradoEn y
+      // usarNetmap los escribe "Configurar VPN" (lado túnel): no se tocan
+      // desde acá para no pisarlos.
+      await FirebaseFirestore.instance.collection(_col).doc(uid).set(datos, SetOptions(merge: true));
       if (mounted) {
         setState(() => _model.scriptVisible = true);
         _snack('Configuracion guardada correctamente', _C.success);
@@ -551,6 +606,23 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
     return null;
   }
 
+  /// Tu subred local (CIDR) — opcional: si la escribís, tiene que ser válida.
+  String? _validarSubredLocalOpcional(String? v) {
+    final s = (v ?? '').trim();
+    if (s.isEmpty) return null;
+    if (!AntenasService.cidrValido(s)) return 'Formato esperado: 192.168.10.0/24';
+    return null;
+  }
+
+  /// Tu puerta de enlace / IP local del MikroTik — opcional: si la escribís,
+  /// tiene que ser una IPv4 válida.
+  String? _validarIpLocalOpcional(String? v) {
+    final s = (v ?? '').trim();
+    if (s.isEmpty) return null;
+    if (!_esIpv4(s)) return 'IP inválida (ej: 192.168.10.1)';
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
@@ -590,7 +662,7 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
                             icon: Icons.router_rounded,
                             color: _C.accent,
                             title: 'Datos del MikroTik',
-                            subtitle: 'IP, usuario y contrasena del router',
+                            subtitle: 'IP, usuario, contrasena, red y puerta de enlace',
                             children: [
                               _Field(
                                   ctrl: _model.mikrotikIpController!,
@@ -617,7 +689,32 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
                                   icon: Icons.lock_rounded,
                                   color: _C.accent,
                                   obscure: true,
+                                  // 👁️ Ojito para revisar la contraseña antes de guardar.
+                                  visible: _verPassMikrotik,
+                                  onToggleVisible: () => setState(() => _verPassMikrotik = !_verPassMikrotik),
                                   validator: _required),
+                              // ── Tu red local y tu puerta de enlace ──
+                              // Se guardan en config_mikrotik/{uid}: son del
+                              // usuario autenticado y vuelven al entrar/salir.
+                              _Field(
+                                  ctrl: _model.subredLocalController!,
+                                  focusNode: _model.subredLocalFocusNode,
+                                  label: 'MI SUBRED LOCAL (CIDR)',
+                                  hint: '192.168.10.0/24',
+                                  icon: Icons.account_tree_rounded,
+                                  color: _C.warning,
+                                  keyboardType: TextInputType.url,
+                                  validator: _validarSubredLocalOpcional),
+                              _Field(
+                                  ctrl: _model.ipLocalController!,
+                                  focusNode: _model.ipLocalFocusNode,
+                                  label: 'MI IP LOCAL / PUERTA DE ENLACE',
+                                  hint: '192.168.10.1',
+                                  icon: Icons.home_rounded,
+                                  color: _C.warning,
+                                  keyboardType: TextInputType.url,
+                                  validator: _validarIpLocalOpcional),
+                              _buildInfoRedLocal(),
                             ],
                           ).animate().fadeIn(duration: 350.ms, delay: 200.ms).slideY(begin: 0.05, end: 0),
                           const SizedBox(height: 14),
@@ -646,8 +743,7 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
                                       style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10.5, height: 1.4)),
                                   const SizedBox(height: 8),
                                   OutlinedButton.icon(
-                                    onPressed: () => Navigator.of(context).push(
-                                        MaterialPageRoute(builder: (_) => const ConfigVpnWidget())),
+                                    onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ConfigVpnWidget())),
                                     icon: const Icon(Icons.open_in_new_rounded, size: 16, color: _C.pppoe),
                                     label: Text('Abrir Configurar VPN',
                                         style: GoogleFonts.spaceGrotesk(color: _C.pppoe, fontSize: 12.5, fontWeight: FontWeight.w700)),
@@ -1061,19 +1157,16 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
   Widget _buildEstadoColaCard() {
     final c = _cola;
     final bool todoOk = c != null && c.todoAplicado;
-    final Color color = _colaError != null
-        ? _C.danger
-        : (todoOk ? _C.success : _C.warning);
+    final Color color = _colaError != null ? _C.danger : (todoOk ? _C.success : _C.warning);
     final String titulo = _colaError != null
         ? 'No pude leer el estado'
-        : (c == null
-            ? 'Todavía sin consultar'
-            : (todoOk ? 'Todo aplicado en el router' : 'Comandos pendientes'));
+        : (c == null ? 'Todavía sin consultar' : (todoOk ? 'Todo aplicado en el router' : 'Comandos pendientes'));
 
     String detalle() {
       if (_colaError != null) return _colaError!;
-      if (c == null) return 'Toca "Verificar" para preguntarle al VPS si la '
-          'Simple Queue y el blindaje del hotspot ya llegaron al MikroTik.';
+      if (c == null)
+        return 'Toca "Verificar" para preguntarle al VPS si la '
+            'Simple Queue y el blindaje del hotspot ya llegaron al MikroTik.';
       final sb = StringBuffer();
       sb.write('Pendientes: ${c.pendientes}');
       if (c.comandosEnVuelo > 0) {
@@ -1105,9 +1198,7 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
             height: 34,
             decoration: BoxDecoration(color: color.withOpacity(0.15), borderRadius: BorderRadius.circular(9)),
             child: Icon(
-              _colaError != null
-                  ? Icons.error_outline_rounded
-                  : (todoOk ? Icons.verified_rounded : Icons.hourglass_bottom_rounded),
+              _colaError != null ? Icons.error_outline_rounded : (todoOk ? Icons.verified_rounded : Icons.hourglass_bottom_rounded),
               color: color,
               size: 18,
             ),
@@ -1115,10 +1206,8 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
           const SizedBox(width: 10),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Cola del VPS · $titulo',
-                  style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 13, fontWeight: FontWeight.w700)),
-              Text('Simple Queues, blockings y bindings bypassed',
-                  style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10)),
+              Text('Cola del VPS · $titulo', style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 13, fontWeight: FontWeight.w700)),
+              Text('Simple Queues, blockings y bindings bypassed', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10)),
             ]),
           ),
           TextButton.icon(
@@ -1155,7 +1244,8 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
     // OJO: [:find] devuelve VACIO cuando no encuentra / y [:pick] con un
     // final vacio TIRA ERROR, lo que cortaba TODO el :foreach (por eso el
     // comando no blindaba nada si alguna queue tenia el target sin /).
-    const comandoSync = r':foreach q in=[/queue simple find] do={ :local t [/queue simple get $q target]; :local n [/queue simple get $q name]; :local ip $t; :if ([:len [:find $t "/"]] > 0) do={ :set ip [:pick $t 0 [:find $t "/"]] }; :if ([:len $ip] > 0) do={ :if ([:len [/ip hotspot ip-binding find where address=$ip]] = 0) do={ /ip hotspot ip-binding add address=$ip type=bypassed comment=$n } } }';
+    const comandoSync =
+        r':foreach q in=[/queue simple find] do={ :local t [/queue simple get $q target]; :local n [/queue simple get $q name]; :local ip $t; :if ([:len [:find $t "/"]] > 0) do={ :set ip [:pick $t 0 [:find $t "/"]] }; :if ([:len $ip] > 0) do={ :if ([:len [/ip hotspot ip-binding find where address=$ip]] = 0) do={ /ip hotspot ip-binding add address=$ip type=bypassed comment=$n } } }';
     const crearTodo =
         ':if ([:len [/ip hotspot profile find where name="perfil-pago"]] = 0) do={ /ip hotspot profile add name=perfil-pago html-directory=hotspot }\n'
         ':if ([:len [/ip hotspot find where name="hs-pago"]] = 0) do={ /ip hotspot add name=hs-pago interface=bridge-local profile=perfil-pago } else={ /ip hotspot enable [find where name="hs-pago"] }';
@@ -1289,7 +1379,8 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
     // que está en `morosos` sigue navegando → "puse en mora y no se cortó".
     // Por eso la regla se inserta con place-before=0 (arriba de todo) y, si ya
     // existía de antes, primero se borra (idempotente, no duplica).
-    const regla = ':if ([:len [/ip firewall filter find where comment="Bloqueo a Morosos"]] > 0) do={ /ip firewall filter remove [find where comment="Bloqueo a Morosos"] }\n'
+    const regla =
+        ':if ([:len [/ip firewall filter find where comment="Bloqueo a Morosos"]] > 0) do={ /ip firewall filter remove [find where comment="Bloqueo a Morosos"] }\n'
         '/ip firewall filter add chain=forward src-address-list=morosos action=drop place-before=0 comment="Bloqueo a Morosos"';
     return Container(
       padding: const EdgeInsets.all(16),
@@ -1643,6 +1734,28 @@ class _ConfigMikroTikWidgetState extends State<ConfigMikroTikWidget> {
           Expanded(
               child: Text('Esta clave identifica tu router. Se genera automaticamente y va dentro del source del script.',
                   style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11))),
+        ]),
+      );
+
+  /// Aviso de la red local + puerta de enlace: aclara que se guardan SIEMPRE
+  /// a nombre del usuario autenticado (uid) y que se comparten con la
+  /// pantalla "Configurar VPN".
+  Widget _buildInfoRedLocal() => Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+            color: _C.warning.withOpacity(0.06),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: _C.warning.withOpacity(0.25))),
+        child: Row(children: [
+          Icon(Icons.info_outline_rounded, color: _C.warning, size: 16),
+          const SizedBox(width: 10),
+          Expanded(
+              child: Text(
+                  'Opcional: tu subred local (ej. 192.168.10.0/24) y tu puerta de '
+                  'enlace (ej. 192.168.10.1). Se guardan en tu cuenta (uid) al tocar '
+                  '"Guardar y generar comandos" y vuelven solas cuando entrás de nuevo. '
+                  'También se pueden editar en "Configurar VPN" (es el mismo dato).',
+                  style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11, height: 1.35))),
         ]),
       );
 

@@ -8,6 +8,15 @@
 > **Config. MikroTik** quedó solo para el router: datos (IP/usuario/clave),
 > API Key del VPS, scheduler, script, portal de morosos y regla de bloqueo.
 >
+> 🔁 **Tu configuración es tuya (por uid).** Todo se guarda en
+> `config_mikrotik/{uid}` y `vpn_config/{uid}`: al cerrar y volver a abrir
+> sesión los datos vuelven solos, sin volver a escribirlos. Además, *tu red
+> local* y *tu puerta de enlace* (IP local) ahora se pueden cargar **en las dos
+> pantallas** — **Configurar VPN → "TU RED LOCAL"** y **Config. MikroTik →
+> Datos del MikroTik** — y el botón **Guardar configuración** de *Configurar
+> VPN* ya las persiste junto con el túnel (antes sólo las guardaba el botón
+> chico *Guardar red local*).
+>
 > Este documento reemplaza a `VPN_INSTRUCCIONES.md` (que queda como historial).
 
 ---
@@ -86,6 +95,40 @@ sola: `192.168.1.20` → `10.10.X.20` cuando usás netmap.
 - La **Public Key de wg1** copiada del router.
 - La **IP del túnel generada** (paso 1 de 3.2): el peer del VPS queda amarrado
   a esa IP.
+
+### 3.4 Crear pines/vouchers REMOTO con "Conexión Local" por el túnel
+
+**Sí, se puede**: con el túnel conectado, *Conexión Local → Fichas* crea los pines
+igual que estando en la WiFi. La app habla con la **API del MikroTik (8728 / 8729 SSL)**
+y el túnel enruta ese tráfico: no hace falta estar en la red del router.
+
+**Qué IP poner en "Conexión Local" cuando vas por el túnel:**
+
+| Campo | Valor |
+|---|---|
+| **IP** | **La IP del túnel del MikroTik: `10.50.50.Y`** (la misma de *Configurar VPN → "IP del túnel del MIKROTIK"*, guardada en `config_mikrotik.mikrotikTunelIp`) |
+| Usuario / Clave | los del MikroTik (`config_mikrotik.mikrotikUser` / `mikrotikPass`) |
+| Puerto | `8728` normal · `8729` si activás SSL |
+| Botón | **"Usar IP del túnel · 10.50.50.Y"** (en la tarjeta *Túnel VPN*) → rellena IP + usuario + clave solos |
+
+- **Netmap:** la IP del router por el túnel también responde en su IP virtual
+  `10.10.X.1`; cualquiera de las dos sirve, pero `10.50.50.Y` es la directa.
+- ⚠️ **No toques "Detectar red"** esperando conservar el túnel: el botón ya **no pisa** una IP
+  escrita a mano (sólo refresca el nombre de la red). Si querés volver a la WiFi, borrá el
+  campo y tocá *Detectar red*.
+- ✅ Guardá con **"Guardar configuración"** (`configuracion_local/{uid}`) para que esa IP
+  vuelva sola al abrir la pantalla, incluso desde otro teléfono con tu misma cuenta.
+
+**Requisitos en el MikroTik (una sola vez):**
+
+1. Servicio API habilitado: `/ip service enable api` (`api-ssl` si usás 8729) y que
+   *Available From* no bloquee el túnel (por defecto entra desde cualquier IP).
+2. Que el firewall deje pasar el túnel: es la **3ª regla del paso 5 de la guía**
+   (`chain=input, in-interface=wg1, action=accept`). Sin esa regla el API no responde por `wg1`.
+3. Túnel **Conectado** en la app (VPN · Antenas).
+
+Con eso, la pestaña **Hotspot** (subir el login por FTP) también funciona por el túnel si el
+servicio FTP está habilitado (`/ip service enable ftp`).
 
 ---
 
@@ -251,7 +294,12 @@ debajo del botón, además del aviso emergente:
 | En la app: claves, IP del MikroTik, peer del MikroTik, red local, netmap | Pantalla **Configurar VPN** |
 | En la app: datos del router, API Key, scheduler, script, portal de morosos, regla de bloqueo | Pantalla **Config. MikroTik** |
 | Portal de pago para morosos (hotspot + bindings) | `PORTAL_MOROSOS.md` |
-| Pagos con tarjeta/PSE | `VPS_RAPID_PAGOS.md` |
+| 🛡️ Blindar TU teléfono para que el portal no te pida ficha/PIN | `BLINDAJE_ADMIN.md` |
+| 🔑 «Olvidé mi contraseña» + plantillas de correo en español | `PASSWORD_RESET.md` |
+| 📌 Ver la IP que el MikroTik le dio a una antena (leases DHCP) | `LEASES_MIKROTIK.md` |
+| Pagos con tarjeta/PSE (Rapid) | `VPS_RAPID_PAGOS.md` |
+| Pagos con tarjeta/PSE/efectivo (ePayco) | `EPAYCO_INSTRUCCIONES.md` |
+| Mercado Pago solo en Colombia (país del teléfono) | `PASARELAS_POR_PAIS.md` |
 | Pagos con PayPal | `PAYPAL_INSTRUCCIONES.md` |
 | Precios y tasa USD→COP | `PRECIOS_TASA_CAMBIO.md` |
 | Planes y campo `plan` (vouchers) | `VPS_INSTRUCCIONES.md` |

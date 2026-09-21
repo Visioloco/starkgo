@@ -1,8 +1,16 @@
 {
   "_como_usarlo": "Copiá este archivo como 'credenciales.local.json' en la MISMA carpeta (functions/) y reemplazá los valores por tus claves reales. El archivo 'credenciales.local.json' está en .gitignore: NUNCA se sube a git.",
-  "_prioridad": "1) variables de entorno del proceso  2) este archivo  3) Firestore config_pagos/rapid (solo Rapid)",
+  "_prioridad": "1) variables de entorno del proceso  2) este archivo  3) Firestore config_pagos/rapid y config_pagos/epayco",
   "RAPID_ACCESS_KEY": "rak_TU_ACCESS_KEY",
   "RAPID_SECRET_KEY": "rsk_TU_SECRET_KEY",
+  "EPAYCO_CUST_ID_CLIENTE": "TU_P_CUST_ID_CLIENTE",
+  "EPAYCO_P_KEY": "TU_P_KEY",
+  "EPAYCO_PUBLIC_KEY": "TU_PUBLIC_KEY",
+  "EPAYCO_PRIVATE_KEY": "TU_PRIVATE_KEY",
+  "EPAYCO_MODE": "test",
+  "EPAYCO_PAISES": "",
+  "EPAYCO_EXCLUIR_PAISES": "CO",
   "PAYPAL_CLIENT_ID": "TU_PAYPAL_CLIENT_ID",
-  "PAYPAL_CLIENT_SECRET": "TU_PAYPAL_CLIENT_SECRET"
+  "PAYPAL_CLIENT_SECRET": "TU_PAYPAL_CLIENT_SECRET",
+  "MP_ACCESS_TOKEN": "TU_MP_ACCESS_TOKEN"
 }

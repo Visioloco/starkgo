@@ -5,7 +5,9 @@ import 'package:stark_go/pages/renovar_membresia/renovar_membresia_widget.dart';
 import '/auth/firebase_auth/auth_util.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 import '/index.dart';
+import '/services/dispositivo_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
@@ -201,7 +203,15 @@ class _LoginWidgetState extends State<LoginWidget> with SingleTickerProviderStat
           statusBarIconBrightness: Brightness.dark,
           statusBarBrightness: Brightness.light,
         ));
-        context.goNamedAuth(HomeWidget.routeName, context.mounted);
+        // LÍMITE DE TELÉFONOS (2 por cuenta): si no hay lugar, va a la
+        // pantalla donde puede liberar uno.
+        final disp = await DispositivoService.verificarYRegistrar();
+        if (!mounted) return;
+        if (disp.permitido) {
+          context.goNamedAuth(HomeWidget.routeName, context.mounted);
+        } else {
+          context.goNamed(DispositivoBloqueadoWidget.routeName);
+        }
       }
     } catch (e) {
       _showError('Correo o contraseña incorrectos');
@@ -299,9 +309,13 @@ class _LoginWidgetState extends State<LoginWidget> with SingleTickerProviderStat
           context.goNamed(RenovarMembresiaWidget.routeName);
         }
       } else if (activo == true) {
-        // Membresía activa → Home
-        if (mounted) {
+        // Membresía activa → Home (respetando el límite de 2 teléfonos).
+        final disp = await DispositivoService.verificarYRegistrar();
+        if (!mounted) return;
+        if (disp.permitido) {
           context.goNamedAuth(HomeWidget.routeName, context.mounted);
+        } else {
+          context.goNamed(DispositivoBloqueadoWidget.routeName);
         }
       } else {
         // Sin membresía activa → elegir membresía
@@ -327,6 +341,137 @@ class _LoginWidgetState extends State<LoginWidget> with SingleTickerProviderStat
       behavior: SnackBarBehavior.floating,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     ));
+  }
+
+  void _showOk(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Row(children: [
+        const Icon(Icons.mark_email_read_rounded, color: Colors.white, size: 18),
+        const SizedBox(width: 8),
+        Expanded(child: Text(msg, style: GoogleFonts.spaceGrotesk(color: Colors.white))),
+      ]),
+      backgroundColor: const Color(0xFF22C55E),
+      duration: const Duration(seconds: 6),
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    ));
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  //  ¿OLVIDASTE TU CONTRASEÑA? — correo de Firebase
+  //
+  //  Firebase manda un enlace con un código de un solo uso; el operador abre
+  //  el enlace, escribe la contraseña nueva y después entra a la app normal.
+  //  (La página del enlace la sirve Firebase: <proyecto>.firebaseapp.com)
+  //
+  //  El texto del correo se edita en Firebase Console → Authentication →
+  //  Templates → Password reset (ver `PASSWORD_RESET.md`).
+  // ═══════════════════════════════════════════════════════════
+  Future<void> _recuperarContrasena() async {
+    if (_isLoading) return;
+
+    // Usamos el correo que ya escribió (si sirve). Si no, se lo pedimos.
+    var correo = _model.emailAddressTextController?.text.trim() ?? '';
+    if (correo.isEmpty || !correo.contains('@') || !correo.contains('.')) {
+      correo = (await _pedirCorreo()) ?? '';
+      if (correo.isEmpty) return;
+    }
+
+    setState(() => _isLoading = true);
+    try {
+      // Idioma del correo: le pedimos español para que Firebase use la
+      // plantilla en español (si está cargada en la consola). Si no está,
+      // manda la que haya por defecto.
+      await FirebaseAuth.instance.setLanguageCode('es');
+      await FirebaseAuth.instance.sendPasswordResetEmail(email: correo);
+      if (!mounted) return;
+      _showOk('Te enviamos un enlace a $correo para crear una contraseña nueva. '
+          'Revisá también la carpeta de spam.');
+    } on FirebaseAuthException catch (e) {
+      if (!mounted) return;
+      _showError(_mensajeReset(e));
+    } catch (e) {
+      if (!mounted) return;
+      _showError('No se pudo enviar el correo. Revisá tu conexión.');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  String _mensajeReset(FirebaseAuthException e) {
+    switch (e.code) {
+      case 'invalid-email':
+        return 'Ese correo no es válido.';
+      case 'user-not-found':
+        return 'Ese correo no está registrado en StarkGo.';
+      case 'too-many-requests':
+        return 'Demasiados intentos. Esperá unos minutos y probá de nuevo.';
+      case 'network-request-failed':
+        return 'Sin conexión. Revisá tu internet e intentá otra vez.';
+      default:
+        return 'No se pudo enviar el enlace (${e.code}).';
+    }
+  }
+
+  /// Pide el correo en un diálogo (cuando el campo está vacío o mal escrito).
+  Future<String?> _pedirCorreo() async {
+    final ctrl = TextEditingController(
+      text: _model.emailAddressTextController?.text.trim() ?? '',
+    );
+    final correo = await showDialog<String>(
+      context: context,
+      builder: (dctx) => AlertDialog(
+        backgroundColor: _C.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: Text('Recuperar contraseña',
+            style: GoogleFonts.spaceGrotesk(
+                color: _C.textPri, fontSize: 16, fontWeight: FontWeight.w800)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Escribí el correo de tu cuenta y te mandamos un enlace para '
+                'crear una contraseña nueva.',
+                style: GoogleFonts.spaceGrotesk(
+                    color: _C.textSec, fontSize: 12.5, height: 1.4)),
+            const SizedBox(height: 14),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              keyboardType: TextInputType.emailAddress,
+              style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 14),
+              decoration: InputDecoration(
+                hintText: 'correo@starkgo.com',
+                filled: true,
+                fillColor: _C.surfaceDim,
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dctx),
+            child: Text('Cancelar',
+                style: GoogleFonts.spaceGrotesk(color: _C.textSec)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dctx, ctrl.text.trim()),
+            child: Text('Enviar enlace',
+                style: GoogleFonts.spaceGrotesk(
+                    color: _C.primary, fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
+    if (correo == null || correo.isEmpty) return null;
+    if (!correo.contains('@') || !correo.contains('.')) {
+      _showError('Ese correo no parece válido.');
+      return null;
+    }
+    return correo;
   }
 
   // ═══════════════════════════════════════════
@@ -560,7 +705,24 @@ class _LoginWidgetState extends State<LoginWidget> with SingleTickerProviderStat
               return null;
             },
           ),
-          const SizedBox(height: 28),
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              onPressed: _isLoading ? null : _recuperarContrasena,
+              style: TextButton.styleFrom(
+                padding: EdgeInsets.zero,
+                minimumSize: const Size(0, 0),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: Text(
+                '¿Olvidaste tu contraseña?',
+                style: GoogleFonts.spaceGrotesk(
+                    color: _C.primary, fontSize: 12.5, fontWeight: FontWeight.w700),
+              ),
+            ),
+          ),
+          const SizedBox(height: 18),
           _buildLoginButton(),
           const SizedBox(height: 18),
 

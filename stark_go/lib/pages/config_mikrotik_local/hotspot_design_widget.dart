@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -11,6 +12,7 @@ import '../../services/hotspot_ftp_service.dart';
 import '../../services/hotspot_design_store.dart';
 import '../../services/hotspot_design_firestore.dart';
 import '../../services/portal_vps_service.dart';
+import '../../widgets/sin_soporte_web.dart';
 
 // ─────────────────────────────────────────────────────────────────────────
 // Misma paleta usada en el resto del módulo MikroTik.
@@ -451,8 +453,7 @@ class _HotspotDesignWidgetState extends State<HotspotDesignWidget> {
 
   /// Reduce el logo a un tamaño razonable y lo convierte a PNG. Así el HTML
   /// del portal VPS (con el logo incrustado) no supera el límite del servidor.
-  Future<Uint8List> _redimensionarLogo(Uint8List bytes,
-      {int maxLado = 256}) async {
+  Future<Uint8List> _redimensionarLogo(Uint8List bytes, {int maxLado = 256}) async {
     try {
       final codec = await ui.instantiateImageCodec(bytes);
       final frame = await codec.getNextFrame();
@@ -681,6 +682,7 @@ class _HotspotDesignWidgetState extends State<HotspotDesignWidget> {
       ),
     );
   }
+
   // ── Publicar la página actual en el portal del VPS (remoto) ──
   Future<void> _publicarPortalVps() async {
     final html = _htmlController.text.trim();
@@ -694,9 +696,7 @@ class _HotspotDesignWidgetState extends State<HotspotDesignWidget> {
       if (_logoBytes != null) {
         // En el portal VPS no existe logo.png del router: el logo se incrusta
         // como data URI. Si el guardado es pesado (de antes), se reduce aquí.
-        final logo = _logoBytes!.length > 250000
-            ? await _redimensionarLogo(_logoBytes!)
-            : _logoBytes!;
+        final logo = _logoBytes!.length > 250000 ? await _redimensionarLogo(_logoBytes!) : _logoBytes!;
         htmlPublicar = _incrustarLogoEnHtml(html, logo, _logoNombre);
       }
 
@@ -705,8 +705,10 @@ class _HotspotDesignWidgetState extends State<HotspotDesignWidget> {
         html: htmlPublicar,
       );
       if (!ok) {
-        _snack('No se pudo publicar en el portal del VPS. Si elegiste logo, '
-            'probá con una imagen PNG más liviana o más pequeña.', _C.danger);
+        _snack(
+            'No se pudo publicar en el portal del VPS. Si elegiste logo, '
+            'probá con una imagen PNG más liviana o más pequeña.',
+            _C.danger);
         return;
       }
       await _guardarBorrador();
@@ -766,17 +768,23 @@ class _HotspotDesignWidgetState extends State<HotspotDesignWidget> {
         titulo: titulo,
         url: url,
         // El "Código" muestra el HTML publicado en el VPS (tal cual se guardó).
-        cargarCodigo: () =>
-            PortalVpsService.obtenerPaginaPublicada(_paginaActual.archivo),
+        cargarCodigo: () => PortalVpsService.obtenerPaginaPublicada(_paginaActual.archivo),
       ),
     );
   }
 
-
-
   // ─────────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
+    // ── WEB: el editor del portal usa archivos/FTP del teléfono ──
+    if (kIsWeb) {
+      return const SinSoporteWebInline(
+        titulo: 'Editor del portal',
+        detalle: 'El editor del portal cautivo (subir login.html por FTP y '
+            'guardar borradores en el equipo) sólo está disponible desde la app '
+            'del teléfono.',
+      );
+    }
     return Container(
       color: _C.surfaceDim,
       child: ListView(
@@ -828,9 +836,8 @@ class _HotspotDesignWidgetState extends State<HotspotDesignWidget> {
             Container(
               width: 36,
               height: 36,
-              decoration: BoxDecoration(
-                  gradient: const LinearGradient(colors: [_C.primary, _C.accent]),
-                  borderRadius: BorderRadius.circular(10)),
+              decoration:
+                  BoxDecoration(gradient: const LinearGradient(colors: [_C.primary, _C.accent]), borderRadius: BorderRadius.circular(10)),
               child: const Icon(Icons.lock_clock_rounded, color: Colors.white, size: 18),
             ),
             const SizedBox(width: 10),
@@ -842,17 +849,13 @@ class _HotspotDesignWidgetState extends State<HotspotDesignWidget> {
                     'Estás editando la página que verá el cliente cuando su servicio '
                     'esté suspendido (portal de pago). Se publica en el VPS, sin '
                     'tocar el hotspot de fichas.',
-                    style: GoogleFonts.spaceGrotesk(
-                        color: _C.textPri, fontSize: 11.5, height: 1.4),
+                    style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 11.5, height: 1.4),
                   ),
                   const SizedBox(height: 6),
                   Text(
                     'Datos automáticos: {{nombre}} · {{saldo}} (valor del plan) · '
                     '{{plan}} · {{ip}} · {{fecha}}',
-                    style: GoogleFonts.spaceGrotesk(
-                        color: _C.primary,
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w600),
+                    style: GoogleFonts.spaceGrotesk(color: _C.primary, fontSize: 10.5, fontWeight: FontWeight.w600),
                   ),
                 ],
               ),
@@ -863,10 +866,7 @@ class _HotspotDesignWidgetState extends State<HotspotDesignWidget> {
             child: TextButton.icon(
               onPressed: _copiarPromptIa,
               icon: const Icon(Icons.copy_rounded, size: 15),
-              label: Text('Copiar prompt para la IA',
-                  style: GoogleFonts.spaceGrotesk(
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w600)),
+              label: Text('Copiar prompt para la IA', style: GoogleFonts.spaceGrotesk(fontSize: 11.5, fontWeight: FontWeight.w600)),
               style: TextButton.styleFrom(foregroundColor: _C.primary),
             ),
           ),
@@ -957,9 +957,7 @@ class _HotspotDesignWidgetState extends State<HotspotDesignWidget> {
               const SizedBox(height: 2),
               Text(
                 _logoBytes != null
-                    ? (widget.soloPortalVps
-                        ? 'Se incrustará en la página al publicar en el VPS'
-                        : 'Se subirá como logo.png')
+                    ? (widget.soloPortalVps ? 'Se incrustará en la página al publicar en el VPS' : 'Se subirá como logo.png')
                     : (widget.soloPortalVps
                         ? 'Se incrustará al publicar (usa <img src="logo.png"> en tu HTML)'
                         : 'Se referencia en el HTML como <img src="logo.png">'),
@@ -1192,22 +1190,18 @@ class _HotspotDesignWidgetState extends State<HotspotDesignWidget> {
             Container(
               width: 34,
               height: 34,
-              decoration: BoxDecoration(
-                  gradient: const LinearGradient(colors: [_C.primary, _C.accent]),
-                  borderRadius: BorderRadius.circular(9)),
+              decoration:
+                  BoxDecoration(gradient: const LinearGradient(colors: [_C.primary, _C.accent]), borderRadius: BorderRadius.circular(9)),
               child: const Icon(Icons.language_rounded, color: Colors.white, size: 17),
             ),
             const SizedBox(width: 10),
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('Portal de pago (VPS)',
-                    style: GoogleFonts.spaceGrotesk(
-                        color: _C.textPri, fontSize: 14, fontWeight: FontWeight.w700)),
+                Text('Portal de pago (VPS)', style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 14, fontWeight: FontWeight.w700)),
                 Text(
                     'Publica esta página en el VPS: la editas y la ves desde cualquier '
                     'lugar (sin FTP local) y el hotspot puede redirigir al moroso aquí.',
-                    style: GoogleFonts.spaceGrotesk(
-                        color: _C.textSec, fontSize: 10.5, height: 1.35)),
+                    style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 10.5, height: 1.35)),
               ]),
             ),
           ]),
@@ -1217,8 +1211,7 @@ class _HotspotDesignWidgetState extends State<HotspotDesignWidget> {
               child: OutlinedButton.icon(
                 onPressed: _publicandoPortal ? null : _publicarPortalVps,
                 icon: _publicandoPortal
-                    ? const SizedBox(
-                        width: 15, height: 15, child: CircularProgressIndicator(strokeWidth: 2))
+                    ? const SizedBox(width: 15, height: 15, child: CircularProgressIndicator(strokeWidth: 2))
                     : const Icon(Icons.cloud_upload_rounded, size: 17),
                 label: Text(_publicandoPortal ? 'Publicando…' : 'Publicar en portal VPS',
                     style: GoogleFonts.spaceGrotesk(fontSize: 11.5, fontWeight: FontWeight.w600)),
@@ -1234,8 +1227,7 @@ class _HotspotDesignWidgetState extends State<HotspotDesignWidget> {
               child: OutlinedButton.icon(
                 onPressed: _verPortalPublicado,
                 icon: const Icon(Icons.open_in_browser_rounded, size: 17),
-                label: Text('Ver publicado',
-                    style: GoogleFonts.spaceGrotesk(fontSize: 11.5, fontWeight: FontWeight.w600)),
+                label: Text('Ver publicado', style: GoogleFonts.spaceGrotesk(fontSize: 11.5, fontWeight: FontWeight.w600)),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: _C.primary,
                   side: BorderSide(color: _C.primary.withOpacity(0.4)),
@@ -1436,36 +1428,29 @@ class _PreviewDialogState extends State<_PreviewDialog> {
       child: Container(
         width: double.infinity,
         height: double.infinity,
-        decoration: BoxDecoration(
-            color: _C.surface, borderRadius: BorderRadius.circular(20)),
+        decoration: BoxDecoration(color: _C.surface, borderRadius: BorderRadius.circular(20)),
         clipBehavior: Clip.antiAlias,
         child: Column(children: [
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             decoration: BoxDecoration(
               color: _C.dark,
-              borderRadius:
-                  const BorderRadius.vertical(top: Radius.circular(20)),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
             ),
             child: Row(children: [
-              Icon(_verCodigo ? Icons.code_rounded : Icons.visibility_rounded,
-                  color: _C.accent, size: 18),
+              Icon(_verCodigo ? Icons.code_rounded : Icons.visibility_rounded, color: _C.accent, size: 18),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(widget.titulo,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: GoogleFonts.spaceGrotesk(
-                        color: Colors.white,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700)),
+                    style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)),
               ),
               if (_verCodigo) ...[
                 _btnHeader(Icons.copy_rounded, 'Copiar', _copiarCodigo),
                 const SizedBox(width: 6),
               ],
-              _segmento('Visual', !_verCodigo,
-                  () => setState(() => _verCodigo = false)),
+              _segmento('Visual', !_verCodigo, () => setState(() => _verCodigo = false)),
               const SizedBox(width: 6),
               _segmento('Código', _verCodigo, _abrirCodigo),
               const SizedBox(width: 6),
@@ -1473,19 +1458,14 @@ class _PreviewDialogState extends State<_PreviewDialog> {
                 onTap: () => Navigator.pop(context),
                 child: Container(
                   padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(8)),
-                  child: const Icon(Icons.close_rounded,
-                      color: Colors.white, size: 18),
+                  decoration: BoxDecoration(color: Colors.white.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
+                  child: const Icon(Icons.close_rounded, color: Colors.white, size: 18),
                 ),
               ),
             ]),
           ),
           Expanded(
-            child: _verCodigo
-                ? _buildCodigo()
-                : WebViewWidget(controller: _web),
+            child: _verCodigo ? _buildCodigo() : WebViewWidget(controller: _web),
           ),
         ]),
       ),
@@ -1501,11 +1481,7 @@ class _PreviewDialogState extends State<_PreviewDialog> {
           color: sel ? _C.accent : Colors.white.withOpacity(0.1),
           borderRadius: BorderRadius.circular(8),
         ),
-        child: Text(label,
-            style: GoogleFonts.spaceGrotesk(
-                color: sel ? _C.dark : Colors.white,
-                fontSize: 11,
-                fontWeight: FontWeight.w700)),
+        child: Text(label, style: GoogleFonts.spaceGrotesk(color: sel ? _C.dark : Colors.white, fontSize: 11, fontWeight: FontWeight.w700)),
       ),
     );
   }
@@ -1515,15 +1491,11 @@ class _PreviewDialogState extends State<_PreviewDialog> {
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-        decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(8)),
+        decoration: BoxDecoration(color: Colors.white.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Icon(icon, color: Colors.white, size: 13),
           const SizedBox(width: 4),
-          Text(label,
-              style:
-                  GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 11)),
+          Text(label, style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 11)),
         ]),
       ),
     );
@@ -1531,22 +1503,16 @@ class _PreviewDialogState extends State<_PreviewDialog> {
 
   Widget _buildCodigo() {
     if (_cargandoCodigo) {
-      return const Center(
-          child:
-              CircularProgressIndicator(color: _C.primary, strokeWidth: 2.5));
+      return const Center(child: CircularProgressIndicator(color: _C.primary, strokeWidth: 2.5));
     }
     if (_error != null) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const Icon(Icons.error_outline_rounded,
-                color: _C.danger, size: 36),
+            const Icon(Icons.error_outline_rounded, color: _C.danger, size: 36),
             const SizedBox(height: 10),
-            Text(_error!,
-                textAlign: TextAlign.center,
-                style: GoogleFonts.spaceGrotesk(
-                    color: _C.textSec, fontSize: 13)),
+            Text(_error!, textAlign: TextAlign.center, style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 13)),
           ]),
         ),
       );
@@ -1565,18 +1531,11 @@ class _PreviewDialogState extends State<_PreviewDialog> {
             const SizedBox(width: 6),
             Expanded(
               child: Text('$titulo · $lineas líneas',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: GoogleFonts.spaceGrotesk(
-                      color: Colors.white70, fontSize: 11)),
+                  maxLines: 1, overflow: TextOverflow.ellipsis, style: GoogleFonts.spaceGrotesk(color: Colors.white70, fontSize: 11)),
             ),
             GestureDetector(
               onTap: _copiarCodigo,
-              child: Text('Copiar',
-                  style: GoogleFonts.spaceGrotesk(
-                      color: _C.accent,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700)),
+              child: Text('Copiar', style: GoogleFonts.spaceGrotesk(color: _C.accent, fontSize: 11, fontWeight: FontWeight.w700)),
             ),
           ]),
         ),

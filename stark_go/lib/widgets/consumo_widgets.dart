@@ -12,7 +12,19 @@
 //  puro, por lo que nunca encontraba el documento correcto en
 //  Firestore (ej: hoy 19-jul pertenece al ciclo "2026-06", pero el
 //  código viejo pedía "2026-07").
+//
+//  FIX (2026-09-21): el consumo del HOME no coincidía con el de
+//  DETALLE CLIENTE. Causa: la lista del Home usa `ListView.builder`
+//  sin `key`, así que al filtrar/ordenar/buscar Flutter REUTILIZA el
+//  estado de la tarjeta del cliente que estaba en esa posición, y
+//  estos widgets sólo cargaban en `initState` → seguían mostrando el
+//  consumo del cliente ANTERIOR. Ahora:
+//    · `didUpdateWidget` recarga si cambia `clienteId`;
+//    · se refrescan solos cada 5 min (el VPS escribe cada 30);
+//    · en el Home se pasan con `key: ValueKey(id)`.
 // ════════════════════════════════════════════════════════════════
+
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -92,15 +104,40 @@ class _ConsumoBarCardState extends State<ConsumoBarCard> {
   double? _downGB;
   bool _cargando = true;
 
+  /// Refresco automático: el VPS reescribe el consumo cada 30 min, así que
+  /// si el Home queda abierto conviene releer cada tanto para no mostrar un
+  /// valor viejo (y para que coincida con Detalle Cliente).
+  Timer? _auto;
+
   @override
   void initState() {
     super.initState();
     _cargar();
+    _auto = Timer.periodic(const Duration(minutes: 5), (_) => _cargar());
+  }
+
+  @override
+  void didUpdateWidget(covariant ConsumoBarCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // ⚠️ IMPORTANTE: si este widget se reutiliza para OTRO cliente (la lista
+    // del Home se filtra/ordena/busca y el estado se recicla), hay que volver
+    // a leer. Sin esto mostraba el consumo del cliente anterior.
+    if (oldWidget.clienteId != widget.clienteId ||
+        oldWidget.limiteGB != widget.limiteGB) {
+      _cargar();
+    }
+  }
+
+  @override
+  void dispose() {
+    _auto?.cancel();
+    super.dispose();
   }
 
   Future<void> _cargar() async {
     final data = await fetchConsumoMes(widget.clienteId);
     if (!mounted) return;
+    // El cliente pudo cambiar mientras la lectura estaba en vuelo.
     setState(() {
       _upGB = data?['up'];
       _downGB = data?['down'];
@@ -198,10 +235,31 @@ class _ConsumoSectionState extends State<ConsumoSection> {
   List<Map<String, dynamic>> _diasData = [];
   bool _cargandoDias = false;
 
+  /// Refresco automático (el VPS actualiza el consumo cada 30 min).
+  Timer? _auto;
+
   @override
   void initState() {
     super.initState();
     _cargar();
+    _auto = Timer.periodic(const Duration(minutes: 5), (_) {
+      if (mounted) _cargar();
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant ConsumoSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Si la sección se reutiliza para otro cliente, hay que releer todo.
+    if (oldWidget.clienteId != widget.clienteId) {
+      _cargar();
+    }
+  }
+
+  @override
+  void dispose() {
+    _auto?.cancel();
+    super.dispose();
   }
 
   Future<void> _cargar() async {

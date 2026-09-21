@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:stark_go/pages/ConfigMikroTik/config_mikro_tik_widget.dart';
 import 'package:stark_go/pages/lista_equipos/lista_equipos_widget.dart';
 import 'package:stark_go/pages/lista_starlinks/lista_starlinks_widget.dart';
@@ -14,11 +16,16 @@ import '/pages/renovar_membresia/renovar_membresia_widget.dart';
 import 'package:stark_go/pages/activar_membresia/activar_membresia_widget.dart';
 import 'package:stark_go/pages/lista_starlinks_clientes/lista_starlinks_clientes_widget.dart';
 import 'package:stark_go/widgets/consumo_widgets.dart';
+import 'package:stark_go/theme/app_theme.dart';
+import 'package:stark_go/widgets/day_background.dart';
 import 'package:stark_go/pages/reporte_consumo/reporte_consumo_widget.dart';
+import 'package:stark_go/pages/leases_mikrotik/leases_mikrotik_widget.dart';
 import 'package:stark_go/pages/completar_perfil/completar_perfil_widget.dart';
 import 'package:stark_go/pages/finanzas/finanzas_widget.dart';
 import 'package:stark_go/services/bienvenida_service.dart';
+import 'package:stark_go/services/dispositivo_service.dart';
 import 'package:stark_go/services/mora_automatica_service.dart';
+import 'dart:ui' as ui;
 
 // ✅ CONEXIÓN LOCAL MIKROTIK
 import 'package:stark_go/pages/config_mikrotik_local/conectar_mikrotik_local_widget.dart';
@@ -50,25 +57,169 @@ import 'dart:convert';
 import 'home_model.dart';
 export 'home_model.dart';
 
+// Los colores viven en lib/theme/app_theme.dart (AppColors · modo Día/Noche).
+
 // ─────────────────────────────────────────────
-//  PALETA
+//  TONO DE ESTADO — fondo, color, etiqueta e ícono por estado.
+//  Mora = ámbar, Inactivo = gris, Activo = verde (según spec).
+//  Son getters (no const) porque los colores cambian con el tema.
 // ─────────────────────────────────────────────
-class _AppColors {
-  static const Color primary = Color(0xFF1A73E8);
-  static const Color accent = Color(0xFF00C6AE);
-  static const Color danger = Color(0xFFE53935);
-  static const Color warning = Color(0xFFF59E0B);
-  static const Color success = Color(0xFF22C55E);
-  static const Color surface = Color(0xFFFFFFFF);
-  static const Color surfaceDim = Color(0xFFF1F5F9);
-  static const Color textPri = Color(0xFF0F172A);
-  static const Color textSec = Color(0xFF64748B);
-  static const Color drawerBg = Color(0xFF0F172A);
-  static const Color cardBorder = Color(0xFFE2E8F0);
-  static const Color purple = Color(0xFF7C3AED);
-  static const Color whatsapp = Color(0xFF25D366);
-  static const Color header1 = Color(0xFF1E293B);
-  static const Color header2 = Color(0xFF334155);
+class _EstadoTono {
+  const _EstadoTono({
+    required this.fondo,
+    required this.contenido,
+    required this.etiqueta,
+    required this.icono,
+  });
+
+  final Color fondo;
+  final Color contenido;
+  final String etiqueta;
+  final IconData icono;
+
+  Color get borde => contenido.withOpacity(0.28);
+
+  static _EstadoTono get activo => _EstadoTono(
+        fondo: AppColors.successBg,
+        contenido: AppColors.success,
+        etiqueta: 'Activo',
+        icono: Icons.wifi_rounded,
+      );
+
+  static _EstadoTono get mora => _EstadoTono(
+        fondo: AppColors.warningBg,
+        contenido: AppColors.warning,
+        etiqueta: 'En mora',
+        icono: Icons.warning_amber_rounded,
+      );
+
+  static _EstadoTono get inactivo => _EstadoTono(
+        fondo: AppColors.neutralBg,
+        contenido: AppColors.neutral,
+        etiqueta: 'Inactivo',
+        icono: Icons.wifi_off_rounded,
+      );
+
+  static _EstadoTono de(String? status) {
+    switch (status) {
+      case 'activo':
+        return activo;
+      case 'mora':
+        return mora;
+      case 'inactivo':
+        return inactivo;
+      default:
+        return inactivo;
+    }
+  }
+}
+
+// ─────────────────────────────────────────────
+//  AVATAR DEL CLIENTE — gris neutro por defecto, bronce en mora,
+//  rojo para inactivo.
+// ─────────────────────────────────────────────
+class _AvatarCliente extends StatelessWidget {
+  const _AvatarCliente({
+    required this.inicial,
+    required this.status,
+    this.tamano = 52,
+  });
+
+  final String inicial;
+  final String? status;
+  final double tamano;
+
+  @override
+  Widget build(BuildContext context) {
+    late final Color fondo;
+    late final Color texto;
+    Color? borde;
+
+    switch (status) {
+      case 'mora':
+        fondo = AppColors.avatarBronzeBg;
+        texto = AppColors.avatarBronzeText;
+        borde = AppColors.avatarBronzeBorder;
+        break;
+      case 'inactivo':
+        fondo = AppColors.avatarRedBg;
+        texto = AppColors.avatarRedText;
+        borde = AppColors.avatarRedBorder;
+        break;
+      default:
+        fondo = AppColors.avatarNeutralBg;
+        texto = AppColors.avatarNeutralText;
+    }
+
+    return Container(
+      width: tamano,
+      height: tamano,
+      decoration: BoxDecoration(
+        color: fondo,
+        shape: BoxShape.circle,
+        border: borde == null ? null : Border.all(color: borde, width: 1.5),
+      ),
+      child: Center(
+        child: Text(
+          inicial,
+          style: GoogleFonts.spaceGrotesk(
+            color: texto,
+            fontSize: tamano * 0.42,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+//  DIÁLOGO — hereda el tema Material según el modo (claro/oscuro),
+//  para que no salga blanco sobre el fondo espacial ni oscuro de día.
+// ─────────────────────────────────────────────
+Widget _dialogoOscuro({required Widget child}) {
+  return Theme(
+    data: (AppTheme.instance.esOscuro ? ThemeData.dark() : ThemeData.light()).copyWith(
+      dialogTheme: DialogThemeData(
+        backgroundColor: AppColors.surfaceStrong,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: BorderSide(color: AppColors.cardBorder),
+        ),
+        titleTextStyle: GoogleFonts.spaceGrotesk(
+          color: AppColors.textPri,
+          fontSize: 16,
+          fontWeight: FontWeight.w700,
+        ),
+        contentTextStyle: GoogleFonts.spaceGrotesk(
+          color: AppColors.textSec,
+          fontSize: 13,
+          height: 1.5,
+        ),
+      ),
+    ),
+    child: child,
+  );
+}
+
+/// Contenedor de carga reutilizable, con el cristal del tema.
+Widget _cargando(String texto, Color color) {
+  return Center(
+    child: Container(
+      padding: const EdgeInsets.all(28),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceStrong,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        CircularProgressIndicator(color: color, strokeWidth: 2.5),
+        const SizedBox(height: 14),
+        Text(texto, style: GoogleFonts.spaceGrotesk(color: AppColors.textPri, fontSize: 14)),
+      ]),
+    ),
+  );
 }
 
 // ─────────────────────────────────────────────
@@ -150,7 +301,7 @@ class _StarlinkChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = starlink.activo ? _AppColors.primary : _AppColors.textSec;
+    final color = starlink.activo ? AppColors.accent : AppColors.textSec;
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
@@ -159,22 +310,15 @@ class _StarlinkChip extends StatelessWidget {
         margin: const EdgeInsets.only(right: 8),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          gradient: selected
-              ? const LinearGradient(
-                  colors: [_AppColors.primary, _AppColors.accent],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                )
-              : null,
-          color: selected ? null : _AppColors.surface,
+          color: selected ? AppColors.accent.withOpacity(0.18) : AppColors.surface,
           borderRadius: BorderRadius.circular(50),
           border: Border.all(
-            color: selected ? Colors.transparent : (starlink.activo ? _AppColors.primary.withOpacity(0.3) : _AppColors.cardBorder),
+            color: selected ? AppColors.accent.withOpacity(0.55) : AppColors.cardBorder,
             width: 1.4,
           ),
           boxShadow: selected
-              ? [BoxShadow(color: _AppColors.primary.withOpacity(0.3), blurRadius: 10, offset: const Offset(0, 4))]
-              : [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 6, offset: const Offset(0, 2))],
+              ? [BoxShadow(color: AppColors.accent.withOpacity(0.22), blurRadius: 12, offset: const Offset(0, 4))]
+              : [BoxShadow(color: AppColors.sombra(0.35), blurRadius: 8, offset: const Offset(0, 3))],
         ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Stack(clipBehavior: Clip.none, children: [
@@ -182,10 +326,10 @@ class _StarlinkChip extends StatelessWidget {
               width: 28,
               height: 28,
               decoration: BoxDecoration(
-                color: selected ? Colors.white.withOpacity(0.2) : color.withOpacity(0.1),
+                color: selected ? AppColors.accent.withOpacity(0.22) : color.withOpacity(0.12),
                 shape: BoxShape.circle,
               ),
-              child: Icon(Icons.satellite_alt_rounded, size: 15, color: selected ? Colors.white : color),
+              child: Icon(Icons.satellite_alt_rounded, size: 15, color: selected ? AppColors.accent : color),
             ),
             Positioned(
               right: -1,
@@ -194,12 +338,9 @@ class _StarlinkChip extends StatelessWidget {
                 width: 9,
                 height: 9,
                 decoration: BoxDecoration(
-                  color: starlink.activo ? _AppColors.success : _AppColors.textSec,
+                  color: starlink.activo ? AppColors.success : AppColors.neutral,
                   shape: BoxShape.circle,
-                  border: Border.all(
-                    color: selected ? _AppColors.primary : _AppColors.surface,
-                    width: 1.5,
-                  ),
+                  border: Border.all(color: AppColors.surfaceSolid, width: 1.5),
                 ),
               ),
             ),
@@ -209,18 +350,18 @@ class _StarlinkChip extends StatelessWidget {
             Text(
               starlink.nombre,
               style: GoogleFonts.spaceGrotesk(
-                color: selected ? Colors.white : _AppColors.textPri,
+                color: AppColors.textPri,
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
               ),
             ),
             Row(mainAxisSize: MainAxisSize.min, children: [
-              Icon(Icons.people_alt_rounded, size: 9, color: selected ? Colors.white70 : _AppColors.textSec),
+              Icon(Icons.people_alt_rounded, size: 9, color: AppColors.textSec),
               const SizedBox(width: 3),
               Text(
                 '${starlink.clientesCount}',
                 style: GoogleFonts.spaceGrotesk(
-                  color: selected ? Colors.white70 : _AppColors.textSec,
+                  color: AppColors.textSec,
                   fontSize: 10,
                   fontWeight: FontWeight.w500,
                 ),
@@ -229,7 +370,7 @@ class _StarlinkChip extends StatelessWidget {
                 Text(
                   '  ·  ${starlink.ubicacion}',
                   style: GoogleFonts.spaceGrotesk(
-                    color: selected ? Colors.white60 : _AppColors.textSec.withOpacity(0.7),
+                    color: AppColors.textMuted,
                     fontSize: 10,
                   ),
                 ),
@@ -265,27 +406,27 @@ class _AllChip extends StatelessWidget {
         margin: const EdgeInsets.only(right: 8),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
-          color: selected ? _AppColors.textPri : _AppColors.surface,
+          color: selected ? AppColors.accent.withOpacity(0.18) : AppColors.surface,
           borderRadius: BorderRadius.circular(50),
           border: Border.all(
-            color: selected ? Colors.transparent : _AppColors.cardBorder,
+            color: selected ? AppColors.accent.withOpacity(0.55) : AppColors.cardBorder,
             width: 1.4,
           ),
           boxShadow: [
             BoxShadow(
-              color: selected ? _AppColors.textPri.withOpacity(0.2) : Colors.black.withOpacity(0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 3),
+              color: selected ? AppColors.accent.withOpacity(0.22) : AppColors.sombra(0.35),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
             ),
           ],
         ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(Icons.apps_rounded, size: 15, color: selected ? Colors.white : _AppColors.textSec),
+          Icon(Icons.apps_rounded, size: 15, color: selected ? AppColors.accent : AppColors.textSec),
           const SizedBox(width: 6),
           Text(
             'Todos',
             style: GoogleFonts.spaceGrotesk(
-              color: selected ? Colors.white : _AppColors.textPri,
+              color: AppColors.textPri,
               fontSize: 12,
               fontWeight: FontWeight.w700,
             ),
@@ -294,13 +435,13 @@ class _AllChip extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
             decoration: BoxDecoration(
-              color: selected ? Colors.white.withOpacity(0.2) : _AppColors.primary.withOpacity(0.1),
+              color: AppColors.neutralBg,
               borderRadius: BorderRadius.circular(10),
             ),
             child: Text(
               '$totalClients',
               style: GoogleFonts.spaceGrotesk(
-                color: selected ? Colors.white : _AppColors.primary,
+                color: selected ? AppColors.accent : AppColors.textSec,
                 fontSize: 10,
                 fontWeight: FontWeight.w700,
               ),
@@ -314,166 +455,189 @@ class _AllChip extends StatelessWidget {
 
 // ─────────────────────────────────────────────
 //  CLIENT CARD
+//  · Glassmorphism real (BackdropFilter + blur)
+//  · Feedback táctil (escala al presionar)
+//  · Avatar neutro/bronce/rojo según estado
+//  · Insignia con fondo profundo + texto de color (spec)
 // ─────────────────────────────────────────────
-class _ClientCard extends StatelessWidget {
+class _ClientCard extends StatefulWidget {
   final ClientesRecord cliente;
   final VoidCallback onTap;
   final Future<void> Function() onWhatsapp;
 
   const _ClientCard({
+    super.key,
     required this.cliente,
     required this.onTap,
     required this.onWhatsapp,
   });
 
-  Color get _statusColor {
-    switch (cliente.status) {
-      case 'activo':
-        return _AppColors.success;
-      case 'mora':
-        return _AppColors.danger;
-      case 'inactivo':
-        return _AppColors.warning;
-      default:
-        return _AppColors.textSec;
-    }
-  }
+  @override
+  State<_ClientCard> createState() => _ClientCardState();
+}
 
-  String get _statusLabel {
-    switch (cliente.status) {
-      case 'activo':
-        return 'Activo';
-      case 'mora':
-        return 'Mora';
-      case 'inactivo':
-        return 'Inactivo';
-      default:
-        return cliente.status ?? '-';
-    }
-  }
+class _ClientCardState extends State<_ClientCard> {
+  bool _pressed = false;
 
-  IconData get _statusIcon {
-    switch (cliente.status) {
-      case 'activo':
-        return Icons.wifi_rounded;
-      case 'mora':
-        return Icons.warning_amber_rounded;
-      case 'inactivo':
-        return Icons.wifi_off_rounded;
-      default:
-        return Icons.help_outline;
-    }
-  }
+  ClientesRecord get cliente => widget.cliente;
 
   @override
   Widget build(BuildContext context) {
+    final tono = _EstadoTono.de(cliente.status);
+    final bool esMora = cliente.status == 'mora';
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(16),
-          child: Container(
-            decoration: BoxDecoration(
-              color: _AppColors.surface,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: _statusColor.withOpacity(0.35), width: 1.4),
-              boxShadow: [BoxShadow(color: _statusColor.withOpacity(0.08), blurRadius: 12, offset: const Offset(0, 4))],
-            ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              child: Row(children: [
-                Container(
-                  width: 52,
-                  height: 52,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: LinearGradient(
-                      colors: [_statusColor.withOpacity(0.85), _statusColor.withOpacity(0.5)],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
+      child: GestureDetector(
+        onTapDown: (_) => setState(() => _pressed = true),
+        onTapUp: (_) => setState(() => _pressed = false),
+        onTapCancel: () => setState(() => _pressed = false),
+        onTap: widget.onTap,
+        child: AnimatedScale(
+          scale: _pressed ? 0.97 : 1.0,
+          duration: const Duration(milliseconds: 120),
+          curve: Curves.easeOut,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(18),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: AppColors.surface,
+                  borderRadius: BorderRadius.circular(18),
+                  // Borde de luz; en mora se tiñe de ámbar para que la
+                  // fila salte a la vista sin gritar en rojo.
+                  border: Border.all(
+                    color: esMora ? tono.contenido.withOpacity(0.35) : AppColors.cardBorder,
+                    width: 1.2,
                   ),
-                  child: Center(
-                    child: Text(
-                      (cliente.nombre.isNotEmpty ? cliente.nombre[0] : '?').toUpperCase(),
-                      style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w700),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.sombra(0.40),
+                      blurRadius: 24,
+                      offset: const Offset(0, 8),
                     ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(
-                      '${cliente.nombre} ${cliente.apellido ?? ''}',
-                      style: GoogleFonts.spaceGrotesk(color: _AppColors.textPri, fontSize: 15, fontWeight: FontWeight.w600),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 3),
-                    _InfoRow(icon: Icons.agriculture_rounded, label: cliente.nombrefinca, color: _AppColors.textSec),
-                    const SizedBox(height: 2),
-                    _InfoRow(icon: Icons.phone_rounded, label: cliente.numero.toString(), color: _AppColors.primary),
-                    const SizedBox(height: 2),
-                    _InfoRow(icon: Icons.router_rounded, label: cliente.ipatn, color: _AppColors.accent),
-                    if (cliente.starlinkNombre != null && cliente.starlinkNombre!.isNotEmpty) ...[
-                      const SizedBox(height: 4),
-                      Row(children: [
-                        Icon(Icons.satellite_alt_rounded, size: 11, color: _AppColors.primary.withOpacity(0.7)),
-                        const SizedBox(width: 3),
-                        Text(
-                          cliente.starlinkNombre!,
-                          style: GoogleFonts.spaceGrotesk(
-                            color: _AppColors.primary.withOpacity(0.8),
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ]),
-                    ],
-                    ConsumoBarCard(clienteId: cliente.reference.id),
-                  ]),
-                ),
-                const SizedBox(width: 8),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: _statusColor.withOpacity(0.12),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: _statusColor.withOpacity(0.4), width: 1),
+                    if (esMora)
+                      BoxShadow(
+                        color: tono.contenido.withOpacity(0.14),
+                        blurRadius: 18,
+                        offset: const Offset(0, 4),
                       ),
-                      child: Row(mainAxisSize: MainAxisSize.min, children: [
-                        Icon(_statusIcon, color: _statusColor, size: 11),
-                        const SizedBox(width: 4),
-                        Text(_statusLabel, style: GoogleFonts.spaceGrotesk(color: _statusColor, fontSize: 11, fontWeight: FontWeight.w600)),
-                      ]),
-                    ),
-                    const SizedBox(height: 6),
-                    GestureDetector(
-                      onTap: onWhatsapp,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                        decoration: BoxDecoration(
-                          color: _AppColors.whatsapp,
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Row(mainAxisSize: MainAxisSize.min, children: [
-                          Icon(FontAwesomeIcons.whatsapp, color: Colors.white, size: 11),
-                          const SizedBox(width: 4),
-                          Text('WA', style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700)),
-                        ]),
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text('CC: ${cliente.cc}', style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 10)),
                   ],
                 ),
-              ]),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  child: Row(children: [
+                    // ── Avatar ──
+                    _AvatarCliente(
+                      inicial: (cliente.nombre.isNotEmpty ? cliente.nombre[0] : '?').toUpperCase(),
+                      status: cliente.status,
+                    ),
+                    const SizedBox(width: 12),
+
+                    // ── Info principal ──
+                    Expanded(
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Row(children: [
+                          Expanded(
+                            child: Text(
+                              '${cliente.nombre} ${cliente.apellido ?? ''}',
+                              style: GoogleFonts.spaceGrotesk(
+                                color: AppColors.textPri,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            'CC ${cliente.cc}',
+                            style: GoogleFonts.spaceGrotesk(
+                              color: AppColors.textMuted,
+                              fontSize: 10,
+                              fontFeatures: const [FontFeature.tabularFigures()],
+                            ),
+                          ),
+                        ]),
+                        const SizedBox(height: 3),
+                        _InfoRow(icon: Icons.agriculture_rounded, label: cliente.nombrefinca, color: AppColors.textMuted),
+                        const SizedBox(height: 2),
+                        _InfoRow(icon: Icons.phone_rounded, label: cliente.numero.toString(), color: AppColors.textMuted, datos: true),
+                        const SizedBox(height: 2),
+                        _InfoRow(icon: Icons.router_rounded, label: cliente.ipatn, color: AppColors.textMuted, datos: true),
+                        if (cliente.starlinkNombre != null && cliente.starlinkNombre!.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Row(children: [
+                            Icon(Icons.satellite_alt_rounded, size: 11, color: AppColors.accent),
+                            const SizedBox(width: 3),
+                            Text(
+                              cliente.starlinkNombre!,
+                              style: GoogleFonts.spaceGrotesk(
+                                color: AppColors.accent,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ]),
+                        ],
+                        const SizedBox(height: 6),
+                        ConsumoBarCard(clienteId: cliente.reference.id),
+                      ]),
+                    ),
+                    const SizedBox(width: 8),
+
+                    // ── Estado + acción WhatsApp ──
+                    Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: tono.fondo,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: tono.borde, width: 1),
+                          ),
+                          child: Row(mainAxisSize: MainAxisSize.min, children: [
+                            Icon(tono.icono, color: tono.contenido, size: 11),
+                            const SizedBox(width: 4),
+                            Text(
+                              tono.etiqueta,
+                              style: GoogleFonts.spaceGrotesk(
+                                color: tono.contenido,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ]),
+                        ),
+                        const SizedBox(height: 8),
+                        GestureDetector(
+                          onTap: widget.onWhatsapp,
+                          child: Container(
+                            width: 32,
+                            height: 32,
+                            decoration: BoxDecoration(
+                              color: AppColors.brand,
+                              shape: BoxShape.circle,
+                              boxShadow: [
+                                BoxShadow(
+                                  color: AppColors.brand.withOpacity(0.35),
+                                  blurRadius: 12,
+                                  offset: const Offset(0, 4),
+                                ),
+                              ],
+                            ),
+                            child: const Icon(FontAwesomeIcons.whatsapp, color: Colors.white, size: 15),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ]),
+                ),
+              ),
             ),
           ),
         ),
@@ -486,14 +650,31 @@ class _InfoRow extends StatelessWidget {
   final IconData icon;
   final String label;
   final Color color;
-  const _InfoRow({required this.icon, required this.label, required this.color});
+
+  /// Datos técnicos (IP, teléfono): cifras tabulares para que alineen.
+  final bool datos;
+
+  const _InfoRow({
+    required this.icon,
+    required this.label,
+    required this.color,
+    this.datos = false,
+  });
 
   @override
   Widget build(BuildContext context) => Row(children: [
         Icon(icon, size: 12, color: color),
         const SizedBox(width: 4),
         Flexible(
-          child: Text(label, style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 11.5), overflow: TextOverflow.ellipsis),
+          child: Text(
+            label,
+            style: GoogleFonts.spaceGrotesk(
+              color: AppColors.textSec,
+              fontSize: 11.5,
+              fontFeatures: datos ? const [FontFeature.tabularFigures()] : null,
+            ),
+            overflow: TextOverflow.ellipsis,
+          ),
         ),
       ]);
 }
@@ -505,6 +686,7 @@ class _StatCard extends StatelessWidget {
   final String label, count;
   final IconData icon;
   final Color color;
+  final Color? fondo;
   final VoidCallback? onTap;
   final bool selected;
 
@@ -513,6 +695,7 @@ class _StatCard extends StatelessWidget {
     required this.count,
     required this.icon,
     required this.color,
+    this.fondo,
     this.onTap,
     this.selected = false,
   });
@@ -526,29 +709,33 @@ class _StatCard extends StatelessWidget {
             margin: const EdgeInsets.symmetric(horizontal: 3),
             padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 6),
             decoration: BoxDecoration(
-              color: selected ? color.withOpacity(0.16) : color.withOpacity(0.07),
+              color: selected ? (fondo ?? AppColors.neutralBg) : AppColors.surface,
               borderRadius: BorderRadius.circular(16),
               border: Border.all(
-                color: selected ? color : color.withOpacity(0.22),
-                width: selected ? 1.8 : 1.2,
+                color: selected ? color.withOpacity(0.55) : AppColors.cardBorder,
+                width: selected ? 1.6 : 1.2,
               ),
             ),
             child: Column(children: [
               Container(
                 padding: const EdgeInsets.all(7),
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [color.withOpacity(0.9), color.withOpacity(0.55)],
-                  ),
+                  color: (fondo ?? AppColors.neutralBg),
                   shape: BoxShape.circle,
+                  border: Border.all(color: color.withOpacity(0.4)),
                 ),
-                child: Icon(icon, color: Colors.white, size: 15),
+                child: Icon(icon, color: color, size: 15),
               ),
               const SizedBox(height: 6),
-              Text(count,
-                  style: GoogleFonts.spaceGrotesk(color: selected ? color : _AppColors.textPri, fontSize: 20, fontWeight: FontWeight.w800)),
+              Text(
+                count,
+                style: GoogleFonts.spaceGrotesk(
+                  color: selected ? color : AppColors.textPri,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
               const SizedBox(height: 2),
               Row(
                 mainAxisSize: MainAxisSize.min,
@@ -563,12 +750,17 @@ class _StatCard extends StatelessWidget {
                     const SizedBox(width: 4),
                   ],
                   Flexible(
-                    child: Text(label,
-                        style: GoogleFonts.spaceGrotesk(
-                            color: _AppColors.textSec, fontSize: 10, fontWeight: selected ? FontWeight.w700 : FontWeight.w500),
-                        textAlign: TextAlign.center,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis),
+                    child: Text(
+                      label,
+                      style: GoogleFonts.spaceGrotesk(
+                        color: selected ? AppColors.textSec : AppColors.textMuted,
+                        fontSize: 10,
+                        fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                      ),
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                 ],
               ),
@@ -604,12 +796,12 @@ class _DrawerItem extends StatelessWidget {
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
         child: Material(
-          color: active ? _AppColors.primary.withOpacity(0.15) : Colors.transparent,
+          color: active ? AppColors.neutralBg : Colors.transparent,
           borderRadius: BorderRadius.circular(14),
           child: InkWell(
             onTap: onTap,
             borderRadius: BorderRadius.circular(14),
-            splashColor: _AppColors.primary.withOpacity(0.1),
+            splashColor: AppColors.accent.withOpacity(0.1),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
               child: Row(children: [
@@ -617,39 +809,44 @@ class _DrawerItem extends StatelessWidget {
                   width: 36,
                   height: 36,
                   decoration: BoxDecoration(
-                    gradient: active
-                        ? const LinearGradient(
-                            begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [_AppColors.primary, _AppColors.accent])
-                        : null,
-                    color: active ? null : (iconColor ?? Colors.white).withOpacity(0.08),
+                    color: active ? AppColors.accent.withOpacity(0.18) : AppColors.neutralBg,
                     borderRadius: BorderRadius.circular(10),
+                    border: active ? Border.all(color: AppColors.accent.withOpacity(0.45)) : null,
                   ),
-                  child: Icon(icon, color: active ? Colors.white : (iconColor ?? Colors.white70), size: 18),
+                  child: Icon(icon, color: active ? AppColors.accent : (iconColor ?? AppColors.textSec), size: 18),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
-                  child: Text(label,
-                      style: GoogleFonts.spaceGrotesk(
-                        color: active ? Colors.white : Colors.white70,
-                        fontSize: 14,
-                        fontWeight: active ? FontWeight.w600 : FontWeight.w400,
-                      )),
+                  child: Text(
+                    label,
+                    style: GoogleFonts.spaceGrotesk(
+                      color: active ? AppColors.textPri : AppColors.textSec,
+                      fontSize: 14,
+                      fontWeight: active ? FontWeight.w600 : FontWeight.w400,
+                    ),
+                  ),
                 ),
                 if (badge != null) ...[
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                     decoration: BoxDecoration(
-                      color: (badgeColor ?? _AppColors.accent).withOpacity(0.15),
+                      color: AppColors.neutralBg,
                       borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: (badgeColor ?? _AppColors.accent).withOpacity(0.45)),
+                      border: Border.all(color: (badgeColor ?? AppColors.accent).withOpacity(0.45)),
                     ),
-                    child: Text(badge!,
-                        style: GoogleFonts.spaceGrotesk(color: badgeColor ?? _AppColors.accent, fontSize: 10, fontWeight: FontWeight.w700)),
+                    child: Text(
+                      badge!,
+                      style: GoogleFonts.spaceGrotesk(
+                        color: badgeColor ?? AppColors.accent,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
                   ),
                   const SizedBox(width: 6),
-                  Icon(Icons.arrow_forward_ios_rounded, color: Colors.white24, size: 12),
+                  Icon(Icons.arrow_forward_ios_rounded, color: AppColors.textMuted, size: 12),
                 ] else
-                  const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white24, size: 13),
+                  Icon(Icons.arrow_forward_ios_rounded, color: AppColors.textMuted, size: 13),
               ]),
             ),
           ),
@@ -666,14 +863,13 @@ class _DrawerSectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(26, 10, 26, 4),
+        padding: const EdgeInsets.fromLTRB(26, 14, 26, 4),
         child: Text(
-          title.toUpperCase(),
+          title,
           style: GoogleFonts.spaceGrotesk(
-            color: Colors.white24,
-            fontSize: 10,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 1.2,
+            color: AppColors.textMuted,
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
           ),
         ),
       );
@@ -694,6 +890,11 @@ class HomeWidget extends StatefulWidget {
 class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, WidgetsBindingObserver {
   late HomeModel _model;
   final scaffoldKey = GlobalKey<ScaffoldState>();
+
+  /// Key del RepaintBoundary que captura la pantalla para la transición
+  /// circular Día/Noche (estilo Telegram).
+  final GlobalKey _temaBoundaryKey = GlobalKey();
+
   late AnimationController _drawerCtrl;
   late Animation<double> _drawerAnim;
   bool _drawerOpen = false;
@@ -709,7 +910,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
   // Filtro por estado al tocar las tarjetas de resumen (null = todos).
   String? _filterEstado;
 
-  // ── STARLINKS: ahora con Stream en tiempo real ──
+  // ── STARLINKS: Stream en tiempo real ──
   Stream<List<_StarlinkInfo>>? _starlinksStream;
   String? _selectedStarlinkId;
 
@@ -733,7 +934,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
 
   String get _uid => FirebaseAuth.instance.currentUser?.uid ?? '';
 
-  /// Lee la versión real instalada (no se vuelve a quedar en una fija).
+  /// Lee la versión real instalada.
   Future<void> _cargarVersionApp() async {
     try {
       final info = await PackageInfo.fromPlatform();
@@ -747,15 +948,24 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
     }
   }
 
+  /// El tema cambió (botón del drawer): se reconstruye todo con la paleta nueva.
+  void _onTemaCambiado() {
+    if (!mounted) return;
+    AppTheme.aplicarBarraEstado();
+    setState(() {});
+  }
+
   @override
   void initState() {
     super.initState();
     _model = createModel(context, () => HomeModel());
 
+    AppTheme.instance.addListener(_onTemaCambiado);
+    AppTheme.instance.cargar();
+
     _drawerCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 350));
     _drawerAnim = CurvedAnimation(parent: _drawerCtrl, curve: Curves.easeInOutCubic);
 
-    // ── Inicia stream de Starlinks en tiempo real ──
     _initStarlinksStream();
 
     _cargarRolAdmin();
@@ -765,17 +975,22 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
     _cargarVersionApp();
     _ejecutarMoraAutomatica();
 
+    // LÍMITE DE TELÉFONOS (2 por cuenta).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      DispositivoService.revisarAlVolver(onBloqueado: () {
+        if (mounted) context.goNamed(DispositivoBloqueadoWidget.routeName);
+      });
+    });
+
     WidgetsBinding.instance.addObserver(this);
 
-    SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
-      statusBarIconBrightness: Brightness.light,
-      statusBarBrightness: Brightness.dark,
-    ));
+    AppTheme.aplicarBarraEstado();
   }
 
   @override
   void dispose() {
+    AppTheme.instance.removeListener(_onTemaCambiado);
     WidgetsBinding.instance.removeObserver(this);
     _drawerCtrl.dispose();
     _searchCtrl.dispose();
@@ -787,6 +1002,9 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _verificarMembresia();
+      DispositivoService.revisarAlVolver(onBloqueado: () {
+        if (mounted) context.goNamed(DispositivoBloqueadoWidget.routeName);
+      });
     }
   }
 
@@ -800,22 +1018,11 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
       final data = doc.data();
       if (data == null) return;
 
-      // ── Cargar tipo de plan del usuario ──
-      // El VPS guarda el campo `plan` como { tipo: 'completo'|'vouchers', ... }.
-      // Lógica ESTRICTA: solo pueden navegar los que tengan una membresía válida.
-      //   1. Si `plan.tipo` existe y es 'vouchers' → vouchers.
-      //   2. Si `plan.tipo` existe y es 'completo' → completo.
-      //   3. Si `plan.tipo` NO existe pero `planMembresia` es uno de los planes
-      //      válidos (1m, 3m, 6m, 1a, v1m, v3m, v6m, v1a) → se infiere el tipo.
-      //   4. Cualquier otro caso (sin plan, planMembresia vacío o desconocido)
-      //      → NO se permite navegar, se redirige a Activar Membresía.
       String tipo = '';
       final planMap = data['plan'];
       final planMembresia = (data['planMembresia'] ?? '').toString().toLowerCase();
 
-      // Planes válidos de acceso completo
       const planesCompletos = {'1m', '3m', '6m', '1a'};
-      // Planes válidos de solo vouchers
       const planesVouchers = {'v1m', 'v3m', 'v6m', 'v1a'};
 
       if (planMap is Map) {
@@ -825,27 +1032,20 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
         } else if (tipoRaw == 'completo') {
           tipo = 'completo';
         } else if (planesVouchers.contains(planMembresia)) {
-          // plan.tipo desconocido pero planMembresia es de vouchers
           tipo = 'vouchers';
         } else if (planesCompletos.contains(planMembresia)) {
-          // plan.tipo desconocido pero planMembresia es de acceso completo
           tipo = 'completo';
         } else {
-          // plan.tipo desconocido y planMembresia no coincide → SIN MEMBRESÍA
           tipo = '';
         }
       } else if (planesVouchers.contains(planMembresia)) {
-        // Sin campo `plan` (usuarios existentes) pero planMembresia es vouchers
         tipo = 'vouchers';
       } else if (planesCompletos.contains(planMembresia)) {
-        // Sin campo `plan` (usuarios existentes) pero planMembresia es completo
         tipo = 'completo';
       } else {
-        // Sin campo `plan` y planMembresia vacío o desconocido → SIN MEMBRESÍA
         tipo = '';
       }
 
-      // ── Si NO tiene membresía válida → redirigir a Activar Membresía ──
       if (tipo.isEmpty) {
         if (mounted) {
           context.goNamed(ActivarMembresiaWidget.routeName);
@@ -857,7 +1057,6 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
         setState(() => _tipoPlanUsuario = tipo);
       }
 
-      // ── Verificar vencimiento ──
       final ts = data['fechaVencimiento'] as Timestamp?;
       if (ts != null && DateTime.now().isAfter(ts.toDate())) {
         if (mounted) {
@@ -873,8 +1072,6 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
   Future<void> _verificarBienvenida() async {
     if (_uid.isEmpty) return;
     try {
-      // Consume la bienvenida pendiente (la borra de inmediato para que
-      // solo se muestre una vez).
       final bienvenida = await BienvenidaService.consumirBienvenida();
       if (bienvenida == null || !mounted) return;
 
@@ -883,14 +1080,11 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
       final precio = (bienvenida['precio'] ?? 0);
       final sublabel = (bienvenida['sublabel'] ?? '').toString();
 
-      // Pequeña espera para que el Home termine de cargar antes del diálogo.
       await Future.delayed(const Duration(milliseconds: 600));
       if (!mounted) return;
 
       _showBienvenidaDialog(tipo: tipo, duracion: duracion, precio: precio, sublabel: sublabel);
-    } catch (_) {
-      // Si falla, simplemente no mostramos la bienvenida.
-    }
+    } catch (_) {}
   }
 
   void _showBienvenidaDialog({
@@ -900,9 +1094,10 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
     required String sublabel,
   }) {
     final esCompleto = tipo == 'completo';
-    final color = esCompleto ? _AppColors.success : const Color(0xFF0EA5E9);
+    final color = esCompleto ? AppColors.success : AppColors.accent;
+    final fondoTono = esCompleto ? AppColors.successBg : AppColors.neutralBg;
     final icono = esCompleto ? Icons.workspace_premium_rounded : Icons.vpn_key_rounded;
-    final titulo = esCompleto ? '¡Bienvenido a StarkGo!' : '¡Bienvenido a StarkGo!';
+    const titulo = '¡Bienvenido a StarkGo!';
     final precioFmt = precio is num ? '\$${precio.toStringAsFixed(0)} USD' : '\$$precio USD';
 
     showDialog(
@@ -914,8 +1109,10 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
         child: Container(
           padding: const EdgeInsets.all(24),
           decoration: BoxDecoration(
-            color: _AppColors.surface,
+            color: AppColors.surfaceStrong,
             borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: AppColors.cardBorder),
+            boxShadow: [BoxShadow(color: AppColors.sombra(0.5), blurRadius: 30, offset: const Offset(0, 12))],
           ),
           child: SingleChildScrollView(
             child: Column(
@@ -926,27 +1123,26 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                   width: 72,
                   height: 72,
                   decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [color, color.withOpacity(0.6)],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
+                    color: fondoTono,
                     shape: BoxShape.circle,
-                    boxShadow: [BoxShadow(color: color.withOpacity(0.4), blurRadius: 20, offset: const Offset(0, 8))],
+                    border: Border.all(color: color.withOpacity(0.45), width: 1.5),
+                    boxShadow: [BoxShadow(color: color.withOpacity(0.25), blurRadius: 24, offset: const Offset(0, 8))],
                   ),
-                  child: Icon(icono, color: Colors.white, size: 34),
+                  child: Icon(icono, color: color, size: 34),
                 ),
                 const SizedBox(height: 18),
-                Text(titulo,
-                    textAlign: TextAlign.center,
-                    style: GoogleFonts.spaceGrotesk(color: _AppColors.textPri, fontSize: 22, fontWeight: FontWeight.w800)),
+                Text(
+                  titulo,
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.spaceGrotesk(color: AppColors.textPri, fontSize: 22, fontWeight: FontWeight.w800),
+                ),
                 const SizedBox(height: 6),
                 Text(
                   esCompleto
                       ? 'Tu membresía de acceso completo está activa. Ya puedes gestionar tus clientes, planes, informes y mucho más.'
                       : 'Tu membresía de solo vouchers está activa. Ya puedes gestionar tus vouchers y el módulo MikroTik Local.',
                   textAlign: TextAlign.center,
-                  style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 13, height: 1.5),
+                  style: GoogleFonts.spaceGrotesk(color: AppColors.textSec, fontSize: 13, height: 1.5),
                 ),
                 const SizedBox(height: 18),
 
@@ -955,13 +1151,15 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                   width: double.infinity,
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: color.withOpacity(0.06),
+                    color: fondoTono,
                     borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: color.withOpacity(0.25)),
+                    border: Border.all(color: color.withOpacity(0.28)),
                   ),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text('Lo que compraste',
-                        style: GoogleFonts.spaceGrotesk(color: color, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
+                    Text(
+                      'Lo que compraste',
+                      style: GoogleFonts.spaceGrotesk(color: color, fontSize: 11, fontWeight: FontWeight.w700),
+                    ),
                     const SizedBox(height: 10),
                     _bienvenidaFila(Icons.workspace_premium_rounded, 'Plan', duracion, color),
                     _bienvenidaFila(Icons.attach_money_rounded, 'Monto', precioFmt, color),
@@ -976,12 +1174,15 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                   width: double.infinity,
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: _AppColors.surfaceDim,
+                    color: AppColors.neutralBg,
                     borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: AppColors.cardBorder),
                   ),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text('¿Qué puedes hacer ahora?',
-                        style: GoogleFonts.spaceGrotesk(color: _AppColors.textPri, fontSize: 12, fontWeight: FontWeight.w700)),
+                    Text(
+                      '¿Qué puedes hacer ahora?',
+                      style: GoogleFonts.spaceGrotesk(color: AppColors.textPri, fontSize: 12, fontWeight: FontWeight.w700),
+                    ),
                     const SizedBox(height: 10),
                     if (esCompleto) ...[
                       _bienvenidaFuncion(Icons.people_alt_rounded, 'Gestiona tus clientes y su estado de pago'),
@@ -1004,10 +1205,9 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                   height: 52,
                   child: DecoratedBox(
                     decoration: BoxDecoration(
-                      gradient:
-                          LinearGradient(colors: [color, color.withOpacity(0.7)], begin: Alignment.topLeft, end: Alignment.bottomRight),
+                      color: AppColors.brand,
                       borderRadius: BorderRadius.circular(14),
-                      boxShadow: [BoxShadow(color: color.withOpacity(0.35), blurRadius: 16, offset: const Offset(0, 6))],
+                      boxShadow: [BoxShadow(color: AppColors.brand.withOpacity(0.35), blurRadius: 20, offset: const Offset(0, 6))],
                     ),
                     child: Material(
                       color: Colors.transparent,
@@ -1015,8 +1215,10 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                         borderRadius: BorderRadius.circular(14),
                         onTap: () => Navigator.pop(dialogContext),
                         child: Center(
-                          child: Text('¡Empezar!',
-                              style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
+                          child: Text(
+                            'Empezar',
+                            style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700),
+                          ),
                         ),
                       ),
                     ),
@@ -1036,9 +1238,9 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
       child: Row(children: [
         Icon(icon, color: color, size: 15),
         const SizedBox(width: 8),
-        Text('$label:', style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 12)),
+        Text('$label:', style: GoogleFonts.spaceGrotesk(color: AppColors.textSec, fontSize: 12)),
         const Spacer(),
-        Text(value, style: GoogleFonts.spaceGrotesk(color: _AppColors.textPri, fontSize: 12, fontWeight: FontWeight.w600)),
+        Text(value, style: GoogleFonts.spaceGrotesk(color: AppColors.textPri, fontSize: 12, fontWeight: FontWeight.w600)),
       ]),
     );
   }
@@ -1050,12 +1252,16 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
         Container(
           width: 24,
           height: 24,
-          decoration: BoxDecoration(color: _AppColors.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(7)),
-          child: Icon(icon, color: _AppColors.primary, size: 13),
+          decoration: BoxDecoration(
+            color: AppColors.surfaceSolid,
+            borderRadius: BorderRadius.circular(7),
+            border: Border.all(color: AppColors.cardBorder),
+          ),
+          child: Icon(icon, color: AppColors.accent, size: 13),
         ),
         const SizedBox(width: 10),
         Expanded(
-          child: Text(texto, style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 12, height: 1.3)),
+          child: Text(texto, style: GoogleFonts.spaceGrotesk(color: AppColors.textSec, fontSize: 12, height: 1.3)),
         ),
       ]),
     );
@@ -1119,7 +1325,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
   }
 
   // ──────────────────────────────────────────
-  //  MORA AUTOMÁTICA — marca en rojo según día de vencimiento
+  //  MORA AUTOMÁTICA
   // ──────────────────────────────────────────
   Future<void> _ejecutarMoraAutomatica() async {
     if (_uid.isEmpty) return;
@@ -1136,7 +1342,6 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
     FFAppState().drawer = _drawerOpen;
   }
 
-  // Deslizar desde el borde izquierdo abre el drawer; hacia la izquierda lo cierra.
   void _onDragInicio(DragStartDetails d) {
     if (!_drawerOpen && d.globalPosition.dx <= 56) {
       _dragDesdeBorde = true;
@@ -1212,24 +1417,26 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
 
     final ok = await showDialog<bool>(
           context: ctx,
-          builder: (_) => AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            title: Text('Reporte de Pago', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w700)),
-            content: Text('Enviar recordatorio de pago a $nombre vía WhatsApp?', style: GoogleFonts.spaceGrotesk()),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: Text('Cancelar', style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec)),
-              ),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _AppColors.whatsapp,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          builder: (_) => _dialogoOscuro(
+            child: AlertDialog(
+              title: const Text('Reporte de pago'),
+              content: Text('¿Enviar recordatorio de pago a $nombre por WhatsApp?'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: Text('Cancelar', style: GoogleFonts.spaceGrotesk(color: AppColors.textSec)),
                 ),
-                onPressed: () => Navigator.pop(ctx, true),
-                child: Text('Enviar', style: GoogleFonts.spaceGrotesk(color: Colors.white)),
-              ),
-            ],
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.brand,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: Text('Enviar recordatorio', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w600)),
+                ),
+              ],
+            ),
           ),
         ) ??
         false;
@@ -1239,17 +1446,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (_) => Center(
-        child: Container(
-          padding: const EdgeInsets.all(28),
-          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            CircularProgressIndicator(color: _AppColors.whatsapp, strokeWidth: 2.5),
-            const SizedBox(height: 14),
-            Text('Enviando mensaje…', style: GoogleFonts.spaceGrotesk(color: _AppColors.textPri, fontSize: 14)),
-          ]),
-        ),
-      ),
+      builder: (_) => _cargando('Enviando mensaje…', AppColors.brand),
     );
 
     _EvolutionInstance? instancia;
@@ -1335,17 +1532,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
       showDialog(
         context: context,
         barrierDismissible: false,
-        builder: (_) => Center(
-          child: Container(
-            padding: const EdgeInsets.all(28),
-            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              CircularProgressIndicator(color: _AppColors.whatsapp, strokeWidth: 2.5),
-              const SizedBox(height: 14),
-              Text('Enviando mensaje…', style: GoogleFonts.spaceGrotesk(color: _AppColors.textPri, fontSize: 14)),
-            ]),
-          ),
-        ),
+        builder: (_) => _cargando('Enviando mensaje…', AppColors.brand),
       );
     }
 
@@ -1366,8 +1553,8 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
       if (!mounted) return;
 
       if (response.statusCode == 200 || response.statusCode == 201) {
-        // Al enviar el recordatorio, el cliente pasa a rojo (mora).
-        // El pago (registrar pago) lo devuelve a verde (activo).
+        // Al enviar el recordatorio, el cliente pasa a mora (ámbar).
+        // Registrar el pago lo devuelve a activo (verde).
         try {
           await clienteRef.update({
             'status': 'mora',
@@ -1395,7 +1582,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
   }
 
   // ──────────────────────────────────────────
-  //  SOPORTE WHATSAPP — ayuda para configurar y conectar MikroTik
+  //  SOPORTE WHATSAPP
   // ──────────────────────────────────────────
   Future<void> _abrirSoporteWhatsApp() async {
     const numero = '573137756497';
@@ -1470,39 +1657,38 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
 
     final ok = await showDialog<bool>(
           context: context,
-          builder: (_) => AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            title: Row(children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(color: _AppColors.danger.withOpacity(0.1), shape: BoxShape.circle),
-                child: Icon(Icons.warning_amber_rounded, color: _AppColors.danger, size: 22),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text('Marcar en mora', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w700, fontSize: 15)),
-              ),
-            ]),
-            content: Text(
-              '¿Marcar ${clientesActivos.length} cliente${clientesActivos.length != 1 ? 's' : ''} '
-              'activo${clientesActivos.length != 1 ? 's' : ''} como EN MORA?\n\n'
-              'Solo cambia su color a rojo. NO se corta el internet de nadie.',
-              style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 13, height: 1.5),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: Text('Cancelar', style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec)),
-              ),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _AppColors.danger,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          builder: (_) => _dialogoOscuro(
+            child: AlertDialog(
+              title: Row(children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(color: AppColors.warningBg, shape: BoxShape.circle),
+                  child: Icon(Icons.warning_amber_rounded, color: AppColors.warning, size: 22),
                 ),
-                onPressed: () => Navigator.pop(context, true),
-                child: Text('Sí, marcar todos', style: GoogleFonts.spaceGrotesk(color: Colors.white, fontWeight: FontWeight.w600)),
+                const SizedBox(width: 12),
+                const Expanded(child: Text('Marcar en mora')),
+              ]),
+              content: Text(
+                '¿Marcar ${clientesActivos.length} cliente${clientesActivos.length != 1 ? 's' : ''} '
+                'activo${clientesActivos.length != 1 ? 's' : ''} como en mora?\n\n'
+                'Solo cambia su estado. No se corta el internet de nadie.',
               ),
-            ],
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: Text('Cancelar', style: GoogleFonts.spaceGrotesk(color: AppColors.textSec)),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.warning,
+                    foregroundColor: AppTheme.instance.esOscuro ? const Color(0xFF451A03) : Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: () => Navigator.pop(context, true),
+                  child: Text('Marcar todos', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w700)),
+                ),
+              ],
+            ),
           ),
         ) ??
         false;
@@ -1512,17 +1698,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (_) => Center(
-        child: Container(
-          padding: const EdgeInsets.all(28),
-          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            CircularProgressIndicator(color: _AppColors.danger, strokeWidth: 2.5),
-            const SizedBox(height: 14),
-            Text('Actualizando estados…', style: GoogleFonts.spaceGrotesk(color: _AppColors.textPri, fontSize: 14)),
-          ]),
-        ),
-      ),
+      builder: (_) => _cargando('Actualizando estados…', AppColors.warning),
     );
 
     try {
@@ -1567,39 +1743,38 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
 
     final ok = await showDialog<bool>(
           context: context,
-          builder: (_) => AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            title: Row(children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(color: _AppColors.success.withOpacity(0.1), shape: BoxShape.circle),
-                child: Icon(Icons.check_circle_outline_rounded, color: _AppColors.success, size: 22),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text('Marcar en activo', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w700, fontSize: 15)),
-              ),
-            ]),
-            content: Text(
-              '¿Marcar ${clientesEnMora.length} cliente${clientesEnMora.length != 1 ? 's' : ''} '
-              'en mora como ACTIVO?\n\n'
-              'Úsalo solo si marcaste en mora por error. NO reconecta el internet de nadie.',
-              style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 13, height: 1.5),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: Text('Cancelar', style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec)),
-              ),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _AppColors.success,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          builder: (_) => _dialogoOscuro(
+            child: AlertDialog(
+              title: Row(children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(color: AppColors.successBg, shape: BoxShape.circle),
+                  child: Icon(Icons.check_circle_outline_rounded, color: AppColors.success, size: 22),
                 ),
-                onPressed: () => Navigator.pop(context, true),
-                child: Text('Sí, reactivar todos', style: GoogleFonts.spaceGrotesk(color: Colors.white, fontWeight: FontWeight.w600)),
+                const SizedBox(width: 12),
+                const Expanded(child: Text('Marcar como activos')),
+              ]),
+              content: Text(
+                '¿Marcar ${clientesEnMora.length} cliente${clientesEnMora.length != 1 ? 's' : ''} '
+                'en mora como activo?\n\n'
+                'Úsalo solo si marcaste en mora por error. No reconecta el internet de nadie.',
               ),
-            ],
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: Text('Cancelar', style: GoogleFonts.spaceGrotesk(color: AppColors.textSec)),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.brand,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: () => Navigator.pop(context, true),
+                  child: Text('Reactivar todos', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w600)),
+                ),
+              ],
+            ),
           ),
         ) ??
         false;
@@ -1609,17 +1784,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (_) => Center(
-        child: Container(
-          padding: const EdgeInsets.all(28),
-          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            CircularProgressIndicator(color: _AppColors.success, strokeWidth: 2.5),
-            const SizedBox(height: 14),
-            Text('Actualizando estados…', style: GoogleFonts.spaceGrotesk(color: _AppColors.textPri, fontSize: 14)),
-          ]),
-        ),
-      ),
+      builder: (_) => _cargando('Actualizando estados…', AppColors.success),
     );
 
     try {
@@ -1652,45 +1817,41 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
   void _showFechaNoConfiguradaDialog() {
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Row(children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(color: _AppColors.warning.withOpacity(0.1), shape: BoxShape.circle),
-            child: Icon(Icons.calendar_today_rounded, color: _AppColors.warning, size: 22),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text('Fecha no configurada', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w700, fontSize: 15)),
-          ),
-        ]),
-        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(
-            'Antes de enviar mensajes de pago, configura el día '
-            'de vencimiento y los datos de tu empresa.',
-            style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 13, height: 1.5),
-          ),
-        ]),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Cancelar', style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec)),
-          ),
-          ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _AppColors.primary,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      builder: (_) => _dialogoOscuro(
+        child: AlertDialog(
+          title: Row(children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(color: AppColors.warningBg, shape: BoxShape.circle),
+              child: Icon(Icons.calendar_today_rounded, color: AppColors.warning, size: 22),
             ),
-            icon: const Icon(Icons.settings_rounded, color: Colors.white, size: 16),
-            label: Text('Configurar', style: GoogleFonts.spaceGrotesk(color: Colors.white, fontWeight: FontWeight.w600)),
-            onPressed: () async {
-              Navigator.pop(context);
-              await context.pushNamed(ConfigFacturacionWidget.routeName);
-              _cargarConfigFacturacion();
-            },
+            const SizedBox(width: 12),
+            const Expanded(child: Text('Facturación sin configurar')),
+          ]),
+          content: const Text(
+            'Antes de enviar mensajes de pago, configura el día de vencimiento y los datos de tu empresa.',
           ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text('Cancelar', style: GoogleFonts.spaceGrotesk(color: AppColors.textSec)),
+            ),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.brand,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              icon: const Icon(Icons.settings_rounded, size: 16),
+              label: Text('Configurar', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w600)),
+              onPressed: () async {
+                Navigator.pop(context);
+                await context.pushNamed(ConfigFacturacionWidget.routeName);
+                _cargarConfigFacturacion();
+              },
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1698,42 +1859,40 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
   void _showNoInstanceDialog() {
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Row(children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(color: _AppColors.warning.withOpacity(0.1), shape: BoxShape.circle),
-            child: Icon(Icons.chat_bubble_outline_rounded, color: _AppColors.warning, size: 22),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text('WhatsApp no configurado', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w700, fontSize: 15)),
-          ),
-        ]),
-        content: Text(
-          'No tienes una instancia de Evolution API registrada.\n\n'
-          'Configura WhatsApp para poder enviar mensajes.',
-          style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 13, height: 1.5),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Cancelar', style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec)),
-          ),
-          ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _AppColors.whatsapp,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      builder: (_) => _dialogoOscuro(
+        child: AlertDialog(
+          title: Row(children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(color: AppColors.warningBg, shape: BoxShape.circle),
+              child: Icon(Icons.chat_bubble_outline_rounded, color: AppColors.warning, size: 22),
             ),
-            icon: const Icon(Icons.settings_rounded, color: Colors.white, size: 16),
-            label: Text('Configurar ahora', style: GoogleFonts.spaceGrotesk(color: Colors.white, fontWeight: FontWeight.w600)),
-            onPressed: () {
-              Navigator.pop(context);
-              context.pushNamed(ConfigEvolutionApiWidget.routeName);
-            },
+            const SizedBox(width: 12),
+            const Expanded(child: Text('WhatsApp sin configurar')),
+          ]),
+          content: const Text(
+            'No tienes una instancia de Evolution API registrada. Configura WhatsApp para poder enviar mensajes.',
           ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text('Cancelar', style: GoogleFonts.spaceGrotesk(color: AppColors.textSec)),
+            ),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.brand,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              icon: const Icon(Icons.settings_rounded, size: 16),
+              label: Text('Configurar WhatsApp', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w600)),
+              onPressed: () {
+                Navigator.pop(context);
+                context.pushNamed(ConfigEvolutionApiWidget.routeName);
+              },
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1741,52 +1900,57 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
   void _showSuccessDialog(String nombre, String numero) {
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Row(children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(color: _AppColors.success.withOpacity(0.1), shape: BoxShape.circle),
-            child: Icon(FontAwesomeIcons.whatsapp, color: _AppColors.whatsapp, size: 22),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text('¡Mensaje enviado!', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w700, fontSize: 15)),
-          ),
-        ]),
-        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('El recordatorio fue enviado exitosamente.', style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 13)),
-          const SizedBox(height: 10),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: _AppColors.success.withOpacity(0.06),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: _AppColors.success.withOpacity(0.2)),
+      builder: (_) => _dialogoOscuro(
+        child: AlertDialog(
+          title: Row(children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(color: AppColors.successBg, shape: BoxShape.circle),
+              child: Icon(FontAwesomeIcons.whatsapp, color: AppColors.success, size: 22),
             ),
-            child: Row(children: [
-              Icon(Icons.person_rounded, size: 16, color: _AppColors.success),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(nombre, style: GoogleFonts.spaceGrotesk(color: _AppColors.textPri, fontWeight: FontWeight.w600, fontSize: 13)),
-                  Text('+$numero', style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 11)),
-                ]),
+            const SizedBox(width: 12),
+            const Expanded(child: Text('Mensaje enviado')),
+          ]),
+          content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('El recordatorio salió sin problemas.'),
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.successBg,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.success.withOpacity(0.28)),
               ),
-              Icon(Icons.check_circle_rounded, color: _AppColors.success, size: 20),
-            ]),
-          ),
-        ]),
-        actions: [
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _AppColors.success,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              child: Row(children: [
+                Icon(Icons.person_rounded, size: 16, color: AppColors.success),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(nombre, style: GoogleFonts.spaceGrotesk(color: AppColors.textPri, fontWeight: FontWeight.w600, fontSize: 13)),
+                    Text('+$numero',
+                        style: GoogleFonts.spaceGrotesk(
+                          color: AppColors.textSec,
+                          fontSize: 11,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        )),
+                  ]),
+                ),
+                Icon(Icons.check_circle_rounded, color: AppColors.success, size: 20),
+              ]),
             ),
-            onPressed: () => Navigator.pop(context),
-            child: Text('Perfecto', style: GoogleFonts.spaceGrotesk(color: Colors.white, fontWeight: FontWeight.w600)),
-          ),
-        ],
+          ]),
+          actions: [
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.brand,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              onPressed: () => Navigator.pop(context),
+              child: Text('Listo', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w600)),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1794,30 +1958,33 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
   void _showErrorDialog(String titulo, String mensaje) {
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Row(children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(color: _AppColors.danger.withOpacity(0.1), shape: BoxShape.circle),
-            child: Icon(Icons.error_outline_rounded, color: _AppColors.danger, size: 22),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(titulo, style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w700, fontSize: 15)),
-          ),
-        ]),
-        content: Text(mensaje, style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 13, height: 1.5)),
-        actions: [
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _AppColors.danger,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      builder: (_) => _dialogoOscuro(
+        child: AlertDialog(
+          title: Row(children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(color: AppColors.avatarRedBg, shape: BoxShape.circle),
+              child: Icon(Icons.error_outline_rounded, color: AppColors.danger, size: 22),
             ),
-            onPressed: () => Navigator.pop(context),
-            child: Text('Entendido', style: GoogleFonts.spaceGrotesk(color: Colors.white, fontWeight: FontWeight.w600)),
-          ),
-        ],
+            const SizedBox(width: 12),
+            Expanded(child: Text(titulo)),
+          ]),
+          content: Text(mensaje),
+          actions: [
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.neutralBg,
+                foregroundColor: AppColors.textPri,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: BorderSide(color: AppColors.cardBorder),
+                ),
+              ),
+              onPressed: () => Navigator.pop(context),
+              child: Text('Entendido', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w600)),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1825,24 +1992,26 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
   Future<void> _cerrarSesion() async {
     final ok = await showDialog<bool>(
           context: context,
-          builder: (_) => AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            title: Text('Cerrar sesión', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w700)),
-            content: Text('¿Estás seguro que deseas cerrar sesión?', style: GoogleFonts.spaceGrotesk()),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: Text('Cancelar', style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec)),
-              ),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _AppColors.danger,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          builder: (_) => _dialogoOscuro(
+            child: AlertDialog(
+              title: const Text('Cerrar sesión'),
+              content: const Text('¿Seguro que quieres cerrar sesión?'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: Text('Cancelar', style: GoogleFonts.spaceGrotesk(color: AppColors.textSec)),
                 ),
-                onPressed: () => Navigator.pop(context, true),
-                child: Text('Cerrar sesión', style: GoogleFonts.spaceGrotesk(color: Colors.white)),
-              ),
-            ],
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.danger,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: () => Navigator.pop(context, true),
+                  child: Text('Cerrar sesión', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w600)),
+                ),
+              ],
+            ),
           ),
         ) ??
         false;
@@ -1874,10 +2043,13 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
       builder: (context, snapshot) {
         if (!snapshot.hasData) {
           return Scaffold(
-            backgroundColor: _AppColors.surfaceDim,
-            body: Center(
-              child: CircularProgressIndicator(color: _AppColors.primary, strokeWidth: 2.5),
-            ),
+            backgroundColor: AppColors.background,
+            body: Stack(children: [
+              const AppBackground(),
+              Center(
+                child: CircularProgressIndicator(color: AppColors.accent, strokeWidth: 2.5),
+              ),
+            ]),
           );
         }
 
@@ -1901,62 +2073,75 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
           onHorizontalDragCancel: () {
             _dragDesdeBorde = false;
           },
-          child: Scaffold(
-            key: scaffoldKey,
-            backgroundColor: _AppColors.surfaceDim,
-            // ── Botón flotante de soporte WhatsApp (todos los planes) ──
-            floatingActionButton: FloatingActionButton.extended(
-              onPressed: _abrirSoporteWhatsApp,
-              backgroundColor: _AppColors.whatsapp,
-              foregroundColor: Colors.white,
-              elevation: 6,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-              icon: const Icon(FontAwesomeIcons.whatsapp, size: 20),
-              label: Text(
-                'Soporte',
-                style: GoogleFonts.spaceGrotesk(fontSize: 14, fontWeight: FontWeight.w700),
-              ),
-            ),
-            body: Stack(children: [
-              _buildDrawer(context, allClients),
-              AnimatedBuilder(
-                animation: _drawerAnim,
-                builder: (ctx, child) {
-                  final slide = _drawerAnim.value * 270.0;
-                  final scale = 1.0 - _drawerAnim.value * 0.07;
-                  final radius = _drawerAnim.value * 28.0;
-                  return Transform(
-                    transform: Matrix4.identity()
-                      ..translate(slide)
-                      ..scale(scale),
-                    alignment: Alignment.centerLeft,
-                    child: ClipRRect(borderRadius: BorderRadius.circular(radius), child: child),
-                  );
-                },
-                child: _buildMainContent(
-                  context,
-                  allClients,
-                  filteredByStarlink,
-                  activoCount,
-                  moraCount,
-                  inactivoCount,
-                  displayList,
+          // El RepaintBoundary permite "fotografiar" la pantalla para la
+          // transición circular Día/Noche del botón del drawer.
+          child: RepaintBoundary(
+            key: _temaBoundaryKey,
+            child: Scaffold(
+              key: scaffoldKey,
+              backgroundColor: AppColors.background,
+              // ── Botón principal: soporte por WhatsApp ──
+              floatingActionButton: FloatingActionButton.extended(
+                onPressed: _abrirSoporteWhatsApp,
+                backgroundColor: AppColors.brand,
+                foregroundColor: Colors.white,
+                elevation: 6,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                icon: const Icon(FontAwesomeIcons.whatsapp, size: 20),
+                label: Text(
+                  'Soporte',
+                  style: GoogleFonts.spaceGrotesk(fontSize: 14, fontWeight: FontWeight.w700),
                 ),
               ),
-              // Cierra el drawer al tocar la zona derecha de la pantalla
-              if (_drawerOpen)
-                Positioned(
-                  left: 290,
-                  top: 0,
-                  right: 0,
-                  bottom: 0,
-                  child: GestureDetector(
-                    onTap: _toggleDrawer,
-                    behavior: HitTestBehavior.opaque,
-                    child: const SizedBox.expand(),
+              body: Stack(children: [
+                _buildDrawer(context, allClients),
+                AnimatedBuilder(
+                  animation: _drawerAnim,
+                  builder: (ctx, child) {
+                    final slide = _drawerAnim.value * 270.0;
+                    final scale = 1.0 - _drawerAnim.value * 0.07;
+                    final radius = _drawerAnim.value * 28.0;
+                    return Transform(
+                      transform: Matrix4.identity()
+                        ..translate(slide)
+                        ..scale(scale),
+                      alignment: Alignment.centerLeft,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(radius),
+                        // El fondo (espacial de noche / cielo de día) va DENTRO
+                        // del recorte animado junto con el contenido, para que
+                        // tape al drawer cuando está cerrado.
+                        child: Stack(children: [
+                          const AppBackground(),
+                          child!,
+                        ]),
+                      ),
+                    );
+                  },
+                  child: _buildMainContent(
+                    context,
+                    allClients,
+                    filteredByStarlink,
+                    activoCount,
+                    moraCount,
+                    inactivoCount,
+                    displayList,
                   ),
                 ),
-            ]),
+                if (_drawerOpen)
+                  Positioned(
+                    left: 290,
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: GestureDetector(
+                      onTap: _toggleDrawer,
+                      behavior: HitTestBehavior.opaque,
+                      child: const SizedBox.expand(),
+                    ),
+                  ),
+              ]),
+            ),
           ),
         );
       },
@@ -1974,7 +2159,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
       bottom: 0,
       width: 290,
       child: Container(
-        decoration: const BoxDecoration(color: _AppColors.drawerBg),
+        decoration: BoxDecoration(color: AppColors.drawerBg),
         child: SafeArea(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1992,12 +2177,18 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                         width: 48,
                         height: 48,
                         decoration: BoxDecoration(
-                          gradient: const LinearGradient(colors: [_AppColors.primary, _AppColors.accent]),
+                          color: AppColors.avatarNeutralBg,
                           borderRadius: BorderRadius.circular(14),
                         ),
                         child: Center(
-                          child: Text(inicial,
-                              style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
+                          child: Text(
+                            inicial,
+                            style: GoogleFonts.spaceGrotesk(
+                              color: AppColors.avatarNeutralText,
+                              fontSize: 20,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -2008,37 +2199,44 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                             Text(nombre,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w800)),
+                                style: GoogleFonts.spaceGrotesk(
+                                  color: AppColors.textPri,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w800,
+                                )),
                             const SizedBox(height: 2),
                             Text(_nombreEmpresa.isEmpty ? 'Panel de gestión' : _nombreEmpresa,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: GoogleFonts.spaceGrotesk(color: Colors.white54, fontSize: 11)),
+                                style: GoogleFonts.spaceGrotesk(color: AppColors.textMuted, fontSize: 11)),
                           ],
                         ),
                       ),
+                      // ── Botón Día / Noche (estilo Telegram) ──
+                      const SizedBox(width: 8),
+                      ThemeToggleButton(boundaryKey: _temaBoundaryKey),
                     ]);
                   },
                 ),
               ),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                child: Divider(color: Colors.white.withOpacity(0.08), height: 1),
+                child: Divider(color: AppColors.divider, height: 1),
               ),
               Expanded(
                 child: SingleChildScrollView(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // ── Plan "Solo Vouchers": solo se muestra el módulo MikroTik ──
+                      // ── Plan "Solo Vouchers": solo el módulo MikroTik ──
                       if (_tipoPlanUsuario != 'vouchers') ...[
-                        const _DrawerSectionHeader(title: 'Principal'),
+                        _DrawerSectionHeader(title: 'Principal'),
                         _DrawerItem(icon: Icons.dashboard_rounded, label: 'Inicio', active: true, onTap: _toggleDrawer),
                         _DrawerItem(
                           icon: Icons.people_alt_rounded,
                           label: 'Clientes',
                           badge: moraCountDrawer > 0 ? '$moraCountDrawer en mora' : null,
-                          badgeColor: _AppColors.danger,
+                          badgeColor: AppColors.warning,
                           onTap: () {
                             _toggleDrawer();
                             context.pushNamed(ListaclientesWidget.routeName);
@@ -2055,7 +2253,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                         _DrawerItem(
                           icon: Icons.cable_rounded,
                           label: 'Clientes PPPoE',
-                          iconColor: Color(0xFF0EA5E9),
+                          iconColor: AppColors.accent,
                           onTap: () {
                             _toggleDrawer();
                             context.pushNamed(PppoeClientesWidget.routeName);
@@ -2069,6 +2267,17 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                             context.pushNamed(ListaEquiposWidget.routeName);
                           },
                         ),
+                        // 📌 Ver la IP que el MikroTik le dio a una antena
+                        // (leases DHCP) y usarla al crear el cliente.
+                        _DrawerItem(
+                          icon: Icons.wifi_find_rounded,
+                          label: 'IPs del MikroTik',
+                          iconColor: AppColors.accent,
+                          onTap: () {
+                            _toggleDrawer();
+                            context.pushNamed(LeasesMikrotikWidget.routeName);
+                          },
+                        ),
                         _DrawerItem(
                           icon: Icons.satellite_alt_rounded,
                           label: 'Starlinks',
@@ -2080,7 +2289,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                         _DrawerItem(
                           icon: Icons.satellite_alt_rounded,
                           label: 'Mis Starlinks · Cobros',
-                          iconColor: _AppColors.success,
+                          iconColor: AppColors.success,
                           onTap: () {
                             _toggleDrawer();
                             context.pushNamed(ListaStarlinksClientesWidget.routeName);
@@ -2097,8 +2306,9 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                         _DrawerItem(
                           icon: Icons.account_balance_wallet_rounded,
                           label: 'Mis Finanzas',
-                          iconColor: _AppColors.accent,
+                          iconColor: AppColors.stream1,
                           badge: 'Nuevo',
+                          badgeColor: AppColors.stream1,
                           onTap: () {
                             _toggleDrawer();
                             context.pushNamed(FinanzasWidget.routeName);
@@ -2107,19 +2317,20 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                         _DrawerItem(
                           icon: Icons.play_circle_rounded,
                           label: 'Tutorial',
-                          iconColor: const Color(0xFFFF6B35),
+                          iconColor: AppColors.stream2,
                           onTap: () {
                             _toggleDrawer();
                             context.pushNamed(TutorialWidget.routeName);
                           },
                         ),
                         if (_esAdmin) ...[
-                          const _DrawerSectionHeader(title: 'Administración'),
+                          _DrawerSectionHeader(title: 'Administración'),
                           _DrawerItem(
                             icon: Icons.person_add_rounded,
                             label: 'Crear operador',
-                            iconColor: _AppColors.purple,
+                            iconColor: AppColors.stream3,
                             badge: 'Admin',
+                            badgeColor: AppColors.stream3,
                             onTap: () {
                               _toggleDrawer();
                               context.pushNamed(CrearCuentaWidget.routeName);
@@ -2128,8 +2339,9 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                           _DrawerItem(
                             icon: Icons.people_rounded,
                             label: 'Lista operadores',
-                            iconColor: _AppColors.purple,
+                            iconColor: AppColors.stream3,
                             badge: 'Admin',
+                            badgeColor: AppColors.stream3,
                             onTap: () {
                               _toggleDrawer();
                               context.pushNamed(ListaOperadoresWidget.routeName);
@@ -2137,17 +2349,16 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                           ),
                         ],
                       ],
-                      const _DrawerSectionHeader(title: 'MikroTik'),
-                      // ✅ Conexión Local - CORRECTO (usa Navigator.push)
+                      _DrawerSectionHeader(title: 'MikroTik'),
                       _DrawerItem(
                         icon: Icons.wifi,
                         label: 'Conexión Local',
-                        iconColor: FFAppState().isConnectedLocal ? _AppColors.success : _AppColors.accent,
-                        badge: FFAppState().isConnectedLocal ? '✅' : null,
+                        iconColor: FFAppState().isConnectedLocal ? AppColors.success : AppColors.accent,
+                        badge: FFAppState().isConnectedLocal ? 'Conectado' : null,
+                        badgeColor: AppColors.success,
                         onTap: () {
                           _toggleDrawer();
                           if (FFAppState().isConnectedLocal && FFAppState().mikrotikLocalApi != null) {
-                            // ✅ USAR Navigator.push
                             Navigator.push(
                               context,
                               MaterialPageRoute(
@@ -2158,7 +2369,6 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                               ),
                             );
                           } else {
-                            // ✅ USAR Navigator.push
                             Navigator.push(
                               context,
                               MaterialPageRoute(
@@ -2168,44 +2378,45 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                           }
                         },
                       ),
-                      // ✅ Solo plan completo: Configuración VPS, Velocidades, WhatsApp, Facturación
+                      // ── MikroTik & VPN: SIEMPRE visible (también con el plan
+                      //    "Solo Vouchers"). Así el usuario puede AJUSTAR su
+                      //    MikroTik y VERLO REMOTAMENTE igual que con el plan
+                      //    completo. Toda la configuración se guarda en
+                      //    Firebase: config_mikrotik/{uid} y vpn_config/{uid}.
+                      _DrawerSectionHeader(title: 'MikroTik & VPN'),
+                      _DrawerItem(
+                        icon: Icons.vpn_lock_rounded,
+                        label: 'VPN · Antenas',
+                        iconColor: AppColors.primary,
+                        onTap: () {
+                          _toggleDrawer();
+                          context.pushNamed(VpnWidget.routeName);
+                        },
+                      ),
+                      _DrawerItem(
+                        icon: Icons.router_outlined,
+                        label: 'Config. MikroTik VPS',
+                        iconColor: AppColors.stream3,
+                        onTap: () {
+                          _toggleDrawer();
+                          context.pushNamed(ConfigMikroTikWidget.routeName);
+                        },
+                      ),
+                      _DrawerItem(
+                        icon: Icons.speed_rounded,
+                        label: 'Velocidades MikroTik',
+                        iconColor: AppColors.accent,
+                        onTap: () {
+                          _toggleDrawer();
+                          context.pushNamed(ConfigVelocidadesWidget.routeName);
+                        },
+                      ),
                       if (_tipoPlanUsuario != 'vouchers') ...[
-                        const _DrawerSectionHeader(title: 'MikroTik & VPN'),
-                        // ✅ VPN WireGuard · Antenas
-                        _DrawerItem(
-                          icon: Icons.vpn_lock_rounded,
-                          label: 'VPN · Antenas',
-                          iconColor: const Color(0xFF1A73E8),
-                          onTap: () {
-                            _toggleDrawer();
-                            context.pushNamed(VpnWidget.routeName);
-                          },
-                        ),
-                        // ✅ Configuración VPS
-                        _DrawerItem(
-                          icon: Icons.router_outlined,
-                          label: 'Config. MikroTik VPS',
-                          iconColor: _AppColors.purple,
-                          onTap: () {
-                            _toggleDrawer();
-                            context.pushNamed(ConfigMikroTikWidget.routeName);
-                          },
-                        ),
-                        // ✅ Velocidades MikroTik
-                        _DrawerItem(
-                          icon: Icons.speed_rounded,
-                          label: 'Velocidades MikroTik',
-                          iconColor: _AppColors.accent,
-                          onTap: () {
-                            _toggleDrawer();
-                            context.pushNamed(ConfigVelocidadesWidget.routeName);
-                          },
-                        ),
-                        const _DrawerSectionHeader(title: 'Configuración'),
+                        _DrawerSectionHeader(title: 'Configuración'),
                         _DrawerItem(
                           icon: Icons.chat_rounded,
                           label: 'WhatsApp · Evolution',
-                          iconColor: _AppColors.whatsapp,
+                          iconColor: AppColors.brand,
                           onTap: () {
                             _toggleDrawer();
                             context.pushNamed(ConfigEvolutionApiWidget.routeName);
@@ -2214,8 +2425,9 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                         _DrawerItem(
                           icon: Icons.calendar_month_rounded,
                           label: 'Facturación & Mensajes',
-                          iconColor: _AppColors.primary,
-                          badge: _facturacionCargada && _diaVencimiento == 0 ? '⚠️' : null,
+                          iconColor: AppColors.primary,
+                          badge: _facturacionCargada && _diaVencimiento == 0 ? 'Pendiente' : null,
+                          badgeColor: AppColors.warning,
                           onTap: () async {
                             _toggleDrawer();
                             await context.pushNamed(ConfigFacturacionWidget.routeName);
@@ -2223,12 +2435,11 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                           },
                         ),
                       ],
-                      // ✅ Mi Perfil - disponible para todos los planes
-                      const _DrawerSectionHeader(title: 'Cuenta'),
+                      _DrawerSectionHeader(title: 'Cuenta'),
                       _DrawerItem(
                         icon: Icons.person_rounded,
                         label: 'Mi Perfil',
-                        iconColor: _AppColors.primary,
+                        iconColor: AppColors.primary,
                         onTap: () {
                           _toggleDrawer();
                           Navigator.push(
@@ -2243,12 +2454,12 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
               ),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                child: Divider(color: Colors.white.withOpacity(0.08), height: 1),
+                child: Divider(color: AppColors.divider, height: 1),
               ),
-              _DrawerItem(icon: Icons.logout_rounded, label: 'Cerrar sesión', iconColor: _AppColors.danger, onTap: _cerrarSesion),
+              _DrawerItem(icon: Icons.logout_rounded, label: 'Cerrar sesión', iconColor: AppColors.danger, onTap: _cerrarSesion),
               Padding(
                 padding: const EdgeInsets.all(20),
-                child: Text(_appVersion, style: GoogleFonts.spaceGrotesk(color: Colors.white24, fontSize: 11)),
+                child: Text(_appVersion, style: GoogleFonts.spaceGrotesk(color: AppColors.textMuted, fontSize: 11)),
               ),
             ],
           ),
@@ -2269,25 +2480,22 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
     int inactivoCount,
     List<ClientesRecord> displayList,
   ) {
-    // ── Plan "Solo Vouchers": solo se muestra el módulo MikroTik ──
     if (_tipoPlanUsuario == 'vouchers') {
       return Container(
-        color: _AppColors.surfaceDim,
+        color: AppColors.surfaceDim,
         child: SafeArea(
           top: false,
           child: Column(children: [
             _buildTopBarPro(context, allClients),
             const SizedBox(height: 4),
-            Expanded(
-              child: _buildVouchersHome(),
-            ),
+            Expanded(child: _buildVouchersHome()),
           ]),
         ),
       );
     }
 
     return Container(
-      color: _AppColors.surfaceDim,
+      color: AppColors.surfaceDim,
       child: SafeArea(
         top: false,
         child: Column(children: [
@@ -2331,6 +2539,10 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                     itemBuilder: (ctx, i) {
                       final c = displayList[i];
                       return _ClientCard(
+                        // 🔑 Clave por cliente: sin esto, al filtrar/buscar/ordenar
+                        // Flutter reutilizaba el estado de la tarjeta (y su
+                        // consumo) para OTRO cliente.
+                        key: ValueKey(c.reference.id),
                         cliente: c,
                         onTap: () => context.pushNamed(
                           DetalleClienteWidget.routeName,
@@ -2365,14 +2577,11 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
           width: double.infinity,
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [Color(0xFF0EA5E9), Color(0xFF06B6D4)],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
+            color: AppColors.surfaceStrong,
             borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: AppColors.accent.withOpacity(0.32)),
             boxShadow: [
-              BoxShadow(color: const Color(0xFF0EA5E9).withOpacity(0.3), blurRadius: 24, offset: const Offset(0, 10)),
+              BoxShadow(color: AppColors.sombra(0.45), blurRadius: 26, offset: const Offset(0, 10)),
             ],
           ),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -2381,18 +2590,19 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                 width: 52,
                 height: 52,
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.15),
+                  color: AppColors.neutralBg,
                   borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: AppColors.accent.withOpacity(0.35)),
                 ),
-                child: const Icon(Icons.vpn_key_rounded, color: Colors.white, size: 26),
+                child: Icon(Icons.vpn_key_rounded, color: AppColors.accent, size: 26),
               ),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text('Plan Solo Vouchers',
-                      style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
+                      style: GoogleFonts.spaceGrotesk(color: AppColors.textPri, fontSize: 18, fontWeight: FontWeight.w800)),
                   const SizedBox(height: 3),
-                  Text('Módulo MikroTik Local activo', style: GoogleFonts.spaceGrotesk(color: Colors.white70, fontSize: 12)),
+                  Text('Módulo MikroTik Local activo', style: GoogleFonts.spaceGrotesk(color: AppColors.textSec, fontSize: 12)),
                 ]),
               ),
             ]),
@@ -2400,18 +2610,19 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.15),
+                color: AppColors.neutralBg,
                 borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Colors.white.withOpacity(0.1)),
+                border: Border.all(color: AppColors.cardBorder),
               ),
               child: Row(children: [
-                Icon(Icons.info_outline_rounded, color: Colors.white, size: 16),
+                Icon(Icons.info_outline_rounded, color: AppColors.accent, size: 16),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    'Tu plan te da acceso al módulo de MikroTik Local para gestionar vouchers. '
-                    'Abre el menú y selecciona "Conexión Local".',
-                    style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 12, height: 1.4),
+                    'Tu plan incluye el módulo MikroTik Local para crear vouchers y también '
+                    'puedes ajustar tu MikroTik y verlo remotamente por el túnel VPN. '
+                    'Toda la configuración queda guardada en tu cuenta (Firebase).',
+                    style: GoogleFonts.spaceGrotesk(color: AppColors.textSec, fontSize: 12, height: 1.4),
                   ),
                 ),
               ]),
@@ -2421,14 +2632,14 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
         const SizedBox(height: 20),
 
         // ── Accesos rápidos ──
-        Text('Accesos rápidos', style: GoogleFonts.spaceGrotesk(color: _AppColors.textPri, fontSize: 16, fontWeight: FontWeight.w700)),
+        Text('Accesos rápidos', style: GoogleFonts.spaceGrotesk(color: AppColors.textPri, fontSize: 16, fontWeight: FontWeight.w700)),
         const SizedBox(height: 12),
         Row(children: [
           Expanded(
             child: _VouchersQuickCard(
               icon: Icons.wifi,
               label: 'Conexión Local',
-              color: _AppColors.accent,
+              color: AppColors.accent,
               onTap: () {
                 if (FFAppState().isConnectedLocal && FFAppState().mikrotikLocalApi != null) {
                   Navigator.push(
@@ -2454,7 +2665,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
             child: _VouchersQuickCard(
               icon: Icons.vpn_key_rounded,
               label: 'Vouchers',
-              color: const Color(0xFF0EA5E9),
+              color: AppColors.stream3,
               onTap: () {
                 if (FFAppState().isConnectedLocal && FFAppState().mikrotikLocalApi != null) {
                   Navigator.push(
@@ -2477,12 +2688,33 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
           ),
         ]),
         const SizedBox(height: 12),
+        // ── Ajustar el MikroTik (config en Firebase) y verlo remoto (VPN) ──
+        Row(children: [
+          Expanded(
+            child: _VouchersQuickCard(
+              icon: Icons.router_outlined,
+              label: 'Ajustar MikroTik',
+              color: AppColors.stream3,
+              onTap: () => context.pushNamed(ConfigMikroTikWidget.routeName),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: _VouchersQuickCard(
+              icon: Icons.vpn_lock_rounded,
+              label: 'Ver remoto',
+              color: AppColors.primary,
+              onTap: () => context.pushNamed(VpnWidget.routeName),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 12),
         Row(children: [
           Expanded(
             child: _VouchersQuickCard(
               icon: Icons.person_rounded,
               label: 'Mi Perfil',
-              color: _AppColors.primary,
+              color: AppColors.primary,
               onTap: () {
                 Navigator.push(
                   context,
@@ -2496,7 +2728,7 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
             child: _VouchersQuickCard(
               icon: Icons.workspace_premium_rounded,
               label: 'Mejorar Plan',
-              color: _AppColors.success,
+              color: AppColors.success,
               onTap: () {
                 Navigator.push(
                   context,
@@ -2555,34 +2787,33 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
         margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [_AppColors.warning.withOpacity(0.15), _AppColors.warning.withOpacity(0.05)],
-            begin: Alignment.centerLeft,
-            end: Alignment.centerRight,
-          ),
+          color: AppColors.warningBg,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: _AppColors.warning.withOpacity(0.4), width: 1.2),
+          border: Border.all(color: AppColors.warning.withOpacity(0.35), width: 1.2),
         ),
         child: Row(children: [
           Container(
             padding: const EdgeInsets.all(6),
-            decoration: BoxDecoration(color: _AppColors.warning.withOpacity(0.15), shape: BoxShape.circle),
-            child: const Icon(Icons.calendar_today_rounded, color: _AppColors.warning, size: 16),
+            decoration: BoxDecoration(
+              color: AppColors.warning.withOpacity(0.14),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(Icons.calendar_today_rounded, color: AppColors.warning, size: 16),
           ),
           const SizedBox(width: 10),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(
-                'Facturación no configurada',
-                style: GoogleFonts.spaceGrotesk(color: _AppColors.warning, fontSize: 12, fontWeight: FontWeight.w700),
+                'Facturación sin configurar',
+                style: GoogleFonts.spaceGrotesk(color: AppColors.warning, fontSize: 12, fontWeight: FontWeight.w700),
               ),
               Text(
-                'Toca aquí para configurar antes de enviar mensajes.',
-                style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 11),
+                'Toca aquí para configurarla antes de enviar mensajes.',
+                style: GoogleFonts.spaceGrotesk(color: AppColors.textSec, fontSize: 11),
               ),
             ]),
           ),
-          const Icon(Icons.arrow_forward_ios_rounded, size: 13, color: _AppColors.warning),
+          Icon(Icons.arrow_forward_ios_rounded, size: 13, color: AppColors.warning),
         ]),
       ),
     );
@@ -2598,36 +2829,33 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
           final starlinks = snap.data ?? [];
           final found = starlinks.firstWhere(
             (s) => s.id == _selectedStarlinkId,
-            orElse: () => _StarlinkInfo(id: '', nombre: '...', ubicacion: '', activo: false, clientesCount: 0),
+            orElse: () => const _StarlinkInfo(id: '', nombre: '...', ubicacion: '', activo: false, clientesCount: 0),
           );
           return Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFFEFF6FF), Color(0xFFE0F7F5)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
+              color: AppColors.surface,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: _AppColors.primary.withOpacity(0.2), width: 1),
+              border: Border.all(color: AppColors.cardBorder, width: 1),
             ),
             child: Row(children: [
               Container(
                 width: 28,
                 height: 28,
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(colors: [_AppColors.primary, _AppColors.accent]),
+                  color: AppColors.neutralBg,
                   borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppColors.accent.withOpacity(0.35)),
                 ),
-                child: const Icon(Icons.satellite_alt_rounded, color: Colors.white, size: 14),
+                child: Icon(Icons.satellite_alt_rounded, color: AppColors.accent, size: 14),
               ),
               const SizedBox(width: 10),
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text('Filtrando: ${found.nombre}',
-                      style: GoogleFonts.spaceGrotesk(color: _AppColors.primary, fontSize: 12, fontWeight: FontWeight.w700)),
+                      style: GoogleFonts.spaceGrotesk(color: AppColors.textPri, fontSize: 12, fontWeight: FontWeight.w700)),
                   Text('$count cliente${count != 1 ? 's' : ''} en esta Starlink',
-                      style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 10)),
+                      style: GoogleFonts.spaceGrotesk(color: AppColors.textSec, fontSize: 10)),
                 ]),
               ),
               GestureDetector(
@@ -2639,118 +2867,14 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                 }),
                 child: Container(
                   padding: const EdgeInsets.all(4),
-                  decoration: const BoxDecoration(color: Color(0x1A1A73E8), shape: BoxShape.circle),
-                  child: const Icon(Icons.close_rounded, size: 14, color: _AppColors.primary),
+                  decoration: BoxDecoration(color: AppColors.neutralBg, shape: BoxShape.circle),
+                  child: Icon(Icons.close_rounded, size: 14, color: AppColors.textSec),
                 ),
               ),
             ]),
           );
         },
       ),
-    );
-  }
-
-  Widget _buildTopBar(BuildContext context, List<ClientesRecord> allClients) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-      child: Row(children: [
-        GestureDetector(
-          onTap: _toggleDrawer,
-          child: AnimatedBuilder(
-            animation: _drawerAnim,
-            builder: (_, __) => Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: _AppColors.surface,
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 8, offset: const Offset(0, 2))],
-              ),
-              child: Icon(_drawerOpen ? Icons.close_rounded : Icons.menu_rounded, color: _AppColors.textPri, size: 22),
-            ),
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Bienvenido 👋', style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 12)),
-            FutureBuilder<DocumentSnapshot>(
-              future: _uid.isEmpty ? null : FirebaseFirestore.instance.collection('user').doc(_uid).get(),
-              builder: (context, snap) {
-                final nombre =
-                    snap.hasData && snap.data!.exists ? (snap.data!.data() as Map<String, dynamic>)['nombre'] ?? 'Usuario' : 'Usuario';
-                return RichText(
-                  text: TextSpan(
-                    children: [
-                      TextSpan(
-                        text: '$nombre, ',
-                        style: GoogleFonts.spaceGrotesk(
-                          color: _AppColors.textPri,
-                          fontSize: 20,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      TextSpan(
-                        text: 'Ing.',
-                        style: GoogleFonts.spaceGrotesk(
-                          color: _AppColors.primary,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-          ]),
-        ),
-        // ── Solo plan completo: botones de mora, activos y nuevo cliente ──
-        if (_tipoPlanUsuario != 'vouchers') ...[
-          GestureDetector(
-            onTap: () => _marcarTodosEnMora(allClients),
-            child: Container(
-              margin: const EdgeInsets.only(right: 8),
-              padding: const EdgeInsets.all(11),
-              decoration: BoxDecoration(
-                color: _AppColors.danger.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: _AppColors.danger.withOpacity(0.3)),
-              ),
-              child: const Icon(Icons.warning_amber_rounded, color: _AppColors.danger, size: 20),
-            ),
-          ),
-          GestureDetector(
-            onTap: () => _marcarTodosActivos(allClients),
-            child: Container(
-              margin: const EdgeInsets.only(right: 8),
-              padding: const EdgeInsets.all(11),
-              decoration: BoxDecoration(
-                color: _AppColors.success.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: _AppColors.success.withOpacity(0.3)),
-              ),
-              child: const Icon(Icons.check_circle_outline_rounded, color: _AppColors.success, size: 20),
-            ),
-          ),
-          GestureDetector(
-            onTap: () => context.pushNamed(CrearUsuarioWidget.routeName),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(colors: [_AppColors.primary, _AppColors.accent]),
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: [BoxShadow(color: _AppColors.primary.withOpacity(0.3), blurRadius: 10, offset: const Offset(0, 4))],
-              ),
-              child: Row(children: [
-                const Icon(Icons.person_add_rounded, color: Colors.white, size: 16),
-                const SizedBox(width: 6),
-                Text('Nuevo', style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
-              ]),
-            ),
-          ),
-        ],
-      ]),
     );
   }
 
@@ -2787,28 +2911,27 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
     });
   }
 
-  Widget _glassCircle(IconData icon, Color color) {
+  Widget _glassCircle(IconData icon, Color color, Color fondo) {
     return Container(
       width: 40,
       height: 40,
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.14),
+        color: fondo,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withOpacity(0.18)),
+        border: Border.all(color: color.withOpacity(0.35)),
       ),
       child: Icon(icon, color: color, size: 19),
     );
   }
 
   Widget _buildTopBarPro(BuildContext context, List<ClientesRecord> allClients) {
-    final Color blanco = Colors.white;
     return Container(
       padding: EdgeInsets.fromLTRB(16, MediaQuery.paddingOf(context).top + 8, 16, 14),
       decoration: BoxDecoration(
-        gradient:
-            const LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [_AppColors.header1, _AppColors.header2]),
+        color: AppColors.barra,
         borderRadius: const BorderRadius.vertical(bottom: Radius.circular(22)),
-        boxShadow: [BoxShadow(color: _AppColors.header1.withOpacity(0.3), blurRadius: 14, offset: const Offset(0, 6))],
+        border: Border(bottom: BorderSide(color: AppColors.cardBorder, width: 1)),
+        boxShadow: [BoxShadow(color: AppColors.sombra(0.45), blurRadius: 18, offset: const Offset(0, 8))],
       ),
       child: Column(children: [
         Row(children: [
@@ -2820,10 +2943,11 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                 width: 44,
                 height: 44,
                 decoration: BoxDecoration(
-                    color: blanco.withOpacity(0.14),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: blanco.withOpacity(0.2))),
-                child: Icon(_drawerOpen ? Icons.close_rounded : Icons.menu_rounded, color: blanco, size: 22),
+                  color: AppColors.neutralBg,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.cardBorder),
+                ),
+                child: Icon(_drawerOpen ? Icons.close_rounded : Icons.menu_rounded, color: AppColors.textPri, size: 22),
               ),
             ),
           ),
@@ -2837,13 +2961,17 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Bienvenido de nuevo 👋', style: GoogleFonts.spaceGrotesk(color: blanco.withOpacity(0.75), fontSize: 12)),
+                    Text('Bienvenido de nuevo', style: GoogleFonts.spaceGrotesk(color: AppColors.textMuted, fontSize: 12)),
                     const SizedBox(height: 2),
                     Text.rich(TextSpan(children: [
-                      TextSpan(text: nombre, style: GoogleFonts.spaceGrotesk(color: blanco, fontSize: 19, fontWeight: FontWeight.w800)),
                       TextSpan(
-                          text: '  ·  $_nombreEmpresa',
-                          style: GoogleFonts.spaceGrotesk(color: blanco.withOpacity(0.8), fontSize: 13, fontWeight: FontWeight.w600)),
+                        text: nombre,
+                        style: GoogleFonts.spaceGrotesk(color: AppColors.textPri, fontSize: 19, fontWeight: FontWeight.w800),
+                      ),
+                      TextSpan(
+                        text: '  ·  $_nombreEmpresa',
+                        style: GoogleFonts.spaceGrotesk(color: AppColors.textSec, fontSize: 13, fontWeight: FontWeight.w600),
+                      ),
                     ])),
                   ],
                 );
@@ -2853,12 +2981,12 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
           if (_tipoPlanUsuario != 'vouchers') ...[
             GestureDetector(
               onTap: () => _marcarTodosEnMora(allClients),
-              child: _glassCircle(Icons.warning_amber_rounded, const Color(0xFFFF8A80)),
+              child: _glassCircle(Icons.warning_amber_rounded, AppColors.warning, AppColors.warningBg),
             ),
             const SizedBox(width: 8),
             GestureDetector(
               onTap: () => _marcarTodosActivos(allClients),
-              child: _glassCircle(Icons.check_circle_outline_rounded, const Color(0xFF69F0AE)),
+              child: _glassCircle(Icons.check_circle_outline_rounded, AppColors.success, AppColors.successBg),
             ),
             const SizedBox(width: 8),
             GestureDetector(
@@ -2866,13 +2994,14 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 decoration: BoxDecoration(
-                    color: blanco,
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 10, offset: const Offset(0, 4))]),
-                child: Row(mainAxisSize: MainAxisSize.min, children: const [
-                  Icon(Icons.person_add_rounded, color: Color(0xFF0F172A), size: 16),
-                  SizedBox(width: 6),
-                  Text('Nuevo', style: TextStyle(color: Color(0xFF0F172A), fontWeight: FontWeight.w700)),
+                  color: AppColors.brand,
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: [BoxShadow(color: AppColors.brand.withOpacity(0.35), blurRadius: 14, offset: const Offset(0, 5))],
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.person_add_rounded, color: Colors.white, size: 16),
+                  const SizedBox(width: 6),
+                  Text('Nuevo', style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)),
                 ]),
               ),
             ),
@@ -2882,11 +3011,15 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
         Row(children: [
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(color: blanco.withOpacity(0.14), borderRadius: BorderRadius.circular(20)),
+            decoration: BoxDecoration(
+              color: AppColors.neutralBg,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: AppColors.cardBorder),
+            ),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
-              const Icon(Icons.calendar_month_rounded, color: Colors.white70, size: 14),
+              Icon(Icons.calendar_month_rounded, color: AppColors.textSec, size: 14),
               const SizedBox(width: 6),
-              Text(_fechaHoy, style: GoogleFonts.spaceGrotesk(color: blanco, fontSize: 12, fontWeight: FontWeight.w600)),
+              Text(_fechaHoy, style: GoogleFonts.spaceGrotesk(color: AppColors.textSec, fontSize: 12, fontWeight: FontWeight.w600)),
             ]),
           ),
         ]),
@@ -2899,33 +3032,41 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
         _StatCard(
-            label: 'Clientes',
-            count: total.toString(),
-            icon: Icons.people_alt_rounded,
-            color: _AppColors.primary,
-            selected: _filterEstado == null,
-            onTap: () => _alternarFiltroEstado(null)),
+          label: 'Clientes',
+          count: total.toString(),
+          icon: Icons.people_alt_rounded,
+          color: AppColors.primary,
+          fondo: AppColors.neutralBg,
+          selected: _filterEstado == null,
+          onTap: () => _alternarFiltroEstado(null),
+        ),
         _StatCard(
-            label: 'Activos',
-            count: activo.toString(),
-            icon: Icons.wifi_rounded,
-            color: _AppColors.success,
-            selected: _filterEstado == 'activo',
-            onTap: () => _alternarFiltroEstado('activo')),
+          label: 'Activos',
+          count: activo.toString(),
+          icon: _EstadoTono.activo.icono,
+          color: _EstadoTono.activo.contenido,
+          fondo: _EstadoTono.activo.fondo,
+          selected: _filterEstado == 'activo',
+          onTap: () => _alternarFiltroEstado('activo'),
+        ),
         _StatCard(
-            label: 'En Mora',
-            count: mora.toString(),
-            icon: Icons.warning_amber_rounded,
-            color: _AppColors.danger,
-            selected: _filterEstado == 'mora',
-            onTap: () => _alternarFiltroEstado('mora')),
+          label: 'En mora',
+          count: mora.toString(),
+          icon: _EstadoTono.mora.icono,
+          color: _EstadoTono.mora.contenido,
+          fondo: _EstadoTono.mora.fondo,
+          selected: _filterEstado == 'mora',
+          onTap: () => _alternarFiltroEstado('mora'),
+        ),
         _StatCard(
-            label: 'Inactivos',
-            count: inactivo.toString(),
-            icon: Icons.wifi_off_rounded,
-            color: _AppColors.warning,
-            selected: _filterEstado == 'inactivo',
-            onTap: () => _alternarFiltroEstado('inactivo')),
+          label: 'Inactivos',
+          count: inactivo.toString(),
+          icon: _EstadoTono.inactivo.icono,
+          color: _EstadoTono.inactivo.contenido,
+          fondo: _EstadoTono.inactivo.fondo,
+          selected: _filterEstado == 'inactivo',
+          onTap: () => _alternarFiltroEstado('inactivo'),
+        ),
       ]),
     );
   }
@@ -2936,26 +3077,27 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
       child: Container(
         height: 50,
         decoration: BoxDecoration(
-          color: _AppColors.surface,
+          color: AppColors.surfaceSoft,
           borderRadius: BorderRadius.circular(14),
-          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 2))],
+          boxShadow: [BoxShadow(color: AppColors.sombra(0.3), blurRadius: 12, offset: const Offset(0, 4))],
           border: Border.all(
-            color: _isSearching ? _AppColors.primary.withOpacity(0.4) : _AppColors.cardBorder,
+            color: _isSearching ? AppColors.primary.withOpacity(0.5) : AppColors.cardBorder,
             width: 1.2,
           ),
         ),
         child: Row(children: [
           const SizedBox(width: 14),
-          Icon(Icons.search_rounded, color: _isSearching ? _AppColors.primary : _AppColors.textSec, size: 20),
+          Icon(Icons.search_rounded, color: _isSearching ? AppColors.primary : AppColors.textMuted, size: 20),
           const SizedBox(width: 10),
           Expanded(
             child: TextField(
               controller: _searchCtrl,
               onChanged: (v) => _onSearchChanged(v, filteredClients),
-              style: GoogleFonts.spaceGrotesk(color: _AppColors.textPri, fontSize: 14),
+              cursorColor: AppColors.primary,
+              style: GoogleFonts.spaceGrotesk(color: AppColors.textPri, fontSize: 14),
               decoration: InputDecoration(
-                hintText: _selectedStarlinkId != null ? 'Buscar en esta Starlink…' : 'Buscar por nombre, finca, IP…',
-                hintStyle: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 13),
+                hintText: _selectedStarlinkId != null ? 'Buscar en esta Starlink…' : 'Buscar por nombre, finca o IP',
+                hintStyle: GoogleFonts.spaceGrotesk(color: AppColors.textMuted, fontSize: 13),
                 border: InputBorder.none,
               ),
             ),
@@ -2973,8 +3115,8 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
                 padding: const EdgeInsets.only(right: 12),
                 child: Container(
                   padding: const EdgeInsets.all(4),
-                  decoration: BoxDecoration(color: _AppColors.textSec.withOpacity(0.1), shape: BoxShape.circle),
-                  child: const Icon(Icons.close_rounded, size: 14, color: _AppColors.textSec),
+                  decoration: BoxDecoration(color: AppColors.neutralBg, shape: BoxShape.circle),
+                  child: Icon(Icons.close_rounded, size: 14, color: AppColors.textSec),
                 ),
               ),
             ),
@@ -2990,16 +3132,16 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
         Icon(
           isFiltered ? Icons.satellite_alt_rounded : Icons.search_off_rounded,
           size: 60,
-          color: _AppColors.textSec.withOpacity(0.3),
+          color: AppColors.textMuted,
         ),
         const SizedBox(height: 12),
         Text(
-          isFiltered ? 'Sin clientes en esta Starlink' : 'Sin resultados',
-          style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec, fontSize: 16, fontWeight: FontWeight.w600),
+          isFiltered ? 'Esta Starlink no tiene clientes' : 'Sin resultados',
+          style: GoogleFonts.spaceGrotesk(color: AppColors.textSec, fontSize: 16, fontWeight: FontWeight.w600),
         ),
         Text(
-          isFiltered ? 'Asigna clientes desde el detalle de cada uno' : 'Intenta con otro término',
-          style: GoogleFonts.spaceGrotesk(color: _AppColors.textSec.withOpacity(0.6), fontSize: 13),
+          isFiltered ? 'Asigna clientes desde el detalle de cada uno' : 'Prueba con otro término',
+          style: GoogleFonts.spaceGrotesk(color: AppColors.textMuted, fontSize: 13),
           textAlign: TextAlign.center,
         ),
         if (isFiltered) ...[
@@ -3009,12 +3151,12 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin, 
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               decoration: BoxDecoration(
-                color: _AppColors.primary.withOpacity(0.1),
+                color: AppColors.neutralBg,
                 borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: _AppColors.primary.withOpacity(0.3)),
+                border: Border.all(color: AppColors.cardBorder),
               ),
               child: Text('Ver todos los clientes',
-                  style: GoogleFonts.spaceGrotesk(color: _AppColors.primary, fontSize: 13, fontWeight: FontWeight.w600)),
+                  style: GoogleFonts.spaceGrotesk(color: AppColors.textPri, fontSize: 13, fontWeight: FontWeight.w600)),
             ),
           ),
         ],
@@ -3046,11 +3188,11 @@ class _VouchersQuickCard extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: _AppColors.surface,
+          color: AppColors.surface,
           borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: color.withOpacity(0.25), width: 1.2),
+          border: Border.all(color: AppColors.cardBorder, width: 1.2),
           boxShadow: [
-            BoxShadow(color: color.withOpacity(0.08), blurRadius: 12, offset: const Offset(0, 4)),
+            BoxShadow(color: AppColors.sombra(0.35), blurRadius: 18, offset: const Offset(0, 6)),
           ],
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -3058,22 +3200,23 @@ class _VouchersQuickCard extends StatelessWidget {
             width: 40,
             height: 40,
             decoration: BoxDecoration(
-              color: color.withOpacity(0.12),
+              color: AppColors.neutralBg,
               borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: color.withOpacity(0.35)),
             ),
             child: Icon(icon, color: color, size: 20),
           ),
           const SizedBox(height: 12),
           Text(label,
               style: GoogleFonts.spaceGrotesk(
-                color: _AppColors.textPri,
+                color: AppColors.textPri,
                 fontSize: 13,
                 fontWeight: FontWeight.w700,
               )),
           const SizedBox(height: 2),
           Text('Toca para abrir',
               style: GoogleFonts.spaceGrotesk(
-                color: _AppColors.textSec,
+                color: AppColors.textMuted,
                 fontSize: 10,
               )),
         ]),

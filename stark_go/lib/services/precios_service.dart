@@ -6,13 +6,16 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 
+import 'pais_service.dart';
+
 // ══════════════════════════════════════════════════════════════
-//  PreciosService — tasa USD→COP y formato de precios.
+//  PreciosService — tasa USD→COP, formato de precios y estado de las
+//  pasarelas de pago.
 //
 //  Los planes están en USD (lo que ve el cliente) y las pasarelas
-//  colombianas (Mercado Pago, Rapid) cobran en COP. Para que el precio
-//  MOSTRADO y el COBRADO nunca se desincronicen, la tasa vive en el VPS
-//  (`GET /precios`, variable de entorno USD_A_COP) y la app la trae de ahí.
+//  colombianas (Mercado Pago, Rapid, ePayco) cobran en COP. Para que el
+//  precio MOSTRADO y el COBRADO nunca se desincronicen, la tasa vive en el
+//  VPS (`GET /precios`, variable de entorno USD_A_COP) y la app la trae de ahí.
 //
 //  Si el VPS no responde se usa [kUsdACopPorDefecto] (3200) para que la
 //  app nunca quede sin mostrar el precio.
@@ -51,6 +54,140 @@ class PreciosService {
   static final ValueNotifier<bool?> rapidProduccionNotifier =
       ValueNotifier<bool?>(null);
 
+  /// `config_pagos/epayco.produccion` informado por el VPS:
+  /// · true  → ePayco está configurado y en PRODUCCIÓN → el botón se muestra
+  /// · false → ePayco en PRUEBAS o sin llaves          → el botón se oculta
+  /// · null  → todavía no sabemos (usar el valor compilado de respaldo)
+  static bool? _epaycoProduccion;
+
+  /// Avisa a la UI al instante cuando cambia la producción de ePayco.
+  static final ValueNotifier<bool?> epaycoProduccionNotifier =
+      ValueNotifier<bool?>(null);
+
+  /// Países donde Mercado Pago está disponible. Por defecto solo Colombia,
+  /// porque la cuenta de Mercado Pago es colombiana y solo cobra allá.
+  /// El VPS lo publica en `pasarelas.mercadoPago.paises` (MP_PAISES).
+  static List<String> _mpPaises = const [PaisService.kColombia];
+
+  /// `pasarelas.mercadoPago.forzar` = true → mostrar el botón en TODO el
+  /// mundo (sirve para hacer pruebas desde el exterior).
+  static bool _mpForzar = false;
+
+  /// Países EXCLUIDOS de Mercado Pago (ninguno por defecto).
+  static List<String> _mpExcluir = const [];
+
+  /// ePayco: países donde SÍ se muestra (lista blanca). Vacía = todos.
+  static List<String> _epaycoPaises = const [];
+
+  /// ePayco: países donde NO se muestra (lista negra). Vacía = se muestra en
+  /// TODOS los países, incluida Colombia (donde además está Mercado Pago).
+  /// Poné `['CO']` si algún día querés que en Colombia solo cobre Mercado Pago.
+  static List<String> _epaycoExcluir = const [];
+
+  /// `pasarelas.epayco.forzar` = true → mostrar ePayco en TODO el mundo
+  /// (sirve para probar desde Colombia sin cambiar las listas).
+  static bool _epaycoForzar = false;
+
+  /// Tope de monto de ePayco en COP (0 = sin tope). En modo PRUEBAS ePayco
+  /// rechaza montos fuera de 5.000–200.000 COP; si está configurado, la app
+  /// oculta el botón para ese plan y avisa por qué.
+  static int _epaycoMontoMax = 0;
+
+  /// Tope de monto de ePayco (COP). 0 = sin tope.
+  static int get epaycoMontoMax => _epaycoMontoMax;
+
+  /// ¿ePayco acepta este monto (en COP)? Si no hay tope, siempre sí.
+  static bool epaycoPermiteMonto(int? cop) {
+    if (_epaycoMontoMax <= 0) return true;
+    if (cop == null) return true;
+    return cop <= _epaycoMontoMax;
+  }
+
+  /// Estado de ePayco según Firestore (`config_pagos/epayco.produccion`).
+  static bool? get epaycoProduccion => _epaycoProduccion;
+
+  /// Países donde Mercado Pago aplica (ISO-3166 alfa-2).
+  static List<String> get mercadoPagoPaises => _mpPaises;
+
+  /// Países donde ePayco aplica (vacío = todos menos [excluirPaises]).
+  static List<String> get epaycoPaises => _epaycoPaises;
+
+  /// ¿Mercado Pago aplica para este país? (solo Colombia por defecto).
+  static bool mercadoPagoDisponible(String? pais) => paisPermitido(
+        pais: pais,
+        paises: _mpPaises,
+        excluir: _mpExcluir,
+        forzar: _mpForzar,
+      );
+
+  /// ¿ePayco aplica para este país? Por defecto SÍ en todos los países
+  /// (incluida Colombia); se puede excluir alguno desde Firestore
+  /// (`config_pagos/epayco.excluirPaises`, ej: `["CO"]`).
+  static bool epaycoDisponible(String? pais) => paisPermitido(
+        pais: pais,
+        paises: _epaycoPaises,
+        excluir: _epaycoExcluir,
+        forzar: _epaycoForzar,
+      );
+
+  /// Regla común de países para cualquier pasarela:
+  /// · `forzar` = true → se muestra en todo el mundo (pruebas)
+  /// · país desconocido (null) → se muestra: no le bloqueamos la venta al
+  ///   cliente por un fallo de red
+  /// · `excluir` → nunca se muestra ahí
+  /// · `paises` → si tiene algo es lista blanca; si está vacía, todos
+  static bool paisPermitido({
+    required String? pais,
+    List<String> paises = const [],
+    List<String> excluir = const [],
+    bool forzar = false,
+  }) {
+    if (forzar) return true;
+    if (pais == null) return true;
+    final p = pais.toUpperCase();
+    if (excluir.contains(p)) return false;
+    if (paises.isEmpty) return true;
+    return paises.contains(p);
+  }
+
+  /// Convierte el valor que manda el VPS/Firestore en una lista de códigos
+  /// de país: acepta `['CO','US']` o `'CO,US'`. Devuelve null si no hay dato.
+  static List<String>? _leerPaises(dynamic v) {
+    if (v == null) return null;
+    final crudo = v is List ? v : '$v'.split(',');
+    return crudo
+        .map((e) => '$e'.trim().toUpperCase())
+        .where((e) => e.length == 2)
+        .toList();
+  }
+
+  /// Lee `mercadoPago: { paises: [...], excluirPaises: [...], forzar: bool }`
+  /// (del VPS o del espejo público) y lo aplica.
+  static void _aplicarMercadoPago(dynamic mp) {
+    if (mp is! Map) return;
+    if (mp.containsKey('paises')) _mpPaises = _leerPaises(mp['paises']) ?? _mpPaises;
+    if (mp.containsKey('excluirPaises')) {
+      _mpExcluir = _leerPaises(mp['excluirPaises']) ?? _mpExcluir;
+    }
+    final forzar = _aBool(mp['forzar']);
+    if (forzar != null) _mpForzar = forzar;
+  }
+
+  /// Lee la parte de países/forzar/tope de `pasarelas.epayco`.
+  static void _aplicarPaisesEpayco(dynamic ep) {
+    if (ep is! Map) return;
+    if (ep.containsKey('paises')) {
+      _epaycoPaises = _leerPaises(ep['paises']) ?? _epaycoPaises;
+    }
+    if (ep.containsKey('excluirPaises')) {
+      _epaycoExcluir = _leerPaises(ep['excluirPaises']) ?? _epaycoExcluir;
+    }
+    final forzar = _aBool(ep['forzar']);
+    if (forzar != null) _epaycoForzar = forzar;
+    final montoMax = ep['montoMax'];
+    if (montoMax is num) _epaycoMontoMax = montoMax.round();
+  }
+
   static StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _sub;
 
   /// Escucha EN TIEMPO REAL el espejo público que escribe el VPS
@@ -64,12 +201,25 @@ class PreciosService {
         .listen(
       (snap) {
         final d = snap.data();
-        final rapid = d == null ? null : d['rapid'];
+        if (d == null) return;
+        final rapid = d['rapid'];
         final v = _aBool(rapid is Map ? rapid['produccion'] : null);
-        if (v == null) return;
-        _rapidProduccion = v;
-        rapidProduccionNotifier.value = v;
-        debugPrint('[Pasarelas] rapid.produccion = $v (tiempo real)');
+        if (v != null) {
+          _rapidProduccion = v;
+          rapidProduccionNotifier.value = v;
+          debugPrint('[Pasarelas] rapid.produccion = $v (tiempo real)');
+        }
+        final epayco = d['epayco'];
+        final e = _aBool(epayco is Map ? epayco['produccion'] : null);
+        if (e != null) {
+          _epaycoProduccion = e;
+          epaycoProduccionNotifier.value = e;
+          debugPrint('[Pasarelas] epayco.produccion = $e (tiempo real)');
+        }
+        // Países de ePayco (resto del mundo: excluye Colombia por defecto)
+        // y de Mercado Pago (Colombia).
+        _aplicarPaisesEpayco(epayco);
+        _aplicarMercadoPago(d['mercadoPago']);
       },
       onError: (e) => debugPrint('[Pasarelas] Listener no disponible: $e'),
     );
@@ -151,10 +301,20 @@ class PreciosService {
               _rapidProduccion = v;
               rapidProduccionNotifier.value = v;
             }
+            // ePayco: botón visible solo si está en producción.
+            final epayco = pasarelas['epayco'];
+            final e = _aBool(epayco is Map ? epayco['produccion'] : null);
+            if (e != null) {
+              _epaycoProduccion = e;
+              epaycoProduccionNotifier.value = e;
+            }
+            // ePayco = resto del mundo (excluye CO) · MP = Colombia.
+            _aplicarPaisesEpayco(epayco);
+            _aplicarMercadoPago(pasarelas['mercadoPago']);
           }
           _cargado = true;
           _ultimoMs = ahora;
-          debugPrint('[Precios] Tasa del día: $_usdACop ($_fuente) · ${_copPorPlan.length} planes · rapidProduccion=$_rapidProduccion');
+          debugPrint('[Precios] Tasa del día: $_usdACop ($_fuente) · ${_copPorPlan.length} planes · rapidProduccion=$_rapidProduccion · epaycoProduccion=$_epaycoProduccion · mpPaises=$_mpPaises · epaycoExcluir=$_epaycoExcluir');
         }
       }
     } catch (e) {

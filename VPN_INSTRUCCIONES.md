@@ -261,7 +261,8 @@ Por defecto el VPS te asigna una subred de gestión/antenas única
 (`10.10.x.0/24`). Si tu red real es otra (lo normal: `192.168.1.0/24`,
 `192.168.10.0/24`, `192.168.88.0/24`, …) **podés declararla** desde la app:
 
-**Config. MikroTik → "Tu red local"**
+**Configurar VPN → "TU RED LOCAL"** —o **Config. MikroTik → Datos del
+MikroTik**— (es el mismo dato, se guarda en `config_mikrotik/{uid}`)
 
 | Campo | Ejemplo | Para qué |
 |---|---|---|

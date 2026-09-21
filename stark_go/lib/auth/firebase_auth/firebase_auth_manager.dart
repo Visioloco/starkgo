@@ -13,6 +13,7 @@ import 'firebase_user_provider.dart';
 import 'google_auth.dart';
 import 'jwt_token_auth.dart';
 import 'github_auth.dart';
+import '/services/dispositivo_service.dart';
 
 export '../base_auth_user_provider.dart';
 
@@ -55,7 +56,15 @@ class FirebaseAuthManager extends AuthManager
   FirebasePhoneAuthManager phoneAuthManager = FirebasePhoneAuthManager();
 
   @override
-  Future signOut() {
+  Future signOut() async {
+    // LÍMITE DE TELÉFONOS: al cerrar sesión se libera el lugar de ESTE
+    // teléfono en la cuenta (así otro puede ocuparlo). Se hace antes del
+    // signOut porque necesita el uid del usuario autenticado.
+    try {
+      await DispositivoService.liberarEste();
+    } catch (_) {
+      // Nunca bloqueamos el cierre de sesión por esto.
+    }
     return FirebaseAuth.instance.signOut();
   }
 

@@ -26,15 +26,22 @@ void main() async {
   await initFirebase();
 
   // ✅ FIX: Activar App Check con Play Integrity para que
-  //    Firebase Functions reciba el token correctamente
-  await FirebaseAppCheck.instance.activate(
-    androidProvider: AndroidProvider.debug,
-  );
+  //    Firebase Functions reciba el token correctamente.
+  //    En la WEB no aplica el provider de Android: se omite (si algún día
+  //    querés App Check en web hay que usar una clave reCAPTCHA v3).
+  if (!kIsWeb) {
+    await FirebaseAppCheck.instance.activate(
+      androidProvider: AndroidProvider.debug,
+    );
+  }
 
   // ✅ Inicializar notificaciones locales al arrancar la app.
   //    Sin esto, las notificaciones programadas (zonedSchedule)
   //    pueden no dispararse o programarse en la hora equivocada.
-  await NotificacionesService.instance.init();
+  //    (En la web no existen las notificaciones locales: se omite.)
+  if (!kIsWeb) {
+    await NotificacionesService.instance.init();
+  }
 
   final appState = FFAppState();
   await appState.initializePersistedState();
@@ -49,8 +56,7 @@ class MyApp extends StatefulWidget {
   @override
   State<MyApp> createState() => _MyAppState();
 
-  static _MyAppState of(BuildContext context) =>
-      context.findAncestorStateOfType<_MyAppState>()!;
+  static _MyAppState of(BuildContext context) => context.findAncestorStateOfType<_MyAppState>()!;
 }
 
 class MyAppScrollBehavior extends MaterialScrollBehavior {
@@ -69,18 +75,12 @@ class _MyAppState extends State<MyApp> {
   StreamSubscription<String>? _vpnForegroundSub;
 
   String getRoute([RouteMatch? routeMatch]) {
-    final RouteMatch lastMatch =
-        routeMatch ?? _router.routerDelegate.currentConfiguration.last;
-    final RouteMatchList matchList = lastMatch is ImperativeRouteMatch
-        ? lastMatch.matches
-        : _router.routerDelegate.currentConfiguration;
+    final RouteMatch lastMatch = routeMatch ?? _router.routerDelegate.currentConfiguration.last;
+    final RouteMatchList matchList = lastMatch is ImperativeRouteMatch ? lastMatch.matches : _router.routerDelegate.currentConfiguration;
     return matchList.uri.toString();
   }
 
-  List<String> getRouteStack() =>
-      _router.routerDelegate.currentConfiguration.matches
-          .map((e) => getRoute(e))
-          .toList();
+  List<String> getRouteStack() => _router.routerDelegate.currentConfiguration.matches.map((e) => getRoute(e)).toList();
 
   late Stream<BaseAuthUser> userStream;
   final authUserSub = authenticatedUserStream.listen((_) {});
@@ -179,6 +179,38 @@ class _MyAppState extends State<MyApp> {
       ),
       themeMode: _themeMode,
       routerConfig: _router,
+      // ── RESPONSIVE (web / PC / tablet) ──
+      // En pantallas anchas la app se muestra centrada en una "columna de
+      // teléfono"; en el celular no cambia absolutamente nada.
+      builder: (context, child) => _marcoResponsive(context, child),
+    );
+  }
+
+  /// Marco responsive: si la pantalla es ancha (navegador de PC, tablet en
+  /// horizontal) centra la app en una columna tipo teléfono; si es angosta
+  /// (celular) devuelve la app tal cual, a pantalla completa.
+  Widget _marcoResponsive(BuildContext context, Widget? child) {
+    if (child == null) return const SizedBox.shrink();
+
+    final size = MediaQuery.sizeOf(context);
+    // Celular: sin cambios.
+    if (size.width < 700) return child;
+
+    final bool escritorio = size.width >= 1100;
+    final double ancho = escritorio ? 460 : 520;
+
+    return ColoredBox(
+      color: const Color(0xFF0B1220),
+      child: Center(
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(escritorio ? 22 : 0),
+          child: SizedBox(
+            width: ancho,
+            height: size.height,
+            child: child,
+          ),
+        ),
+      ),
     );
   }
 }

@@ -1,10 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:network_info_plus/network_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:stark_go/app_state.dart';
 import 'package:stark_go/services/mikrotik_local_api.dart';
+import 'package:stark_go/services/firestore_service.dart';
+import 'package:stark_go/services/vpn_controller.dart';
+import 'package:stark_go/services/vps_service.dart';
+import 'package:stark_go/widgets/sin_soporte_web.dart';
 import 'dashboard_local_widget.dart';
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -40,16 +46,183 @@ class _ConectarMikrotikLocalWidgetState extends State<ConectarMikrotikLocalWidge
   final _puertoController = TextEditingController(text: '8728');
   bool _useSsl = false;
   bool _isLoading = false;
+  /// 👁️ Muestra la contraseña del MikroTik mientras la escribís.
+  bool _verContrasena = false;
+  bool _guardandoConfig = false;
   String _ssid = 'Desconocido';
   String? _errorMessage;
   bool _sinPermisoUbicacion = false;
 
+  // ── Acceso REMOTO por el túnel VPN ──
+  // La IP del túnel del MikroTik (10.50.50.Y) y sus credenciales ya están
+  // guardadas en `config_mikrotik/{uid}`, así que se pueden autocompletar:
+  // con el túnel conectado, el router se administra igual que en la red local.
+  String? _ipTunel;
+  String _usuarioMikrotik = '';
+  String _claveMikrotik = '';
+  bool _vpnConectado = false;
+
   final NetworkInfo _networkInfo = NetworkInfo();
+
+  /// Guarda / lee la conexión local del usuario autenticado
+  /// (`configuracion_local/{uid}`).
+  final FirestoreService _firestore = FirestoreService();
 
   @override
   void initState() {
     super.initState();
-    _detectarRed();
+    _inicializar();
+  }
+
+  /// Primero recupera la conexión guardada del uid; si no hay, detecta la red.
+  /// Después lee la IP del túnel (para poder administrar el MikroTik remoto).
+  Future<void> _inicializar() async {
+    final teniaGuardada = await _cargarConfigGuardada();
+    if (!mounted) return;
+    try {
+      await _detectarRed(aplicarIp: !teniaGuardada);
+    } catch (e) {
+      // En la web (o sin permisos) la detección puede fallar: no es crítico,
+      // el usuario puede escribir la IP (por ejemplo la del túnel) a mano.
+      debugPrint('[ModoLocal] No se pudo detectar la red: $e');
+    }
+    if (!mounted) return;
+    await _cargarDatosTunel();
+  }
+
+  /// Lee de `config_mikrotik/{uid}` la IP del túnel del MikroTik (10.50.50.Y),
+  /// su usuario/clave y si el túnel está conectado. Con eso, "Conexión Local"
+  /// sirve también de forma REMOTA (crear pines por el túnel).
+  Future<void> _cargarDatosTunel() async {
+    try {
+      final cfg = await VpsService.obtenerConfig();
+      final status = await VpnController.instance.status();
+      if (!mounted) return;
+      final ip = (cfg?['mikrotikTunelIp'] ?? '').toString().trim();
+      setState(() {
+        _ipTunel = ip.isEmpty ? null : ip;
+        _usuarioMikrotik = (cfg?['mikrotikUser'] ?? '').toString().trim();
+        _claveMikrotik = (cfg?['mikrotikPass'] ?? '').toString();
+        _vpnConectado = status == VpnStatus.connected;
+      });
+    } catch (e) {
+      debugPrint('[ModoLocal] No se pudo leer la IP del túnel: $e');
+    }
+  }
+
+  /// Pone en el formulario la IP del túnel y las credenciales del MikroTik que
+  /// ya están en Firebase. Es el camino para crear pines estando lejos: túnel
+  /// conectado → misma API 8728, sin estar en la WiFi del router.
+  void _usarIpDelTunel() {
+    final ip = _ipTunel;
+    if (ip == null) return;
+    setState(() {
+      _ipController.text = ip;
+      if (_usuarioMikrotik.isNotEmpty) _usuarioController.text = _usuarioMikrotik;
+      if (_claveMikrotik.isNotEmpty) _passwordController.text = _claveMikrotik;
+      _puertoController.text = _useSsl ? '8729' : '8728';
+    });
+    _snack('IP del túnel aplicada: $ip', _C.success);
+  }
+
+  /// "Detectar red" NO debe pisar la IP que escribiste a mano (por ejemplo la
+  /// IP del túnel): si el campo ya tiene valor, sólo refresca el nombre de la
+  /// red; si está vacío, sí completa con la puerta de enlace del WiFi.
+  Future<void> _detectarRedBoton() async {
+    final teniaIp = _ipController.text.trim().isNotEmpty;
+    await _detectarRed(aplicarIp: !teniaIp);
+    if (!mounted) return;
+    _snack(
+      teniaIp ? 'Se refrescó tu red. Se mantuvo la IP que tenías puesta.' : 'IP detectada desde tu red WiFi/LAN',
+      teniaIp ? _C.textPri : _C.success,
+    );
+  }
+
+  /// Lee `configuracion_local/{uid}` y precarga el formulario.
+  /// Devuelve `true` si había una IP guardada (para no pisarla con la
+  /// detección automática de la red).
+  Future<bool> _cargarConfigGuardada() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return false;
+    try {
+      final cfg = await _firestore.obtenerConfiguracionLocal(uid);
+      if (cfg == null || !mounted) return false;
+      final ip = (cfg['ip'] ?? '').toString().trim();
+      final usuario = (cfg['usuario'] ?? '').toString().trim();
+      final clave = (cfg['clave'] ?? '').toString();
+      final puerto = cfg['puerto'];
+      setState(() {
+        if (ip.isNotEmpty) _ipController.text = ip;
+        if (usuario.isNotEmpty) _usuarioController.text = usuario;
+        if (clave.isNotEmpty) _passwordController.text = clave;
+        if (puerto is int && puerto > 0) _puertoController.text = '$puerto';
+        _useSsl = (cfg['useSsl'] ?? false) == true;
+      });
+      return ip.isNotEmpty;
+    } catch (e) {
+      debugPrint('[ModoLocal] No se pudo leer la config guardada: $e');
+      return false;
+    }
+  }
+
+  /// Guarda la conexión que funcionó, a nombre del usuario autenticado.
+  /// Devuelve `true` si quedó guardada en `configuracion_local/{uid}`.
+  Future<bool> _guardarConfigLocal(String nombreRouter) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return false;
+    try {
+      await _firestore.guardarConfiguracionLocal(
+        uid: uid,
+        ip: _ipController.text.trim(),
+        puerto: int.tryParse(_puertoController.text.trim()) ?? 8728,
+        usuario: _usuarioController.text.trim(),
+        clave: _passwordController.text,
+        useSsl: _useSsl,
+        nombreRouter: nombreRouter,
+      );
+      return true;
+    } catch (e) {
+      debugPrint('[ModoLocal] No se pudo guardar la config local: $e');
+      return false;
+    }
+  }
+
+  /// Botón "Guardar configuración": deja los datos de TU MikroTik en Firebase
+  /// (`configuracion_local/{uid}`) sin necesidad de que la conexión funcione
+  /// en ese momento. Sirve para ajustar la IP/usuario/clave y que la
+  /// configuración vuelva sola en este u otro teléfono al iniciar sesión.
+  Future<void> _guardarConfigManual() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      _snack('Inicia sesión para guardar tu configuración', _C.danger);
+      return;
+    }
+
+    setState(() => _guardandoConfig = true);
+    try {
+      final nombreRouter = FFAppState().isConnectedLocal && FFAppState().nombreRouterLocal.isNotEmpty
+          ? FFAppState().nombreRouterLocal
+          : (_ssid == 'Desconocido' || _ssid.isEmpty ? 'MikroTik' : _ssid);
+      final ok = await _guardarConfigLocal(nombreRouter);
+      if (!mounted) return;
+      _snack(
+        ok ? 'Configuración guardada en tu cuenta (Firebase)' : 'No se pudo guardar la configuración',
+        ok ? _C.success : _C.danger,
+      );
+    } finally {
+      if (mounted) setState(() => _guardandoConfig = false);
+    }
+  }
+
+  void _snack(String msg, Color color) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg, style: GoogleFonts.spaceGrotesk(color: Colors.white)),
+      backgroundColor: color,
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    ));
   }
 
   @override
@@ -61,13 +234,17 @@ class _ConectarMikrotikLocalWidgetState extends State<ConectarMikrotikLocalWidge
     super.dispose();
   }
 
-  Future<void> _detectarRed() async {
+  /// Detecta el SSID y la puerta de enlace (IP del MikroTik) de la Wi-Fi.
+  /// Con `aplicarIp = false` sólo refresca el SSID: sirve cuando ya hay una
+  /// IP guardada en la cuenta y no queremos pisarla.
+  Future<void> _detectarRed({bool aplicarIp = true}) async {
+    final bool puede = aplicarIp || _ipController.text.trim().isEmpty;
     // Android/iOS requieren permiso de ubicación para leer el SSID/gateway real.
     final status = await Permission.locationWhenInUse.request();
     if (!status.isGranted) {
       setState(() {
         _sinPermisoUbicacion = true;
-        _ipController.text = '192.168.88.1';
+        if (puede) _ipController.text = '192.168.88.1';
       });
       return;
     }
@@ -89,10 +266,12 @@ class _ConectarMikrotikLocalWidgetState extends State<ConectarMikrotikLocalWidge
 
       setState(() {
         _ssid = wifiName?.replaceAll('"', '') ?? 'Desconocido';
-        _ipController.text = ipSugerida;
+        if (puede) _ipController.text = ipSugerida;
       });
     } catch (e) {
-      setState(() => _ipController.text = '192.168.88.1');
+      setState(() {
+        if (puede) _ipController.text = '192.168.88.1';
+      });
     }
   }
 
@@ -119,6 +298,11 @@ class _ConectarMikrotikLocalWidgetState extends State<ConectarMikrotikLocalWidge
       final appState = FFAppState();
       appState.conectarLocal(api: api, nombre: nombreRouter, ip: api.ip);
 
+      // Guardamos la conexión en tu cuenta (`configuracion_local/{uid}`) para
+      // que la IP/puerta de enlace, el usuario, la clave y el puerto vuelvan
+      // solos la próxima vez que entres.
+      await _guardarConfigLocal(nombreRouter);
+
       if (!mounted) return;
       setState(() => _isLoading = false);
 
@@ -141,6 +325,15 @@ class _ConectarMikrotikLocalWidgetState extends State<ConectarMikrotikLocalWidge
 
   @override
   Widget build(BuildContext context) {
+    // ── WEB: la conexión local (API/FTP por Wi-Fi) sólo existe en la app ──
+    if (kIsWeb) {
+      return const SinSoporteWeb(
+        titulo: 'Conexión Local no está disponible en la web',
+        detalle: 'Esta función se conecta al MikroTik por la red Wi-Fi '
+            '(API 8728 / FTP 21) y necesita la app del teléfono: el navegador '
+            'no puede abrir ese tipo de conexión.',
+      );
+    }
     final yaConectado = FFAppState().isConnectedLocal;
 
     return Scaffold(
@@ -162,11 +355,15 @@ class _ConectarMikrotikLocalWidgetState extends State<ConectarMikrotikLocalWidge
                   if (_sinPermisoUbicacion) const SizedBox(height: 14),
                   _buildRedInfo().animate().fadeIn(duration: 300.ms, delay: 80.ms).slideY(begin: 0.05, end: 0),
                   const SizedBox(height: 14),
+                  _buildTunelCard().animate().fadeIn(duration: 300.ms, delay: 100.ms).slideY(begin: 0.05, end: 0),
+                  const SizedBox(height: 14),
                   _buildFormulario().animate().fadeIn(duration: 300.ms, delay: 120.ms).slideY(begin: 0.05, end: 0),
                   const SizedBox(height: 14),
                   if (_errorMessage != null) _buildErrorBox().animate().fadeIn(duration: 250.ms).shake(hz: 3, curve: Curves.easeOut),
                   if (_errorMessage != null) const SizedBox(height: 14),
                   _buildBotones().animate().fadeIn(duration: 300.ms, delay: 160.ms).slideY(begin: 0.05, end: 0),
+                  const SizedBox(height: 10),
+                  _buildGuardarConfig().animate().fadeIn(duration: 300.ms, delay: 180.ms).slideY(begin: 0.05, end: 0),
                   const SizedBox(height: 14),
                   _buildNotaServicioApi().animate().fadeIn(duration: 300.ms, delay: 200.ms),
                 ]),
@@ -287,10 +484,66 @@ class _ConectarMikrotikLocalWidgetState extends State<ConectarMikrotikLocalWidge
               Text('Conexión directa al router',
                   style: GoogleFonts.spaceGrotesk(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
               const SizedBox(height: 3),
-              Text('Sin VPS, sin túnel — solo tu red WiFi/LAN.', style: GoogleFonts.spaceGrotesk(color: Colors.white60, fontSize: 11)),
+              Text('Por tu red WiFi/LAN o por el túnel VPN: en los dos casos usás la API del MikroTik.',
+                  style: GoogleFonts.spaceGrotesk(color: Colors.white60, fontSize: 11)),
             ],
           ),
         ),
+      ]),
+    );
+  }
+
+  /// Tarjeta del túnel: muestra la IP del túnel del MikroTik (10.50.50.Y) y
+  /// permite autocompletar el formulario para administrar el router REMOTO.
+  Widget _buildTunelCard() {
+    final ip = _ipTunel;
+    final color = _vpnConectado ? _C.success : _C.primary;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(_vpnConectado ? Icons.vpn_lock_rounded : Icons.vpn_lock_outlined, color: color, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              _vpnConectado ? 'Túnel activo — también podés conectar remoto' : 'Túnel VPN (acceso remoto)',
+              style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 13, fontWeight: FontWeight.w700),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 6),
+        Text(
+          ip == null
+              ? 'Todavía no generaste la IP del túnel del MikroTik. Andá a VPN · Antenas → Configurar → '
+                  '"MikroTik (lado del túnel)" → Generar IP del túnel.'
+              : 'Con el túnel conectado, el MikroTik se administra por su IP del túnel: $ip. '
+                  'Poné esa IP acá (botón de abajo) y podés crear pines igual que si estuvieras en la red local, '
+                  'desde cualquier lugar con internet.',
+          style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontSize: 11.5, height: 1.4),
+        ),
+        if (ip != null) ...[
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: _isLoading ? null : _usarIpDelTunel,
+              icon: const Icon(Icons.bolt_rounded, size: 17, color: _C.primary),
+              label: Text('Usar IP del túnel · $ip',
+                  style: GoogleFonts.spaceGrotesk(color: _C.primary, fontSize: 12.5, fontWeight: FontWeight.w700)),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                side: BorderSide(color: _C.primary.withOpacity(0.4)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+          ),
+        ],
       ]),
     );
   }
@@ -423,6 +676,9 @@ class _ConectarMikrotikLocalWidgetState extends State<ConectarMikrotikLocalWidge
             icon: Icons.lock_rounded,
             color: _C.purple,
             obscure: true,
+            // 👁️ Ojito para revisar la contraseña antes de conectarse.
+            visible: _verContrasena,
+            onToggleVisible: () => setState(() => _verContrasena = !_verContrasena),
           ),
           const SizedBox(height: 14),
           Row(children: [
@@ -486,6 +742,10 @@ class _ConectarMikrotikLocalWidgetState extends State<ConectarMikrotikLocalWidge
     required Color color,
     TextInputType keyboardType = TextInputType.text,
     bool obscure = false,
+    /// Si el campo es `obscure`, con `visible: true` se muestra el texto y se
+    /// dibuja el ojito para alternar (lo maneja `onToggleVisible` del State).
+    bool visible = false,
+    VoidCallback? onToggleVisible,
     String? Function(String?)? validator,
   }) {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -497,7 +757,7 @@ class _ConectarMikrotikLocalWidgetState extends State<ConectarMikrotikLocalWidge
       TextFormField(
         controller: controller,
         keyboardType: keyboardType,
-        obscureText: obscure,
+        obscureText: obscure && !visible,
         validator: validator,
         style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 14, fontWeight: FontWeight.w500),
         decoration: InputDecoration(
@@ -510,6 +770,19 @@ class _ConectarMikrotikLocalWidgetState extends State<ConectarMikrotikLocalWidge
             decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(9)),
             child: Icon(icon, color: color, size: 16),
           ),
+          // 👁️ Ojito para ver la contraseña mientras se escribe.
+          suffixIcon: obscure && onToggleVisible != null
+              ? IconButton(
+                  onPressed: onToggleVisible,
+                  splashRadius: 18,
+                  tooltip: visible ? 'Ocultar contraseña' : 'Ver contraseña',
+                  icon: Icon(
+                    visible ? Icons.visibility_rounded : Icons.visibility_off_rounded,
+                    color: _C.textSec,
+                    size: 20,
+                  ),
+                )
+              : null,
           filled: true,
           fillColor: _C.surfaceDim,
           contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
@@ -535,7 +808,18 @@ class _ConectarMikrotikLocalWidgetState extends State<ConectarMikrotikLocalWidge
         const Icon(Icons.error_outline_rounded, color: _C.danger, size: 18),
         const SizedBox(width: 10),
         Expanded(
-          child: Text(_errorMessage!, style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 12, height: 1.4)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(_errorMessage!, style: GoogleFonts.spaceGrotesk(color: _C.textPri, fontSize: 12, height: 1.4)),
+            // Ayuda extra: si estás lejos del router y el túnel está arriba,
+            // seguramente la IP guardada es la de la WiFi vieja.
+            if (_ipTunel != null && _ipTunel != _ipController.text.trim()) ...[
+              const SizedBox(height: 8),
+              Text(
+                '¿Estás lejos del router? Tocá "Usar IP del túnel · $_ipTunel" y volvé a conectar (necesitás el túnel activo).',
+                style: GoogleFonts.spaceGrotesk(color: _C.danger, fontSize: 11.5, height: 1.4, fontWeight: FontWeight.w600),
+              ),
+            ],
+          ]),
         ),
       ]),
     );
@@ -545,7 +829,7 @@ class _ConectarMikrotikLocalWidgetState extends State<ConectarMikrotikLocalWidge
     return Row(children: [
       Expanded(
         child: OutlinedButton.icon(
-          onPressed: _isLoading ? null : _detectarRed,
+          onPressed: _isLoading ? null : _detectarRedBoton,
           icon: const Icon(Icons.wifi_find_rounded, size: 17, color: _C.textSec),
           label: Text('Detectar red', style: GoogleFonts.spaceGrotesk(color: _C.textSec, fontWeight: FontWeight.w600)),
           style: OutlinedButton.styleFrom(
@@ -586,6 +870,29 @@ class _ConectarMikrotikLocalWidgetState extends State<ConectarMikrotikLocalWidge
         ),
       ),
     ]);
+  }
+
+  /// Botón para guardar en Firebase los datos del MikroTik sin necesidad de
+  /// conectarse ahora (IP, usuario, clave, puerto y SSL).
+  Widget _buildGuardarConfig() {
+    return SizedBox(
+      width: double.infinity,
+      child: OutlinedButton.icon(
+        onPressed: (_isLoading || _guardandoConfig) ? null : _guardarConfigManual,
+        icon: _guardandoConfig
+            ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: _C.primary))
+            : const Icon(Icons.save_rounded, size: 17, color: _C.primary),
+        label: Text(
+          _guardandoConfig ? 'Guardando…' : 'Guardar configuración',
+          style: GoogleFonts.spaceGrotesk(color: _C.primary, fontWeight: FontWeight.w700),
+        ),
+        style: OutlinedButton.styleFrom(
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          side: BorderSide(color: _C.primary.withOpacity(0.4)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        ),
+      ),
+    );
   }
 
   Widget _buildNotaServicioApi() {

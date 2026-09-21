@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:google_fonts/google_fonts.dart';
 import 'package:stark_go/app_state.dart';
 import 'package:stark_go/services/mikrotik_local_api.dart';
+import 'package:stark_go/widgets/sin_soporte_web.dart';
 import 'perfiles_local_widget.dart';
 import 'fichas_local_widget.dart';
 import 'hotspot_design_widget.dart'; // <- NUEVO: pantalla de diseño del hotspot
+import 'blindaje_local_widget.dart'; // <- NUEVO: blindaje del administrador
 
 // ─────────────────────────────────────────────────────────────────────────
 // Paleta — misma que ConfigMikroTikWidget / PerfilesLocalWidget / FichasLocalWidget.
@@ -45,7 +48,9 @@ class _DashboardLocalWidgetState extends State<DashboardLocalWidget> {
   final List<_TabInfo> _tabs = const [
     _TabInfo(icon: Icons.people_alt_rounded, label: 'Perfiles', color: _C.purple),
     _TabInfo(icon: Icons.vpn_key_rounded, label: 'Fichas', color: _C.accent),
-    _TabInfo(icon: Icons.design_services_rounded, label: 'Hotspot', color: _C.primary), // <- NUEVA
+    _TabInfo(icon: Icons.design_services_rounded, label: 'Hotspot', color: _C.primary),
+    // 🛡️ Blinda tu propio teléfono para que el portal no te pida ficha/PIN.
+    _TabInfo(icon: Icons.shield_rounded, label: 'Blindaje', color: _C.success),
   ];
 
   @override
@@ -60,6 +65,7 @@ class _DashboardLocalWidgetState extends State<DashboardLocalWidget> {
         clave: widget.api.password, // TODO: confirma que MikrotikLocalApi exponga este getter
         puertoFtp: 21,
       ),
+      BlindajeLocalWidget(api: widget.api),
     ];
   }
 
@@ -74,12 +80,22 @@ class _DashboardLocalWidgetState extends State<DashboardLocalWidget> {
           clave: widget.api.password, // TODO: confirma que MikrotikLocalApi exponga este getter
           puertoFtp: 21,
         ),
+        BlindajeLocalWidget(api: widget.api),
       ];
     });
   }
 
   @override
   Widget build(BuildContext context) {
+    // ── WEB: el panel local requiere conexión directa al router ──
+    if (kIsWeb) {
+      return const SinSoporteWeb(
+        titulo: 'Modo Local no está disponible en la web',
+        detalle: 'El panel local (perfiles, fichas y hotspot) se conecta '
+            'directo al MikroTik por la red Wi-Fi y sólo funciona desde la app '
+            'del teléfono.',
+      );
+    }
     return Scaffold(
       backgroundColor: _C.surfaceDim,
       body: SafeArea(
@@ -218,12 +234,16 @@ class _DashboardLocalWidgetState extends State<DashboardLocalWidget> {
                   children: [
                     Icon(tab.icon, size: 17, color: selected ? tab.color : _C.textSec),
                     const SizedBox(width: 7),
-                    Text(tab.label,
-                        style: GoogleFonts.spaceGrotesk(
-                          color: selected ? tab.color : _C.textSec,
-                          fontSize: 13,
-                          fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                        )),
+                    Flexible(
+                      child: Text(tab.label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: GoogleFonts.spaceGrotesk(
+                            color: selected ? tab.color : _C.textSec,
+                            fontSize: 13,
+                            fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                          )),
+                    ),
                   ],
                 ),
               ),

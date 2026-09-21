@@ -206,6 +206,15 @@ class VpsService {
     if (!blindado) {
       debugPrint('[VpsService] ⚠️ No se pudo encolar el blindaje (ip-binding bypassed) de $ip.');
     }
+
+    // 📌 Marcamos el lease DHCP de esa IP: ESTÁTICO (para que la antena
+    // conserve la IP) + comentario "StarkGo <cliente>" + address-list
+    // `starkgo`. Es best-effort: si falla, el cliente ya quedó igual.
+    final marcado = await marcarLease(ip: ip.trim(), nombre: nombre);
+    if (!marcado) {
+      debugPrint('[VpsService] ⚠️ No pude marcar el lease de $ip '
+          '(revisá que el VPS llegue al MikroTik y que www-ssl esté activo).');
+    }
     return colaOk && blindado;
   }
 
@@ -400,6 +409,68 @@ class VpsService {
     } catch (e) {
       debugPrint('[VpsService] /cola/estado no disponible: $e');
       return null;
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  📌 LEASES DHCP DEL MIKROTIK (las IPs de las antenas)
+  //  Se leen por el VPS (que habla REST con el router) para poder verlas
+  //  sin entrar a WinBox. El "marcar" deja el lease ESTÁTICO + comentado +
+  //  en la address-list `starkgo`.
+  // ══════════════════════════════════════════════════════════
+
+  /// GET /mikrotik/leases → JSON del VPS (`{ok, fuente, total, leases:[…]}`).
+  /// `null` si no se pudo (sin API Key, sin router, sin servicio www).
+  static Future<Map<String, dynamic>?> obtenerLeases() async {
+    final key = await obtenerApikey();
+    if (key == null) {
+      debugPrint('[VpsService] obtenerLeases — falta la API Key.');
+      return null;
+    }
+    try {
+      final resp = await http
+          .get(Uri.parse('$_baseUrl/mikrotik/leases?apikey=$key'))
+          .timeout(const Duration(seconds: 15));
+      if (resp.statusCode != 200) {
+        debugPrint('[VpsService] /mikrotik/leases ${resp.statusCode}: ${resp.body}');
+        return null;
+      }
+      return jsonDecode(resp.body) as Map<String, dynamic>;
+    } catch (e) {
+      debugPrint('[VpsService] /mikrotik/leases no disponible: $e');
+      return null;
+    }
+  }
+
+  /// POST /mikrotik/lease/marcar — estático + comentario + address-list.
+  /// El VPS lo aplica por REST; si el router no responde, lo deja encolado
+  /// (el MikroTik lo aplica en el próximo ciclo) y también devuelve `true`.
+  static Future<bool> marcarLease({
+    required String ip,
+    required String nombre,
+  }) async {
+    final config = await obtenerConfig();
+    if (config == null) return false;
+    final apiKey = (config['vpsApiKey'] ?? '').toString();
+    if (apiKey.isEmpty || ip.trim().isEmpty) return false;
+    try {
+      final resp = await http
+          .post(
+            Uri.parse('$_baseUrl/mikrotik/lease/marcar'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode(
+                {'apikey': apiKey, 'ip': ip.trim(), 'nombre': nombre}),
+          )
+          .timeout(const Duration(seconds: 20));
+      if (resp.statusCode != 200) {
+        debugPrint('[VpsService] marcarLease ${resp.statusCode}: ${resp.body}');
+        return false;
+      }
+      final j = jsonDecode(resp.body) as Map<String, dynamic>;
+      return j['ok'] == true;
+    } catch (e) {
+      debugPrint('[VpsService] marcarLease no disponible: $e');
+      return false;
     }
   }
 
